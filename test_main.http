@@ -1,0 +1,63 @@
+# Test your FastAPI endpoints
+
+GET http://127.0.0.1:8000/
+Accept: application/json
+
+###
+
+POST http://127.0.0.1:8000/auth/login
+Content-Type: application/json
+
+{
+  "username": "demo",
+  "password": "demo"
+}
+
+###
+
+POST http://127.0.0.1:8000/speaking/session
+
+###
+
+POST http://127.0.0.1:8000/speaking/session/{{sessionId}}/part/1/start
+
+###
+
+POST http://127.0.0.1:8000/speaking/session/{{sessionId}}/audio
+Content-Type: application/json
+
+{
+  "textPartial": "This is a demo answer."
+}
+
+###
+
+POST http://127.0.0.1:8000/speaking/session/{{sessionId}}/finish
+
+###
+
+POST http://127.0.0.1:8000/scoring/speaking
+Content-Type: application/json
+
+{
+  "transcriptId": "{{transcriptId}}"
+}
+
+###
+
+GET http://127.0.0.1:8000/report/{{sessionId}}
+
+###
+
+GET http://127.0.0.1:8000/profile/me
+
+###
+
+POST http://127.0.0.1:8000/plan/7d
+Content-Type: application/json
+
+{
+  "weaknesses": ["linking words", "pronunciation"]
+}
+
+###
