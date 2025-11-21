@@ -6,7 +6,6 @@ from rag_core.reranker import Reranker
 from rag_core.retriever import Retriever
 
 
-
 class RAGSystem:
     def __init__(self):
         self.metrics = {}
@@ -52,14 +51,3 @@ class RAGSystem:
         })
 
         return result
-
-
-if __name__ == '__main__':
-    rag = RAGSystem()
-    query = "sensible的近义词有哪些"
-    res = rag.retrieve(query)
-    print(res)
-    rerank_results = rag.rerank(query, res)
-    print(rerank_results)
-    generate_result = rag.generate(query, rerank_results)
-    print(generate_result)

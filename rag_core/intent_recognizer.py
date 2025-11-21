@@ -492,19 +492,3 @@ class IntentRecognizer:
             "confidence": best_intent[1],
             "method": "semantic"
         }
-
-
-# -------------------------
-# 使用示例（将下面示例放到测试脚本或 REPL 中运行）
-# -------------------------
-if __name__ == "__main__":
-    ir = IntentRecognizer()
-    examples = [
-        # "sensible有什么释义",
-        "什么是 sensible",
-        # "sensible 的例句",
-        # "请给出 sensible 的同义词",
-    ]
-    for q in examples:
-        res = ir.recognize_intent(q)
-        print(q, "=>", res)

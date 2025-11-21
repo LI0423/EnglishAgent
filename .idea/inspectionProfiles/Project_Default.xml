@@ -1,0 +1,155 @@
+<component name="InspectionProjectProfileManager">
+  <profile version="1.0">
+    <option name="myName" value="Project Default" />
+    <inspection_tool class="DuplicatedCode" enabled="true" level="WEAK WARNING" enabled_by_default="true">
+      <Languages>
+        <language minSize="314" name="Python" />
+      </Languages>
+    </inspection_tool>
+    <inspection_tool class="Eslint" enabled="true" level="WARNING" enabled_by_default="true" />
+    <inspection_tool class="HttpUrlsUsage" enabled="true" level="WEAK WARNING" enabled_by_default="true">
+      <option name="ignoredUrls">
+        <list>
+          <option value="http://" />
+          <option value="http://0.0.0.0" />
+          <option value="http://127.0.0.1" />
+          <option value="http://activemq.apache.org/schema/" />
+          <option value="http://cxf.apache.org/schemas/" />
+          <option value="http://java.sun.com/" />
+          <option value="http://javafx.com/fxml" />
+          <option value="http://javafx.com/javafx/" />
+          <option value="http://json-schema.org/draft" />
+          <option value="http://localhost" />
+          <option value="http://maven.apache.org/POM/" />
+          <option value="http://maven.apache.org/xsd/" />
+          <option value="http://primefaces.org/ui" />
+          <option value="http://schema.cloudfoundry.org/spring/" />
+          <option value="http://schemas.xmlsoap.org/" />
+          <option value="http://tiles.apache.org/" />
+          <option value="http://www.ibm.com/webservices/xsd" />
+          <option value="http://www.jboss.com/xml/ns/" />
+          <option value="http://www.jboss.org/j2ee/schema/" />
+          <option value="http://www.springframework.org/schema/" />
+          <option value="http://www.springframework.org/security/tags" />
+          <option value="http://www.springframework.org/tags" />
+          <option value="http://www.thymeleaf.org" />
+          <option value="http://www.w3.org/" />
+          <option value="http://xmlns.jcp.org/" />
+        </list>
+      </option>
+    </inspection_tool>
+    <inspection_tool class="PyPackageRequirementsInspection" enabled="true" level="WARNING" enabled_by_default="true">
+      <option name="ignoredPackages">
+        <value>
+          <list size="86">
+            <item index="0" class="java.lang.String" itemvalue="protobuf" />
+            <item index="1" class="java.lang.String" itemvalue="onnxruntime-gpu" />
+            <item index="2" class="java.lang.String" itemvalue="pyperclip" />
+            <item index="3" class="java.lang.String" itemvalue="streamlit" />
+            <item index="4" class="java.lang.String" itemvalue="wxPython" />
+            <item index="5" class="java.lang.String" itemvalue="pydub" />
+            <item index="6" class="java.lang.String" itemvalue="torch" />
+            <item index="7" class="java.lang.String" itemvalue="pybase16384" />
+            <item index="8" class="java.lang.String" itemvalue="faster-whisper" />
+            <item index="9" class="java.lang.String" itemvalue="azure-cognitiveservices-speech" />
+            <item index="10" class="java.lang.String" itemvalue="langchain-community" />
+            <item index="11" class="java.lang.String" itemvalue="openai" />
+            <item index="12" class="java.lang.String" itemvalue="selenium" />
+            <item index="13" class="java.lang.String" itemvalue="langchain" />
+            <item index="14" class="java.lang.String" itemvalue="aliyun-python-sdk-core" />
+            <item index="15" class="java.lang.String" itemvalue="tenacity" />
+            <item index="16" class="java.lang.String" itemvalue="dashscope" />
+            <item index="17" class="java.lang.String" itemvalue="langchain_openai" />
+            <item index="18" class="java.lang.String" itemvalue="qianfan" />
+            <item index="19" class="java.lang.String" itemvalue="tencentcloud-sdk-python-tts" />
+            <item index="20" class="java.lang.String" itemvalue="cffi" />
+            <item index="21" class="java.lang.String" itemvalue="nvidia-cusparselt-cu12" />
+            <item index="22" class="java.lang.String" itemvalue="opencv-contrib-python" />
+            <item index="23" class="java.lang.String" itemvalue="nvidia-cuda-nvrtc-cu12" />
+            <item index="24" class="java.lang.String" itemvalue="triton" />
+            <item index="25" class="java.lang.String" itemvalue="async-timeout" />
+            <item index="26" class="java.lang.String" itemvalue="nvidia-nvjitlink-cu12" />
+            <item index="27" class="java.lang.String" itemvalue="nvidia-cuda-cupti-cu12" />
+            <item index="28" class="java.lang.String" itemvalue="nvidia-cufft-cu12" />
+            <item index="29" class="java.lang.String" itemvalue="nvidia-cusparse-cu12" />
+            <item index="30" class="java.lang.String" itemvalue="ffmpeg-python" />
+            <item index="31" class="java.lang.String" itemvalue="nvidia-cudnn-cu12" />
+            <item index="32" class="java.lang.String" itemvalue="nvidia-nccl-cu12" />
+            <item index="33" class="java.lang.String" itemvalue="pycuda" />
+            <item index="34" class="java.lang.String" itemvalue="exceptiongroup" />
+            <item index="35" class="java.lang.String" itemvalue="nvidia-cusolver-cu12" />
+            <item index="36" class="java.lang.String" itemvalue="nvidia-cublas-cu12" />
+            <item index="37" class="java.lang.String" itemvalue="nvidia-curand-cu12" />
+            <item index="38" class="java.lang.String" itemvalue="platformdirs" />
+            <item index="39" class="java.lang.String" itemvalue="nvidia-nvtx-cu12" />
+            <item index="40" class="java.lang.String" itemvalue="future" />
+            <item index="41" class="java.lang.String" itemvalue="cvcuda-cu12" />
+            <item index="42" class="java.lang.String" itemvalue="pytools" />
+            <item index="43" class="java.lang.String" itemvalue="nvidia-cuda-runtime-cu12" />
+            <item index="44" class="java.lang.String" itemvalue="Mako" />
+            <item index="45" class="java.lang.String" itemvalue="absl-py" />
+            <item index="46" class="java.lang.String" itemvalue="decorator" />
+            <item index="47" class="java.lang.String" itemvalue="defer" />
+            <item index="48" class="java.lang.String" itemvalue="Automat" />
+            <item index="49" class="java.lang.String" itemvalue="isodate" />
+            <item index="50" class="java.lang.String" itemvalue="pycodestyle" />
+            <item index="51" class="java.lang.String" itemvalue="setuptools" />
+            <item index="52" class="java.lang.String" itemvalue="Jinja2" />
+            <item index="53" class="java.lang.String" itemvalue="redis" />
+            <item index="54" class="java.lang.String" itemvalue="distro-info" />
+            <item index="55" class="java.lang.String" itemvalue="fsspec" />
+            <item index="56" class="java.lang.String" itemvalue="onnxruntime" />
+            <item index="57" class="java.lang.String" itemvalue="filelock" />
+            <item index="58" class="java.lang.String" itemvalue="starlette" />
+            <item index="59" class="java.lang.String" itemvalue="anyio" />
+            <item index="60" class="java.lang.String" itemvalue="astunparse" />
+            <item index="61" class="java.lang.String" itemvalue="lxml" />
+            <item index="62" class="java.lang.String" itemvalue="onvif_zeep" />
+            <item index="63" class="java.lang.String" itemvalue="pyparsing" />
+            <item index="64" class="java.lang.String" itemvalue="sympy" />
+            <item index="65" class="java.lang.String" itemvalue="autopep8" />
+            <item index="66" class="java.lang.String" itemvalue="tifffile" />
+            <item index="67" class="java.lang.String" itemvalue="wheel" />
+            <item index="68" class="java.lang.String" itemvalue="tzdata" />
+            <item index="69" class="java.lang.String" itemvalue="astor" />
+            <item index="70" class="java.lang.String" itemvalue="ultralytics" />
+            <item index="71" class="java.lang.String" itemvalue="zeep" />
+            <item index="72" class="java.lang.String" itemvalue="attrs" />
+            <item index="73" class="java.lang.String" itemvalue="fastapi" />
+            <item index="74" class="java.lang.String" itemvalue="requests-file" />
+            <item index="75" class="java.lang.String" itemvalue="typing_extensions" />
+            <item index="76" class="java.lang.String" itemvalue="pycryptodome" />
+            <item index="77" class="java.lang.String" itemvalue="pytz" />
+            <item index="78" class="java.lang.String" itemvalue="requests-toolbelt" />
+            <item index="79" class="java.lang.String" itemvalue="pymilvus" />
+            <item index="80" class="java.lang.String" itemvalue="Flask" />
+            <item index="81" class="java.lang.String" itemvalue="APScheduler" />
+            <item index="82" class="java.lang.String" itemvalue="websockets" />
+            <item index="83" class="java.lang.String" itemvalue="matplotlib" />
+            <item index="84" class="java.lang.String" itemvalue="SQLAlchemy" />
+            <item index="85" class="java.lang.String" itemvalue="httpx" />
+          </list>
+        </value>
+      </option>
+    </inspection_tool>
+    <inspection_tool class="PyPep8NamingInspection" enabled="true" level="WEAK WARNING" enabled_by_default="true">
+      <option name="ignoredErrors">
+        <list>
+          <option value="N801" />
+          <option value="N806" />
+          <option value="N803" />
+          <option value="N802" />
+        </list>
+      </option>
+    </inspection_tool>
+    <inspection_tool class="PyUnresolvedReferencesInspection" enabled="true" level="WARNING" enabled_by_default="true">
+      <option name="ignoredIdentifiers">
+        <list>
+          <option value="data" />
+        </list>
+      </option>
+    </inspection_tool>
+    <inspection_tool class="Stylelint" enabled="true" level="ERROR" enabled_by_default="true" />
+    <inspection_tool class="TsLint" enabled="true" level="WARNING" enabled_by_default="true" />
+  </profile>
+</component>

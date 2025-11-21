@@ -135,7 +135,7 @@ class EnhancedRewriteQueryStrategy:
             "model_prompts": model_prompts,
         }
 
-        analysis = self._analyze_query(original_query, retrieval_context)
+        analysis = _analyze_query(original_query, retrieval_context)
 
         if rewrite_strategy == "auto":
             rewrite_strategy = self._select_rewrite_strategy(analysis)
