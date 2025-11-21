@@ -325,37 +325,29 @@ def _pattern_based_recognition(query: str) -> Dict[str, Any]:
             r'(?:example|usage) of\s+(.+)',
             r'use\s+(.+?)\s+in a sentence'
         ],
-        "phrase": [
-            r'(.{1,30}?)(?:的)?(?:短语|搭配|词组|固定搭配)',
-            r'(?:phrases?|collocations?)\s+of\s+(.+)'
-        ],
         "pronunciation": [
             r'(.{1,30}?)(?:怎么读|发音|读音|读法)',
             r'(?:how to pronounce|pronunciation of)\s+(.+)'
+        ],
+        "usage_guidance": [
+            r'(.{1,30}?)(?:的)?(?:短语|搭配|词组|固定搭配)',
+            r'(?:phrases?|collocations?)\s+of\s+(.+)',
+            r'(.{1,30}?)(?:怎么用|用法|语法|使用)',
+            r'(?:how to use|grammar of)\s+(.+)',
+            r'(.{1,30}?)(?:正式吗|正式用语|口语表达|正式程度)',
+            r'(?:formal or informal|formality of)\s+(.+)'
         ],
         "etymology": [
             r'(.{1,30}?)(?:的)?(?:词源|来源|起源|词根)',
             r'(?:etymology|origin) of\s+(.+)'
         ],
-        "comparison": [
-            r'(.{1,30}?)(?:和|与)(.{1,30}?)(?:的)?(?:区别|不同|差异)',
-            r'(?:difference between|A vs B)\s+(.+)'
-        ],
-        "antonym": [
-            r'(.{1,30}?)(?:的)?(?:反义词|相反词)',
-            r'(?:antonyms?|opposite of)\s+(.+)'
-        ],
-        "usage_note": [
-            r'(.{1,30}?)(?:怎么用|用法|语法|使用)',
-            r'(?:how to use|grammar of)\s+(.+)'
-        ],
         "word_family": [
             r'(.{1,30}?)(?:的)?(?:派生词|相关词|词性|变形)',
             r'(?:related words|derivatives? of)\s+(.+)'
         ],
-        "formality": [
-            r'(.{1,30}?)(?:正式吗|正式用语|口语表达|正式程度)',
-            r'(?:formal or informal|formality of)\s+(.+)'
+        "comparison": [
+            r'(.{1,30}?)(?:和|与)(.{1,30}?)(?:的)?(?:区别|不同|差异)',
+            r'(?:difference between|A vs B)\s+(.+)'
         ]
     }
 
@@ -439,13 +431,10 @@ class IntentRecognizer:
             # 确保 target_word 经过更强的提取器校验（优先英文）
             keyword_intent["target_word"] = _extract_target_word(query_original) or keyword_intent.get("target_word", "")
             return keyword_intent
-
         # 2. 语义相似度匹配
         semantic_intent = self._semantic_similarity_recognition(query_lower)
-
         # 3. 模式匹配（备用）
         pattern_intent = _pattern_based_recognition(query_original)
-
         # 4. 综合评分
         combined = _combine_intent_results([keyword_intent, semantic_intent, pattern_intent])
         # 最后再次用更强的提取器确认 target_word（优先英文）

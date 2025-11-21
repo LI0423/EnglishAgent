@@ -5,6 +5,7 @@ RERANK_PROMPT = (
 )
 
 INTENT_EXAMPLES = {
+    # 核心查询功能（保持独立）
     "synonym": [
         "sensible的同义词有哪些",
         "beautiful的近义词",
@@ -43,19 +44,6 @@ INTENT_EXAMPLES = {
         "举几个mitigate的例子",
         "usage的用法举例"
     ],
-    "phrase": [
-        "sensible的常用搭配",
-        "make的短语搭配",
-        "take的常见词组",
-        "break的固定搭配",
-        "get的常用短语",
-        "look的动词搭配",
-        "give的介词搭配",
-        "run的词组有哪些",
-        "common的常用短语",
-        "business的习惯搭配",
-        "英语词伙查询"
-    ],
     "pronunciation": [
         "sensible怎么读",
         "pronunciation的发音",
@@ -67,6 +55,37 @@ INTENT_EXAMPLES = {
         "英式发音怎么读",
         "念一下这个单词",
         "读音是什么"
+    ],
+    "usage_guidance": [
+        "sensible的常用搭配",
+        "make的短语搭配",
+        "take的常见词组",
+        "break的固定搭配",
+        "get的常用短语",
+        "look的动词搭配",
+        "give的介词搭配",
+        "run的词组有哪些",
+        "common的常用短语",
+        "business的习惯搭配",
+        "英语词伙查询",
+        "however的用法",
+        "suggest怎么用",
+        "这个单词使用注意",
+        "recommend的语法",
+        "在什么场合用这个词",
+        "usage的用法说明",
+        "使用场景有哪些",
+        "语法规则是什么",
+        "适用场合",
+        "kids是正式用语吗",
+        "wanna的正式程度",
+        "这个词正式吗",
+        "口语表达有哪些",
+        "书面语怎么说",
+        "slang的意思",
+        "正式场合用什么词",
+        "informal的表达",
+        "正式与非正式区别"
     ],
     "etymology": [
         "sensible的词源",
@@ -80,40 +99,6 @@ INTENT_EXAMPLES = {
         "etymology的由来",
         "单词历史起源"
     ],
-    "comparison": [
-        "sensible和sensitive的区别",
-        "affect和effect的不同",
-        "compare和contrast的区别",
-        "economic和economical的差异",
-        "这两个词有什么不同",
-        "big和large的区别在哪",
-        "say和tell有何不同",
-        "house和home差别",
-        "compare对比compare to",
-        "分辨这两个词"
-    ],
-    # --- 新增意图类别的例句 ---
-    "antonym": [
-        "happy的反义词",
-        "big的相反词是什么",
-        "beautiful的对立词",
-        "fast的反义词有哪些",
-        "列出rich的反义词",
-        "positive的相反词",
-        "antonym of good",
-        "light的反义词"
-    ],
-    "usage_note": [
-        "however的用法",
-        "suggest怎么用",
-        "这个单词使用注意",
-        "recommend的语法",
-        "在什么场合用这个词",
-        "usage的用法说明",
-        "使用场景有哪些",
-        "语法规则是什么",
-        "适用场合"
-    ],
     "word_family": [
         "beautiful的词性",
         "happy的派生词",
@@ -124,17 +109,6 @@ INTENT_EXAMPLES = {
         "副词怎么变",
         "词性变化",
         "related words"
-    ],
-    "formality": [
-        "kids是正式用语吗",
-        "wanna的正式程度",
-        "这个词正式吗",
-        "口语表达有哪些",
-        "书面语怎么说",
-        "slang的意思",
-        "正式场合用什么词",
-        "informal的表达",
-        "正式与非正式区别"
     ]
 }
 
@@ -146,44 +120,31 @@ INTENT_KEYWORDS = {
     "definition": [
         "定义", "意思", "含义", "释义", "解释", "什么意思", "是什么意思", "什么叫", "啥意思",
         "翻译", "define", "definition", "meaning", "what does it mean",
-        "是什么意思", "什么意思"  # 常见口语重复强化
+        "是什么意思", "什么意思"
     ],
     "example": [
         "例句", "例子", "造句", "用法", "举例", "造个句", "怎么用", "用例",
         "example", "usage", "sentence", "how to use", "in a sentence"
     ],
-    "phrase": [
-        "短语", "搭配", "词组", "固定搭配", "常用搭配", "习惯搭配", "词伙", "动词搭配", "介词搭配",
-        "phrase", "collocation", "expression", "idiom", "word partnership"
-    ],
     "pronunciation": [
         "发音", "读音", "怎么读", "念法", "咋读", "读法", "音标", "美式发音", "英式发音",
         "pronunciation", "read", "how to pronounce", "sound", "phonetic"
+    ],
+    "usage_guidance": [
+        "短语", "搭配", "词组", "固定搭配", "常用搭配", "习惯搭配", "词伙", "动词搭配", "介词搭配",
+        "phrase", "collocation", "expression", "idiom", "word partnership",
+        "用法", "使用", "怎么用", "用法注意", "使用场景", "适用场合", "语法",
+        "usage", "how to use", "grammar", "context", "in what situation",
+        "正式", "非正式", "口语", "书面语", "俚语", "委婉语", "正式程度",
+        "formal", "informal", "slang", "colloquial", "register"
     ],
     "etymology": [
         "词源", "词根", "词缀", "来源", "起源", "由来", "出自", "词源学",
         "etymology", "origin", "root", "word origin", "where does it come from"
     ],
-    "comparison": [
-        "区别", "不同", "差异", "差别", "比较", "比对", "对比", "分辨", "区分",
-        "difference", "compare", "comparison", "distinguish", "vs", " versus",
-        "有什么区别", "有何不同"  # 完整短语补全
-    ],
-    # --- 以下是新增的意图类别，建议您考虑加入 ---
-    "antonym": [
-        "反义词", "相反词", "对立词", "antonym", "opposite", "reverse"
-    ],
-    "usage_note": [
-        "用法", "使用", "怎么用", "用法注意", "使用场景", "适用场合", "语法",
-        "usage", "how to use", "grammar", "context", "in what situation"
-    ],
     "word_family": [
         "词性", "派生词", "相关词", "形容词", "副词", "名词", "动词", "变形",
         "part of speech", "derivative", "related words", "adjective", "adverb", "noun", "verb"
-    ],
-    "formality": [
-        "正式", "非正式", "口语", "书面语", "俚语", "委婉语", "正式程度",
-        "formal", "informal", "slang", "colloquial", "register"
     ]
 }
 

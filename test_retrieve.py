@@ -1,5 +1,6 @@
 from rag_core.intent_recognizer import IntentRecognizer
 from rag_core.retriever import Retriever
+from utils import MilvusDBClient
 
 # retriever = Retriever()
 # query = 'sensible的同义词有哪些'
@@ -11,6 +12,10 @@ query = 'sensible例句'
 # res = retriever._exact_match_retrieval(query, 5)
 # res = retriever.multi_way_retrieve(query)
 
-intent_recognizer = IntentRecognizer()
-res = intent_recognizer.recognize_intent(query)
+# intent_recognizer = IntentRecognizer()
+# res = intent_recognizer.recognize_intent(query)
+
+milvus_client = MilvusDBClient()
+res = milvus_client.search_by_word('sensible')
+
 print(res)

@@ -96,7 +96,7 @@ class MilvusDBClient:
         logger.info(f"查询结果: {res}")
         return res
 
-    def search_by_word(self, word: str):
+    def search_by_word(self, word: str, chunk_type: str):
         """根据单词搜索数据 - 修复版本"""
         # 注意：这里需要传入向量，而不是单词字符串
         # 首先需要将单词转换为向量
@@ -106,7 +106,7 @@ class MilvusDBClient:
         try:
             res = self.client.query(
                 collection_name=self.collection_name,
-                filter=f'word like "%{word}%"',
+                filter=f'word like "%{word}%" and chunk_type = "{chunk_type}"',
                 output_fields=["content", "chunk_type", "word"]
             )
             logger.info(f"标量搜索结果: 找到 {len(res)} 条记录")

@@ -136,8 +136,6 @@ def _enhance_query_for_intent(query: str, intent: Dict[str, Any]) -> str:
     if intent["type"] == "synonym" and intent["target_word"]:
         # 对于同义词查询，在查询中加入相关词汇
         return f"{query} 同义词 近义词 相似词 synonyms similar words"
-    elif intent["type"] == "definition" and intent["target_word"]:
-        return f"{query} 定义 意思 解释 definition meaning"
     elif intent["type"] == "example" and intent["target_word"]:
         return f"{query} 例句 例子 用法 example usage"
     else:
@@ -202,7 +200,6 @@ class Retriever:
     def __init__(self):
         self.milvus_client = MilvusDBClient()
         self.embedding_model = EmbeddingModel()
-        # self.intent_recognizer = IntentRecognizer()
         # 配置多路召回策略
         # self.retrieval_strategies = {
         #     "semantic": {"weight": 0.6, "top_k": 10},
@@ -214,40 +211,27 @@ class Retriever:
         self.retrieval_strategies = {
             "semantic": {"weight": 0.4, "top_k": 8},
             "keyword_bm25": {"weight": 0.3, "top_k": 8},
-            "exact_match": {"weight": 0.2, "top_k": 5},
             "intention_aware": {"weight": 0.1, "top_k": 5}
         }
 
-    def retrieve(self, query: str, top_k: int = 5) -> List[List[dict]]:
-        query_vector = self.embedding_model.encode(query)
-        res = self.milvus_client.semantic_search(query_vector, top_k)
-        return res
+    def retrieve_by_word(self, intent: Dict[str, Any]) -> List[List[dict]]:
+        target_word = intent["target_word"]
+        chunk_type = intent["chunk_type"]
+        return self.milvus_client.search_by_word(target_word, chunk_type)
 
-    def multi_way_retrieve(self, query: str, top_k: int = 10,
+    def multi_way_retrieve(self, query: str, intent: Dict[str, Any], top_k: int = 10,
                            strategies: Optional[List[str]] = None) -> List[Dict[str, Any]]:
-        """
-        多路召回主函数
 
-        Args:
-            query: 查询文本
-            top_k: 最终返回的文档数量
-            strategies: 指定使用的召回策略，None则使用所有策略
-
-        Returns:
-            融合排序后的文档列表
-        """
         if strategies is None:
             strategies = list(self.retrieval_strategies.keys())
 
-            # 步骤0: 查询意图分析
-        query_intent = _analyze_query_intent(query)
-        # logger.info(f"查询意图分析: {query_intent}")
+        query_vector = self.embedding_model.encode(query)
         # 步骤1: 多路执行（根据意图调整策略）
-        all_results = self._execute_intention_aware_retrieval(query, strategies, query_intent)
+        all_results = self._execute_intention_aware_retrieval(query_vector, strategies, intent)
         # 步骤2: 意图感知的结果融合
-        fused_results = self._intention_aware_fusion(all_results, strategies, query_intent)
+        fused_results = self._intention_aware_fusion(all_results, strategies, intent)
         # 步骤3: 精细重排序
-        reranked_results = _detailed_rerank(query, fused_results[:top_k * 3], query_intent)
+        reranked_results = _detailed_rerank(query, fused_results[:top_k * 3], intent)
 
         return reranked_results[:top_k]
 
@@ -264,15 +248,9 @@ class Retriever:
                 elif strategy == "keyword_bm25":
                     results[strategy] = self._keyword_bm25_retrieval(query, intent,
                                                                      self.retrieval_strategies[strategy]["top_k"])
-                elif strategy == "exact_match":
-                    results[strategy] = self._enhanced_exact_match(query, intent,
-                                                                   self.retrieval_strategies[strategy]["top_k"])
                 elif strategy == "intention_aware":
                     results[strategy] = self._intention_specific_retrieval(query, intent,
                                                                            self.retrieval_strategies[strategy]["top_k"])
-
-                # logger.info(f"策略 '{strategy}' 召回 {len(results[strategy])} 个结果")
-
             except Exception as e:
                 # logger.error(f"策略 '{strategy}' 执行失败: {e}")
                 results[strategy] = []
@@ -338,74 +316,6 @@ class Retriever:
                 unique_results.append(doc)
 
         return unique_results[:top_k]
-
-    def _exact_match_retrieval(self, query: str, top_k: int) -> List[Dict]:
-        """精确匹配召回"""
-        # 查找完全匹配的单词
-        words = re.findall(r'\b[a-zA-Z]+\b', query.lower())
-
-        all_results = []
-        for word in words:
-            try:
-                results = self.milvus_client.search_by_word(word)
-                for result in results[:3]:  # 每个单词取前3个结果
-                    doc = {
-                        "id": result.get('id'),
-                        "content": result.get('content'),
-                        "word": result.get('word'),
-                        "chunk_type": result.get('chunk_type'),
-                        "score": 1.0,  # 精确匹配给最高分
-                        "strategy": "exact_match"
-                    }
-                    all_results.append(doc)
-            except Exception as e:
-                # logger.warning(f"精确匹配 '{word}' 失败: {e}")
-                continue
-
-        # 去重
-        seen_ids = set()
-        unique_results = []
-        for doc in all_results:
-            if doc["id"] not in seen_ids:
-                seen_ids.add(doc["id"])
-                unique_results.append(doc)
-
-        return unique_results[:top_k]
-
-    def _enhanced_exact_match(self, query: str, intent: Dict[str, Any], top_k: int) -> List[Dict]:
-        """增强的精确匹配"""
-        if not intent["target_word"]:
-            return []
-
-        target_word = intent["target_word"]
-        try:
-            results = self.milvus_client.search_by_word(target_word)
-            formatted_results = []
-
-            for result in results[:top_k]:
-                doc = {
-                    "id": result.get('id'),
-                    "content": result.get('content'),
-                    "word": result.get('word'),
-                    "chunk_type": result.get('chunk_type'),
-                    "score": 1.0,  # 精确匹配给最高分
-                    "strategy": "exact_match"
-                }
-
-                # 根据意图调整分数
-                if intent["type"] == "synonym" and doc.get("chunk_type") == "semantic_network":
-                    doc["score"] = 1.2  # 超出1.0的分数在融合时会被归一化
-                elif intent["type"] == "definition" and doc.get("chunk_type") == "definition":
-                    doc["score"] = 1.2
-                elif intent["type"] == "example" and doc.get("chunk_type") == "examples":
-                    doc["score"] = 1.2
-
-                formatted_results.append(doc)
-
-            return formatted_results
-        except Exception as e:
-            # logger.error(f"精确匹配失败: {e}")
-            return []
 
     def _intention_specific_retrieval(self, query: str, intent: Dict[str, Any], top_k: int) -> List[Dict]:
         """意图特定的检索"""
