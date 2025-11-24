@@ -1,8 +1,13 @@
+import logging
 import threading
 
 from transformers import AutoTokenizer, AutoModelForCausalLM
 
 MODEL_PATH = "/Users/litengjiang/.cache/modelscope/hub/models/Qwen/Qwen3-0.6B"
+
+# 配置日志
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 
 class GeneratorModel:
@@ -21,13 +26,13 @@ class GeneratorModel:
     def load_model(self, model_path: str):
         """加载模型（只在第一次调用时执行）"""
         if self.model is None:
-            print(f"正在加载模型: {model_path}")
-            self.tokenizer = AutoTokenizer.from_pretrained(MODEL_PATH)
+            logging.info(f"正在加载generator model: {model_path}")
+            self.tokenizer = AutoTokenizer.from_pretrained(model_path)
             self.model = AutoModelForCausalLM.from_pretrained(
                 MODEL_PATH,
                 torch_dtype="auto",
             )
-            print("模型加载完成")
+            logging.info(f"generator model 加载完成: {model_path}")
 
     def communicate(self, prompt):
         messages = [

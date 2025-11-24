@@ -1,5 +1,3 @@
-from rag_core.intent_recognizer import IntentRecognizer
-from rag_core.retriever import Retriever
 from utils import MilvusDBClient
 
 # retriever = Retriever()

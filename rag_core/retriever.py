@@ -3,7 +3,6 @@ from collections import defaultdict
 from typing import List, Dict, Optional, Any
 
 from models.embedding_model import EmbeddingModel
-from rag_core.intent_recognizer import IntentRecognizer
 from utils import MilvusDBClient
 
 
@@ -217,7 +216,7 @@ class Retriever:
     def retrieve_by_word(self, intent: Dict[str, Any]) -> List[List[dict]]:
         target_word = intent["target_word"]
         chunk_type = intent["chunk_type"]
-        return self.milvus_client.search_by_word(target_word, chunk_type)
+        return self.milvus_client.search_by_word_type(target_word, chunk_type)
 
     def multi_way_retrieve(self, query: str, intent: Dict[str, Any], top_k: int = 10,
                            strategies: Optional[List[str]] = None) -> List[Dict[str, Any]]:

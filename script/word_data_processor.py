@@ -1,12 +1,25 @@
 import hashlib
 import json
-from typing import Dict, List, Optional
+from dataclasses import dataclass
+from typing import Dict, Any, Optional
 
 
-def _extract_synonyms(content: Dict) -> str:
+@dataclass
+class VocabularyChunk:
+    """词汇数据块"""
+
+    content: str  # 用于向量化的核心文本
+    metadata: Dict[str, Any]  # 结构化元数据
+    chunk_type: str  # 块类型:definition/examples/phrases/semantic_network
+    word: str  # 单词
+    chunk_id: str  # 唯一标识
+    part_of_speech: str  # 词性
+
+
+def _extract_synonyms(head_word: str, content: Dict) -> str:
     """提取同义词信息"""
     syno_data = content.get("syno", {})
-    synonyms = []
+    synonyms = [f'{head_word} 同义词:']
 
     for syno_group in syno_data.get("synos", []):
         pos = syno_group.get("pos", "")
@@ -14,16 +27,16 @@ def _extract_synonyms(content: Dict) -> str:
         words = [hwds.get("w", "") for hwds in syno_group.get("hwds", [])]
 
         if words:
-            synonyms.append(f"{pos} {tran}: {', '.join(words)}")
+            synonyms.append(f"<{pos}> {tran}: {', '.join(words)}")
 
     return " ".join(synonyms) if synonyms else ""
 
 
-def _extract_definition(content: Dict) -> str:
+def _extract_definition(head_word: str, content: Dict) -> str:
     """提取定义解释"""
     trans_data = content.get("trans", [])
 
-    definitions = []
+    definitions = [f'{head_word} 核心释义:']
 
     for trans in trans_data:
         pos = trans.get("pos", "")
@@ -31,36 +44,54 @@ def _extract_definition(content: Dict) -> str:
         tran_other = trans.get("tranOther", "")
 
         if tran_cn:
-            definitions.append(f"{pos}: {tran_cn}")
+            definitions.append(f"<{pos}>: {tran_cn}")
         elif tran_other:
-            definitions.append(f"{pos}: {tran_other}")
+            definitions.append(f"<{pos}>: {tran_other}")
 
         definitions.append(f"。替代单词或短语: {tran_other}")
 
     return " ".join(definitions) if definitions else ""
 
 
-def _extract_examples(content: Dict) -> str:
+def _extract_usage_contexts(s_content: str, word: str) -> str:
+    """提取例句中的使用场景"""
+    sentence = s_content.lower()
+    # 分析句子结构和使用模式
+    if f"is {word}" in sentence or f"was {word}" in sentence:
+        return "作表语"
+    elif f"{word} " in sentence and not sentence.startswith(word):
+        return "作定语"
+    elif sentence.startswith(word):
+        return "开头使用"
+    else:
+        return "句中使用"
+
+
+def _extract_examples(head_word, content: Dict) -> str:
     """提取例句"""
     sentence_data = content.get("sentence", {})
-    examples = []
 
-    for sentence in sentence_data.get("sentences", []):
+    if sentence_data is None:
+        return ""
+
+    sentences = sentence_data.get("sentences", [])
+    examples = [f'{head_word} 例句:']
+    for sentence in sentences:
         s_content = sentence.get("sContent", "")
         s_cn = sentence.get("sCn", "")
-
         if s_content and s_cn:
-            examples.append(f"{s_content} {s_cn}")
+            usage_contexts = _extract_usage_contexts(s_content, head_word)
+            examples.append(f"[{usage_contexts}]: {s_content} {s_cn}")
 
     return " ".join(examples) if examples else ""
 
 
-def _extract_pronunciation(content: Dict) -> str:
+def _extract_pronunciation(head_word: str, content: Dict) -> str:
     """提取发音信息"""
     us_phone = content.get("usphone", "")
     uk_phone = content.get("ukphone", "")
 
-    pronunciations = []
+    pronunciations = [f'{head_word} 发音:']
     if us_phone:
         pronunciations.append(f"美式: {us_phone}")
     if uk_phone:
@@ -69,11 +100,11 @@ def _extract_pronunciation(content: Dict) -> str:
     return " ".join(pronunciations) if pronunciations else ""
 
 
-def _extract_usage_guidance(content: Dict) -> str:
+def _extract_usage_guidance(head_word: str, content: Dict) -> str:
     """提取使用指导（短语+定义）"""
     phrases_data = content.get("phrase", {})
 
-    usage_info = ['短语:']
+    usage_info = [f'{head_word} 常用短语搭配:']
 
     # 提取短语
     for phrase in phrases_data.get("phrases", []):
@@ -86,16 +117,21 @@ def _extract_usage_guidance(content: Dict) -> str:
     return " ".join(usage_info) if usage_info else ""
 
 
-def _extract_etymology(content: Dict) -> str:
+def _extract_etymology(head_word: str, content: Dict) -> str:
     """提取词源记忆"""
     rem_method = content.get("remMethod", {})
-    return rem_method.get("val", "").replace("→", "=")
+    if rem_method:
+        return f'{head_word} 记忆:' + rem_method.get("val", "").replace("→", "=")
+    return ''
 
 
-def _extract_word_family(content: Dict) -> str:
+def _extract_word_family(head_word: str, content: Dict) -> str:
     """提取词族信息"""
     rel_word_data = content.get("relWord", {})
-    word_family = []
+    if len(rel_word_data) == 0:
+        return ''
+
+    word_family = [f'{head_word} 词族信息:']
 
     for rel_group in rel_word_data.get("rels", []):
         pos = rel_group.get("pos", "")
@@ -103,32 +139,39 @@ def _extract_word_family(content: Dict) -> str:
 
         for word_item in rel_group.get("words", []):
             hwd = word_item.get("hwd", "")
-            tran = word_item.get("tran", "")
+            tran = word_item.get("tran", "").lstrip()
             if hwd:
                 words_info.append(f"{hwd} ({tran})" if tran else hwd)
 
         if words_info:
-            word_family.append(f"{pos}: {', '.join(words_info)}")
+            word_family.append(f"<{pos}>: {', '.join(words_info)}")
 
     return " ".join(word_family) if word_family else ""
 
 
-def _calculate_search_priority(intent_type: str, content: str) -> int:
-    """根据意图类型和内容计算搜索优先级"""
-    base_priority = {
-        "definition": 100,
-        "example": 90,
-        "synonym": 85,
-        "pronunciation": 80,
-        "usage_guidance": 75,
-        "word_family": 70,
-        "etymology": 60
-    }.get(intent_type, 50)
+def _extract_intent_content(head_word: str, content: Dict, intent_type: str) -> Optional[str]:
+    """根据意图类型提取相关内容"""
+    if intent_type == "synonym":
+        return _extract_synonyms(head_word, content)
+    elif intent_type == "definition":
+        return _extract_definition(head_word, content)
+    elif intent_type == "example":
+        return _extract_examples(head_word, content)
+    elif intent_type == "pronunciation":
+        return _extract_pronunciation(head_word, content)
+    elif intent_type == "usage_guidance":
+        return _extract_usage_guidance(head_word, content)
+    elif intent_type == "etymology":
+        return _extract_etymology(head_word, content)
+    elif intent_type == "word_family":
+        return _extract_word_family(head_word, content)
+    return None
 
-    # 根据内容长度调整优先级
-    length_bonus = min(len(content) // 10, 20)  # 每10个字符加1分，最多20分
 
-    return base_priority + length_bonus
+def generate_chunk_id(word: str, chunk_type: str, content: str) -> str:
+    """生成唯一块ID"""
+    unique_str = f"{word}_{chunk_type}_{content[:50]}"
+    return hashlib.md5(unique_str.encode()).hexdigest()
 
 
 def _extract_part_of_speech(content: Dict) -> str:
@@ -144,106 +187,6 @@ def _extract_part_of_speech(content: Dict) -> str:
     return ""
 
 
-def _estimate_difficulty_level(content: Dict) -> str:
-    """估计单词难度级别"""
-    # 基于词频、释义复杂度等估计难度
-    word_rank = content.get("wordRank", 9999)
-
-    if word_rank <= 1000:
-        return "basic"
-    elif word_rank <= 3000:
-        return "intermediate"
-    else:
-        return "advanced"
-
-
-def _calculate_embedding_weight(intent_type: str, content_length: int) -> float:
-    """计算embedding权重"""
-    type_weights = {
-        "definition": 1.2,
-        "example": 1.1,
-        "synonym": 1.0,
-        "pronunciation": 0.9,
-        "usage_guidance": 1.0,
-        "word_family": 0.8,
-        "etymology": 0.7,
-    }
-
-    base_weight = type_weights.get(intent_type, 1.0)
-    length_factor = min(content_length / 100, 2.0)  # 长度因子，最大2倍
-
-    return base_weight * length_factor
-
-
-def _generate_content_summary(intent_type: str) -> str:
-    """生成内容摘要"""
-    summaries = {
-        "synonym": "同义词信息",
-        "definition": "单词定义",
-        "example": "用法例句",
-        "pronunciation": "发音指南",
-        "usage_guidance": "使用指导",
-        "etymology": "词源解析",
-        "word_family": "词族拓展"
-    }
-
-    return summaries.get(intent_type, "单词信息")
-
-
-def _create_chunk(chunk_id: str, intent_type: str, word: str,
-                  content: str, raw_content: Dict) -> Dict:
-    """创建标准化的chunk数据结构"""
-    # 计算搜索优先级
-    search_priority = _calculate_search_priority(intent_type, content)
-    # 获取词性
-    part_of_speech = _extract_part_of_speech(raw_content)
-    # 计算难度级别
-    difficulty_level = _estimate_difficulty_level(raw_content)
-    # 计算embedding权重
-    embedding_weight = _calculate_embedding_weight(intent_type, len(content))
-
-    return {
-        "id": f"{chunk_id}",
-        "vector": [],  # 将在后续步骤中填充embedding
-        "content": content,
-        "word": word,
-        "chunk_type": intent_type,  # 使用意图类型作为chunk类型
-        "head_word": word,
-        "embedding_weight": embedding_weight,
-        "search_priority": search_priority,
-        "content_length": len(content),
-        "part_of_speech": part_of_speech,
-        "difficulty_level": difficulty_level,
-        "intent_category": intent_type,  # 新增：明确标识意图类别
-        "content_summary": _generate_content_summary(intent_type)  # 新增：内容摘要
-    }
-
-
-def _extract_intent_content(content: Dict, intent_type: str) -> Optional[str]:
-    """根据意图类型提取相关内容"""
-    if intent_type == "synonym":
-        return _extract_synonyms(content)
-    elif intent_type == "definition":
-        return _extract_definition(content)
-    elif intent_type == "example":
-        return _extract_examples(content)
-    elif intent_type == "pronunciation":
-        return _extract_pronunciation(content)
-    elif intent_type == "usage_guidance":
-        return _extract_usage_guidance(content)
-    elif intent_type == "etymology":
-        return _extract_etymology(content)
-    elif intent_type == "word_family":
-        return _extract_word_family(content)
-    return None
-
-
-def generate_chunk_id(word: str, chunk_type: str, content: str) -> str:
-    """生成唯一块ID"""
-    unique_str = f"{word}_{chunk_type}_{content[:50]}"
-    return hashlib.md5(unique_str.encode()).hexdigest()
-
-
 class WordDataProcessor:
     def __init__(self):
         # 意图类型
@@ -252,7 +195,7 @@ class WordDataProcessor:
             "usage_guidance", "etymology", "word_family"
         ]
 
-    def process_word_data(self, raw_data: Dict) -> List[Dict]:
+    def process_word_data(self, raw_data: Dict):
         """处理单个单词的原始数据，生成多个意图特定的chunk"""
         chunks = []
 
@@ -260,17 +203,20 @@ class WordDataProcessor:
         head_word = raw_data["headWord"]
         word_data = raw_data["content"]["word"]["content"]
 
+        # 获取词性
+        part_of_speech = _extract_part_of_speech(raw_data)
+
         # 为每个意图类型创建独立的chunk
         for intent_type in self.intent_type_list:
-            chunk_content = _extract_intent_content(word_data, intent_type)
-
-            if chunk_content:  # 只有有内容时才创建chunk
-                chunk = _create_chunk(
+            chunk_content = _extract_intent_content(head_word, word_data, intent_type)
+            if chunk_content != '':  # 只有有内容时才创建chunk
+                chunk = VocabularyChunk(
                     chunk_id=generate_chunk_id(head_word, intent_type, chunk_content),
-                    intent_type=intent_type,
-                    word=head_word,
                     content=chunk_content,
-                    raw_content=word_data
+                    metadata=word_data,
+                    chunk_type=intent_type,
+                    word=head_word,
+                    part_of_speech=part_of_speech
                 )
                 chunks.append(chunk)
 

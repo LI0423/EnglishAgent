@@ -9,9 +9,10 @@ logger = logging.getLogger(__name__)
 
 
 class MilvusDBClient:
-    def __init__(self, collection_name: str = "vocabulary", vector_dim: int = 1024):
+    def __init__(self, collection_name: str = "vocabulary", vector_dim: int = 1024,
+                 db_path: str = "./ielts_vocabulary.db"):
         # 初始化客户端并验证连接
-        self.client = MilvusClient("./ielts_vocabulary.db")
+        self.client = MilvusClient(db_path)
         self.collection_name = collection_name
         self.vector_dim = vector_dim  # 保存向量维度
 
@@ -38,8 +39,8 @@ class MilvusDBClient:
         schema.add_field(field_name="content_length", datatype=DataType.INT64)
         # 词性相关字段
         schema.add_field(field_name="part_of_speech", datatype=DataType.VARCHAR, max_length=50)
-        schema.add_field(field_name="difficulty_level", datatype=DataType.VARCHAR, max_length=50)
-        schema.add_field(field_name="chunk_index", datatype=DataType.INT64)
+        schema.add_field(field_name="intent_category", datatype=DataType.VARCHAR, max_length=50)
+        schema.add_field(field_name="content_summary", datatype=DataType.VARCHAR, max_length=50)
 
         return schema
 
@@ -63,7 +64,7 @@ class MilvusDBClient:
         try:
             # 检查是否已有索引
             indexes = self.client.list_indexes(collection_name=self.collection_name)
-            vector_index_exists = any(index.field_name == "vector" for index in indexes)
+            vector_index_exists = any(index == "vector" for index in indexes)
 
             if not vector_index_exists:
                 logger.info("向量字段没有索引，正在创建...")
@@ -96,7 +97,21 @@ class MilvusDBClient:
         logger.info(f"查询结果: {res}")
         return res
 
-    def search_by_word(self, word: str, chunk_type: str):
+    def search_by_word(self, word: str):
+        """根据单词搜索数据 - 修复版本"""
+        try:
+            res = self.client.query(
+                collection_name=self.collection_name,
+                filter=f'word like "%{word}%"',
+                output_fields=["content", "chunk_type", "word"]
+            )
+            logger.info(f"标量搜索结果: 找到 {len(res)} 条记录")
+            return res
+        except Exception as e:
+            logger.error(f"搜索失败: {e}")
+            return []
+
+    def search_by_word_type(self, word: str, chunk_type: str):
         """根据单词搜索数据 - 修复版本"""
         # 注意：这里需要传入向量，而不是单词字符串
         # 首先需要将单词转换为向量

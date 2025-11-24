@@ -41,7 +41,7 @@ class RerankerModel:
         if self.model is not None:
             return
 
-        logger.info(f"正在加载重排序模型: {model_path}")
+        logger.info(f"正在加载reranker model: {model_path}")
 
         # 1) 先构造 CrossEncoder（不要传 tokenizer 参数）
         #    CrossEncoder 会内部加载 tokenizer 与 model
@@ -80,7 +80,7 @@ class RerankerModel:
         # 4) 把 tokenizer 保存回实例，完成初始化
         self.tokenizer = tokenizer
 
-        logger.info("重排序模型加载完成 (pad_token 已处理)")
+        logger.info("reranker model 加载完成")
 
     def rerank(self, query: str, documents: list[str], top_k: int = 5):
         if self.model is None:

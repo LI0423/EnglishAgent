@@ -1,39 +1,26 @@
-import json
-
+from models.embedding_model import EmbeddingModel
 from script.IELTSVectorStore import IELTSVectorStore
-from script.word_processor import IELTSVocabProcessor
+from utils import MilvusDBClient
 
 
 def main():
-    # 读取原始数据
-    with open("IELTSluan_2.jsonl", "r", encoding="utf-8") as f:
-        # raw_data = f.read()
-        raw_data = [json.loads(line) for line in f if line.strip()]
+    db_path = '/Users/litengjiang/Desktop/MyCode/EnglishAgent/ielts_vocabulary.db'
+    # # 初始化向量存储
+    # vector_store = IELTSVectorStore(db_path)
+    # vector_store.store_data()
 
-    # 处理数据
-    processor = IELTSVocabProcessor()
-    chunks = processor.process_batch(raw_data[:10])
-
-    # 初始化向量存储
-    vector_store = IELTSVectorStore()
-    res = vector_store.process_and_store_word(chunks)
-    print(res)
-
-    # # 测试1: 语义搜索
-    # results = vector_store.similarity_search("表示明智的形容词", k=3)
-    # print("搜索 '表示明智的形容词':")
+    milvus_client = MilvusDBClient(db_path=db_path)
+    # # 测试1: 标量搜索
+    # results = milvus_client.search_by_word("sensible")
     # for i, doc in enumerate(results):
-    #     print(
-    #         f"{i+1}. {doc.page_content[:100]}... [类型: {doc.metadata['chunk_type']}]"
-    #     )
+    #     print(doc)
 
-    # # 测试2: 单词特定搜索
-    # print("\n搜索 'sign' 的例句:")
-    # sign_results = vector_store.search_by_word("sign", ["examples"])
-    # for doc in sign_results[:2]:
-    #     print(f"- {doc.page_content}")
-
-    # return vector_store
+    embedding_model = EmbeddingModel()
+    vector = embedding_model.encode("sensible是什么意思")
+    # 测试2: 语义搜索
+    semantic_results = milvus_client.semantic_search(vector)
+    for i, doc in enumerate(semantic_results):
+        print(doc)
 
 if __name__ == "__main__":
     main()

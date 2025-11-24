@@ -1,7 +1,12 @@
+import logging
 import threading
 from sentence_transformers import SentenceTransformer
 
 MODEL_PATH = "/Users/litengjiang/.cache/modelscope/hub/models/Qwen/Qwen3-Embedding-0.6B"
+
+# 配置日志
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 
 class EmbeddingModel:
@@ -20,9 +25,9 @@ class EmbeddingModel:
     def load_model(self, model_path: str):
         """加载模型（只在第一次调用时执行）"""
         if self.model is None:
-            print(f"正在加载模型: {model_path}")
+            logging.info(f"正在加载embedding model: {model_path}")
             self.model = SentenceTransformer(model_path)
-            print("模型加载完成")
+            logging.info("embedding model 加载完成")
 
     def encode(self, texts):
         """编码文本"""
