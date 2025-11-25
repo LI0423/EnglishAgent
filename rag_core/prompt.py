@@ -184,7 +184,7 @@ antonym_prompt = ("## 反义词\n"
                   "- irrational：不理性\n"
                   "如无典型反义词，说明原因。\n")
 
-example_prompt = ("## 例句 \n"
+example_prompt = ("## 例句\n"
                   "请为单词 [target_word] 提供 3~5 个例句，要求：\n"
                   "1. 覆盖不同词性或语境（如果该词有多个词性）\n"
                   "2. 例句必须自然、符合母语者表达\n"
@@ -210,7 +210,7 @@ usage_prompt = ("## 常见搭配与用法\n"
                 "- 常作表语，如: xxx\n"
                 "- 可修饰名词，如: xxx\n")
 
-etymology_prompt = ("## 词源信息（Etymology）\n"
+etymology_prompt = ("## 词源信息\n"
                     "请简要说明单词 [target_word] 的词源（如拉丁语/法语/古英语等）。\n"
                     "要求：\n"
                     "1. 保持简短，最多 3 行。\n"
@@ -218,7 +218,7 @@ etymology_prompt = ("## 词源信息（Etymology）\n"
                     "3. 不要给出不可靠的猜测。\n")
 
 pronunciation_prompt = ("## 发音\n"
-                        "请提供：\n"
+                        "请提供单词 [target_word]：\n"
                         "- IPA 音标（英式 / 美式）\n"
                         "- 重音位置说明"
                         "- 简短发音提示（例如与哪些单词押韵）\n"

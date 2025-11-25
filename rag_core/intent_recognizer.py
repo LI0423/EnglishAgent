@@ -1,6 +1,7 @@
 import re
 from typing import List, Dict, Any
 
+from rag_core.intent_type import IntentType
 from rag_core.prompt import INTENT_EXAMPLES, INTENT_KEYWORDS
 
 
@@ -36,6 +37,7 @@ def _combine_intent_results(intent_results: List[Dict]) -> Dict[str, Any]:
         best_confidence = best_intent[1]
 
         target_words = [r.get("target_word") for r in intent_results if r.get("target_word")]
+        print(target_words)
         target_word = max(set([t for t in target_words if t]), key=target_words.count) if target_words else ""
 
         return {
@@ -52,6 +54,8 @@ def _combine_intent_results(intent_results: List[Dict]) -> Dict[str, Any]:
             "all_scores": {}
         }
 
+def filter_valid_target(words: List[str], query: str):
+    return [w for w in words if _is_valid_target(w, query)]
 
 def _is_valid_target(candidate: str, query: str) -> bool:
     """判断候选词是否是有效的目标词（更严格）"""
@@ -93,22 +97,22 @@ def _is_valid_target(candidate: str, query: str) -> bool:
     return False
 
 
-def _clean_chinese_candidate(word: str) -> str:
+def _clean_chinese_candidate(word: str) -> List[str]:
     """清洗中文候选，剥离常见疑问前缀"""
     if not word:
-        return ""
+        return []
     word = word.strip()
     # 去掉常见疑问或功能词前缀
     word = re.sub(r'^(?:有|有没有|什么|哪些|哪个|哪|是否|能否|可以|有什么|是什么|什么是)[，,。；;：:\s]*', '', word)
     # 再去掉末尾多余的疑问或连接词
     word = re.sub(r'[？?。.！!，,；;\s]+$', '', word)
-    return word.strip()
+    return [word.strip()]
 
 
-def _select_best_chinese_target(chinese_words: List[str], query: str) -> str:
+def _select_best_chinese_target(chinese_words: List[str], query: str) -> List[str]:
     """从多个中文词语中选择最可能是目标词的（已改进）"""
     if not chinese_words:
-        return ""
+        return []
 
     chinese_stop_words = {
         '什么', '哪些', '怎么', '如何', '为什么', '为何', '哪个', '哪', '什么是',
@@ -118,7 +122,7 @@ def _select_best_chinese_target(chinese_words: List[str], query: str) -> str:
     # 清洗并过滤
     cleaned = []
     for word in chinese_words:
-        w = _clean_chinese_candidate(word)
+        w = _clean_chinese_candidate(word)[0]
         if not w:
             continue
         if any(sw == w for sw in chinese_stop_words):
@@ -130,11 +134,12 @@ def _select_best_chinese_target(chinese_words: List[str], query: str) -> str:
 
     if not cleaned:
         # 退化回原始最短/最前的可用词（再做一次清洗）
+        words = []
         for w in chinese_words:
             w2 = _clean_chinese_candidate(w)
             if w2 and w2 not in chinese_stop_words:
-                return w2
-        return chinese_words[0] if chinese_words else ""
+                words.append(w2)
+        return chinese_words if chinese_words else words
 
     # 评分选择最佳目标词
     scored_words = []
@@ -171,16 +176,16 @@ def _select_best_chinese_target(chinese_words: List[str], query: str) -> str:
         scored_words.append((word, score))
 
     if scored_words:
-        best_word = max(scored_words, key=lambda x: x[1])
-        return best_word[0] if best_word[1] > -1 else cleaned[0]
+        best_words = sorted(scored_words, key=lambda x: x[1], reverse=True)
+        return [word[0] for word in best_words]
 
-    return cleaned[0]
+    return cleaned
 
 
-def _select_best_english_target(words: List[str], query: str) -> str:
+def _select_best_english_target(words: List[str], query: str) -> List[str]:
     """从多个英文单词中选择最可能是目标词的（已改进）"""
     if not words:
-        return ""
+        return []
 
     scored_words = []
 
@@ -219,13 +224,12 @@ def _select_best_english_target(words: List[str], query: str) -> str:
         scored_words.append((word, score))
 
     if scored_words:
-        best_word = max(scored_words, key=lambda x: x[1])
-        return best_word[0] if best_word[1] >= 0 else ""
+        scored_words = sorted(scored_words, key=lambda x: x[1], reverse=True)
+        return [w[0] for w in scored_words[:5]]
+    return words
 
-    return words[0]
 
-
-def _extract_core_concept(query: str) -> str:
+def _extract_core_concept(query: str) -> List[str]:
     """提取查询的核心概念（兜底方法）"""
     cleaned_query = query
     remove_patterns = [
@@ -248,47 +252,42 @@ def _extract_core_concept(query: str) -> str:
 
     words = cleaned_query.strip().split()
     if words:
-        first_word = words[0]
-        if _is_valid_target(first_word, query):
-            return first_word
-
-    return ""
+        return filter_valid_target(words, query)
+    return []
 
 
-def _extract_target_word(query: str) -> str:
+def _extract_target_word(query: str) -> List[str]:
     """改进的目标单词提取（优先英文，再中文，带清洗与严格校验）"""
     if not query:
-        return ""
+        return []
 
-    # 1) 引号包围的优先
-    quoted_patterns = [
-        r'[「『"](.+?)[」』"]',
-        r"'(.+?)'",
-        r'"(.+?)"',
-        r'【(.+?)】',
-        r'《(.+?)》'
-    ]
-    for pattern in quoted_patterns:
-        match = re.search(pattern, query)
-        if match:
-            candidate = match.group(1).strip()
-            if _is_valid_target(candidate, query):
-                print("candidate", candidate)
-                return candidate
+    # # 1) 引号包围的优先
+    # quoted_patterns = [
+    #     r'[「『"](.+?)[」』"]',
+    #     r"'(.+?)'",
+    #     r'"(.+?)"',
+    #     r'【(.+?)】',
+    #     r'《(.+?)》'
+    # ]
+    # for pattern in quoted_patterns:
+    #     match = re.search(pattern, query)
+    #     if match:
+    #         candidate = match.group(0).strip()
+    #         if _is_valid_target(candidate, query):
+    #             return candidate
 
     # 2) 优先提取并立即返回英文 token（如果有）
     english_words = re.findall(r'(?<![A-Za-z])([A-Za-z][A-Za-z-]*[A-Za-z])(?![A-Za-z])', query)
 
     if english_words:
         target_candidate = _select_best_english_target(english_words, query)
-        if target_candidate and _is_valid_target(target_candidate, query):
-            return target_candidate
+        if target_candidate:
+            return filter_valid_target(target_candidate, query)
 
     # 3) 中文模式提取（尽量避免疑问短语）
     chinese_patterns = [
         r'([^的，,；;。.?？!！\s]{1,6})(?:的)?(?:同义词|近义词|相似词|反义词|定义|意思|含义|解释|例句|例子|用法|发音|读音|词源|词根|词缀|搭配|短语)',
-        r'(?:查询|查找|搜索|找|什么是|解释|定义)([^的，,；;。.?？!！\s]{1,6})',
-        r'([^和与跟及以及\s]{1,6})(?:和|与|跟|及|以及)([^的区别差异不同]{1,6})(?:的)?(?:区别|差异|不同)'
+        r'(?:查询|查找|搜索|找|什么是|解释|定义)([^的，,；;。.?？!！\s]{1,6})'
     ]
 
     for pattern in chinese_patterns:
@@ -298,12 +297,12 @@ def _extract_target_word(query: str) -> str:
                 # 多组匹配，优先选择能通过验证的候选
                 for candidate in match:
                     candidate = _clean_chinese_candidate(candidate.strip())
-                    if candidate and _is_valid_target(candidate, query):
-                        return candidate
+                    if candidate:
+                        return filter_valid_target(candidate, query)
             else:
                 candidate = _clean_chinese_candidate(match.strip())
-                if candidate and _is_valid_target(candidate, query):
-                    return candidate
+                if candidate:
+                    return filter_valid_target(candidate, query)
 
     # 4) 最后兜底：核心概念提取
     return _extract_core_concept(query)
@@ -312,24 +311,24 @@ def _extract_target_word(query: str) -> str:
 def _pattern_based_recognition(query: str) -> Dict[str, Any]:
     """基于模式的意图识别（改进）"""
     patterns = {
-        "synonym": [
+        IntentType.SYNONYM.value: [
             r'(.{1,30}?)(?:的)?(?:同义词|近义词|相似词)',
             r'(?:synonyms?|similar words? to|words like)\s+(.+)'
         ],
-        "definition": [
+        IntentType.DEFINITION.value: [
             r'(.{1,30}?)(?:的)?(?:定义|意思|含义|释义|是什么)',
             r'(?:what is|what does)\s+(.+?)\s*(?:mean)?'
         ],
-        "example": [
+        IntentType.EXAMPLE.value: [
             r'(.{1,30}?)(?:的)?(?:例句|用法|造句)',
             r'(?:example|usage) of\s+(.+)',
             r'use\s+(.+?)\s+in a sentence'
         ],
-        "pronunciation": [
+        IntentType.PRONUNCIATION.value: [
             r'(.{1,30}?)(?:怎么读|发音|读音|读法)',
             r'(?:how to pronounce|pronunciation of)\s+(.+)'
         ],
-        "usage_guidance": [
+        IntentType.USAGE_GUIDANCE.value: [
             r'(.{1,30}?)(?:的)?(?:短语|搭配|词组|固定搭配)',
             r'(?:phrases?|collocations?)\s+of\s+(.+)',
             r'(.{1,30}?)(?:怎么用|用法|语法|使用)',
@@ -337,17 +336,13 @@ def _pattern_based_recognition(query: str) -> Dict[str, Any]:
             r'(.{1,30}?)(?:正式吗|正式用语|口语表达|正式程度)',
             r'(?:formal or informal|formality of)\s+(.+)'
         ],
-        "etymology": [
+        IntentType.ETYMOLOGY.value: [
             r'(.{1,30}?)(?:的)?(?:词源|来源|起源|词根)',
             r'(?:etymology|origin) of\s+(.+)'
         ],
-        "word_family": [
+        IntentType.WORD_FAMILY.value: [
             r'(.{1,30}?)(?:的)?(?:派生词|相关词|词性|变形)',
             r'(?:related words|derivatives? of)\s+(.+)'
-        ],
-        "comparison": [
-            r'(.{1,30}?)(?:和|与)(.{1,30}?)(?:的)?(?:区别|不同|差异)',
-            r'(?:difference between|A vs B)\s+(.+)'
         ]
     }
 
@@ -362,10 +357,11 @@ def _pattern_based_recognition(query: str) -> Dict[str, Any]:
                 candidate = match.group('target').strip()
                 # 如果是英文 token，优先返回
                 if re.search(r'[A-Za-z]', candidate):
-                    candidate_clean = candidate
+                    candidate_clean = [candidate]
                 else:
                     candidate_clean = _clean_chinese_candidate(candidate)
-                if _is_valid_target(candidate_clean, query):
+                filter_res = filter_valid_target(candidate_clean, query)
+                if filter_res:
                     return {
                         "type": intent,
                         "target_word": candidate_clean,
@@ -429,10 +425,15 @@ class IntentRecognizer:
         keyword_intent = self._keyword_based_recognition(query_lower)
         if keyword_intent.get("confidence", 0) > 0.8:
             # 确保 target_word 经过更强的提取器校验（优先英文）
-            keyword_intent["target_word"] = _extract_target_word(query_original) or keyword_intent.get("target_word", "")
+            keyword_intent["target_word"] = _extract_target_word(query_original) or keyword_intent.get("target_word",
+                                                                                                       [])
             return keyword_intent
+
         # 2. 语义相似度匹配
         semantic_intent = self._semantic_similarity_recognition(query_lower)
+        if semantic_intent.get("confidence", 0) == 0:
+            return semantic_intent
+
         # 3. 模式匹配（备用）
         pattern_intent = _pattern_based_recognition(query_original)
         # 4. 综合评分
@@ -454,6 +455,7 @@ class IntentRecognizer:
         for intent in scores:
             scores[intent] = scores[intent] / max_score if max_score > 0 else 0
 
+        # intent_list = sorted(scores.items(), key=lambda x: x[1], reverse=True)
         best_intent = max(scores.items(), key=lambda x: x[1]) if scores else ("general", 0)
 
         return {
@@ -475,9 +477,17 @@ class IntentRecognizer:
 
         best_intent = max(scores.items(), key=lambda x: x[1]) if scores else ("general", 0)
 
-        return {
-            "type": best_intent[0],
-            "target_word": _extract_target_word(query),
-            "confidence": best_intent[1],
-            "method": "semantic"
-        }
+        if best_intent[1] > 0:
+            return {
+                "type": best_intent[0],
+                "target_word": _extract_target_word(query),
+                "confidence": best_intent[1],
+                "method": "semantic"
+            }
+        else:
+            return {
+                "type": 'general',
+                "target_word": _extract_target_word(query),
+                "confidence": best_intent[1],
+                "method": "semantic"
+            }

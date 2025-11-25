@@ -30,7 +30,7 @@ class GeneratorModel:
             self.tokenizer = AutoTokenizer.from_pretrained(model_path)
             self.model = AutoModelForCausalLM.from_pretrained(
                 MODEL_PATH,
-                torch_dtype="auto",
+                dtype="auto",
             )
             logging.info(f"generator model 加载完成: {model_path}")
 

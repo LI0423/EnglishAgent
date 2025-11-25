@@ -97,12 +97,31 @@ class MilvusDBClient:
         logger.info(f"查询结果: {res}")
         return res
 
-    def search_by_word(self, word: str):
+    def search_by_word(self, word: List[str]):
         """根据单词搜索数据 - 修复版本"""
         try:
             res = self.client.query(
                 collection_name=self.collection_name,
-                filter=f'word like "%{word}%"',
+                filter=f'word in "{word}"',
+                output_fields=["content", "chunk_type", "word"]
+            )
+            logger.info(f"标量搜索结果: 找到 {len(res)} 条记录")
+            return res
+        except Exception as e:
+            logger.error(f"搜索失败: {e}")
+            return []
+
+    def search_by_words_types(self, word: List[str], chunk_type: List[str]):
+        """根据单词搜索数据 - 修复版本"""
+        # 注意：这里需要传入向量，而不是单词字符串
+        # 首先需要将单词转换为向量
+        # 这里假设你有一个嵌入模型来转换
+
+        # 临时解决方案：使用标量查询而不是向量搜索
+        try:
+            res = self.client.query(
+                collection_name=self.collection_name,
+                filter=f'word in "{word}" and chunk_type in "{chunk_type}"',
                 output_fields=["content", "chunk_type", "word"]
             )
             logger.info(f"标量搜索结果: 找到 {len(res)} 条记录")
