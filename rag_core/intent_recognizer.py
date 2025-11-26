@@ -1,4 +1,3 @@
-# intent_recognizer.py
 import re
 from typing import List, Dict, Any, Iterable, Tuple
 from enum import Enum
@@ -18,6 +17,7 @@ class IntentType(Enum):
     ETYMOLOGY = "etymology"
     WORD_FAMILY = "word_family"
     GENERAL = "general"
+
 
 # -------------------------
 # 基础相似度（简化 Jaccard）
@@ -402,6 +402,7 @@ def _pattern_based_recognition(query: str) -> Dict[str, Any]:
         "method": "pattern"
     }
 
+
 def _normalize_target_from_results(intent_results: List[Dict]) -> str:
     """
     依据优先级从 intent_results 提取最合理的 target_word 字符串：
@@ -430,7 +431,6 @@ def _normalize_target_from_results(intent_results: List[Dict]) -> str:
     if all_targets:
         return max(set(all_targets), key=all_targets.count)
     return ""
-
 
 
 # -------------------------
@@ -479,27 +479,25 @@ def _combine_intent_results(intent_results: List[Dict], top_k: int = 3) -> Dict[
         target_word = _normalize_target_from_results(intent_results)
         candidates_list.append({
             "type": itype,
+            "target_word": target_word or (target_words[0] if target_words else ""),
             "confidence": score,
             "method": methods,
-            "target_word": target_word or (target_words[0] if target_words else "")
         })
 
     # 排序并截取 top_k
     candidates_sorted = sorted(candidates_list, key=lambda x: x["confidence"], reverse=True)
     top_candidates = candidates_sorted[:top_k] if candidates_sorted else []
 
-    best = top_candidates[0] if top_candidates else {"type": "general", "confidence": 0.0, "method": "", "target_word": ""}
+    best = top_candidates[0] if top_candidates else {"type": "general", "target_word": "", "confidence": 0.0,
+                                                     "method": ""}
 
     # all_scores 仍保留原始 weighted_sum（便于排查），并额外给出 final_scores
     return {
         "type": best["type"],
         "target_word": best["target_word"],
         "confidence": best["confidence"],
-        "all_scores_weighted_sum": weighted_sum_per_intent,
-        "all_scores_final": final_scores,
         "candidates": top_candidates
     }
-
 
 
 # -------------------------
@@ -512,7 +510,8 @@ class IntentRecognizer:
 
     def recognize_intent(self, query: str, top_k: int = 1) -> Dict[str, Any]:
         if not query:
-            return {"type": IntentType.GENERAL.value, "target_word": "", "confidence": 0.0, "method": "keyword", "candidates": []}
+            return {"type": IntentType.GENERAL.value, "target_word": "", "confidence": 0.0, "method": "keyword",
+                    "candidates": []}
 
         query_original = query
         query_lower = query.lower()
@@ -579,36 +578,3 @@ class IntentRecognizer:
             "confidence": best_intent[1],
             "method": "semantic"
         }
-
-
-# -------------------------
-# 简单命令行演示
-# -------------------------
-if __name__ == "__main__":
-    recognizer = IntentRecognizer()
-
-    tests = [
-        "sensible的同义词有哪些",
-        "What's a synonym for 'sensible'?",
-        "sensible怎么读",
-        "如何用 'analyze' 造句？",
-        "什么是 photosynthesis",
-        "给出 beautiful 的派生词",
-        "能不能解释一下 'resilient' 的意思？",
-        "查询 'mitigate' 的用法和搭配",
-        "如何读 colonel?",
-        "有没有关于 'serendipity' 的词源信息"
-    ]
-
-    for q in tests:
-        res = recognizer.recognize_intent(q, top_k=3)
-        print("=" * 80)
-        print("Query:", q)
-        print("Best type:", res.get("type"))
-        print("Best target_word:", res.get("target_word"))
-        print("Confidence:", res.get("confidence"))
-        print("Candidates (top_k):")
-        for c in res.get("candidates", []):
-            print("  -", c)
-        print("All scores:", res.get("all_scores"))
-    print("=" * 80)

@@ -6,17 +6,17 @@ from models.reranker_model import RerankerModel
 
 def parse_search_results(search_results):
     """解析搜索结果"""
-    if not search_results or len(search_results[0]) == 0:
+    if not search_results or len(search_results) == 0:
         return []
 
     parsed = []
-    for result in search_results[0]:
+    for result in search_results:
         parsed.append({
             'id': result['id'],
-            'distance': result['distance'],
-            'content': result['entity']['content'],
-            'word': result['entity']['word'],
-            'chunk_type': result['entity']['chunk_type']
+            'score': result['score'],
+            'content': result['content'],
+            'word': result['word'],
+            'chunk_type': result['chunk_type']
         })
     return parsed
 
@@ -51,7 +51,7 @@ class Reranker:
     def __init__(self):
         self.rerank_model = RerankerModel()
 
-    def rerank(self, query: str, res_list: List[List[dict]]) -> List[Dict[str, Any]]:
+    def rerank(self, query: str, res_list: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         parsed_results = parse_search_results(res_list)
         documents = [result['content'] for result in parsed_results]
         rerank_prompt = RERANK_PROMPT

@@ -168,8 +168,7 @@ class Retriever:
 
     def auto_retrieve(self, query: str, intent: Dict[str, Any]):
         target_word = intent["target_word"]
-        chunk_type = intent["chunk_type"]
-        print(target_word)
+        chunk_type = intent["type"]
         if target_word:
             if not chunk_type:
                 self.milvus_client.search_by_word(target_word)
