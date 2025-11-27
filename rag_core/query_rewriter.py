@@ -1,4 +1,5 @@
-from typing import List, Dict, Any, re
+import re
+from typing import List, Dict, Any
 
 from models.generator_model import GeneratorModel
 

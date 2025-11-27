@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 from typing import List, Dict, Any
-from ..db import get_scores, get_transcripts  # 引入数据库查询函数
+# from ..db import get_scores, get_transcripts  # 引入数据库查询函数（暂未实现）
 from ..deps import get_current_user
 
 

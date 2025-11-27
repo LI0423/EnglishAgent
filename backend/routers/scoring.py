@@ -1,9 +1,9 @@
 from fastapi import APIRouter, HTTPException, Depends
 from pydantic import BaseModel
 from typing import List, Optional
-from ..state import store, Score as StoredScore
 from ..deps import get_current_user
 from ..db import get_transcript, save_score
+from agent_core import speaking_agent
 
 
 router = APIRouter()
@@ -50,29 +50,52 @@ async def score_speaking(req: ScoringRequest, current_user: dict = Depends(get_c
     tr = get_transcript(req.transcriptId)
     if not tr:
         raise HTTPException(status_code=404, detail="Transcript not found")
-    # Simple heuristic scoring based on length
+    
+    # Get transcript text
     text = tr.get("text") or ""
-    num_words = len(text.split()) if text else 0
-    base = 5.5
-    bonus = min(num_words / 80.0, 1.5)  # up to +1.5 for longer answers
-    fc = round(base + bonus, 1)
-    lr = round(base + min(num_words / 120.0, 1.0), 1)
-    gr = round(base + 0.3, 1)
-    pr = round(base + 0.5, 1)
-    scores = Score(FC=fc, LR=lr, GR=gr, PR=pr)
-    overall = round((scores.FC + scores.LR + scores.GR + scores.PR) / 4, 1)
-    # persist score by session
+    if not text:
+        raise HTTPException(status_code=400, detail="Transcript text is empty")
+    
+    # Use AI agent for scoring
+    evaluation = speaking_agent.evaluate_speaking(text, req.audioUrl)
+    
+    # Create response model
+    scores = Score(
+        FC=evaluation["scores"]["FC"],
+        LR=evaluation["scores"]["LR"],
+        GR=evaluation["scores"]["GR"],
+        PR=evaluation["scores"]["PR"]
+    )
+    
+    # Convert action items to response model
+    action_items = []
+    for item in evaluation["actionItems"]:
+        action_items.append(ActionItem(
+            type=item["type"],
+            before=item["before"],
+            after=item["after"],
+            examples=item["examples"]
+        ))
+    
+    # Convert highlights to response model
+    highlights = []
+    for highlight in evaluation["highlights"]:
+        highlights.append(Highlight(
+            start=highlight["start"],
+            end=highlight["end"],
+            note=highlight["note"]
+        ))
+    
+    # Persist score by session
     session_id = tr.get("session_id")
-    save_score(str(session_id), scores.FC, scores.LR, scores.GR, scores.PR, overall)
+    save_score(str(session_id), scores.FC, scores.LR, scores.GR, scores.PR, evaluation["overall"])
+    
     return ScoringResponse(
         scores=scores,
-        overall=overall,
-        rationales=["Good fluency with occasional hesitation.", "Vocabulary is adequate but could be more varied."],
-        actionItems=[
-            ActionItem(type="lexical", before="very good", after="excellent/outstanding", examples=["an outstanding example"]),
-            ActionItem(type="cohesion", before="and then", after="moreover/furthermore", examples=["Furthermore, this suggests..."])
-        ],
-        highlights=[Highlight(start=12.3, end=18.7, note="Long pause and fillers")] 
+        overall=evaluation["overall"],
+        rationales=evaluation["rationales"],
+        actionItems=action_items,
+        highlights=highlights
     )
 
 

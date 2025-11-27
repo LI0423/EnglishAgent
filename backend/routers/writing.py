@@ -1,17 +1,13 @@
 from fastapi import APIRouter, HTTPException, Depends
 from pydantic import BaseModel, Field
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Literal
 import re
 from ..deps import get_current_user
 
 router = APIRouter()
 
-class Task1Type(str):
-    """Task 1 图表类型"""
-    CHART = "chart"
-    GRAPH = "graph"
-    TABLE = "table"
-    DIAGRAM = "diagram"
+# Task 1 图表类型字面量
+Task1Type = Literal["chart", "graph", "table", "diagram"]
 
 class Task1WritingRequest(BaseModel):
     """Task 1 写作请求模型"""

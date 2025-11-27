@@ -55,6 +55,17 @@ def init_db():
             )
             conn.execute(
                 """
+                CREATE TABLE IF NOT EXISTS session_parts (
+                  session_id TEXT,
+                  idx INTEGER,
+                  type TEXT,
+                  prompt TEXT,
+                  PRIMARY KEY (session_id, idx)
+                );
+                """
+            )
+            conn.execute(
+                """
                 CREATE TABLE IF NOT EXISTS transcripts (
                   id TEXT PRIMARY KEY,
                   session_id TEXT NOT NULL,
