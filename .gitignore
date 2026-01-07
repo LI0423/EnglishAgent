@@ -1,2 +1,6 @@
 # 环境变量文件
 .env
+venv/
+.DS_Store
+*/*.DS_Store
+.idea/
