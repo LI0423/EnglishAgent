@@ -5,16 +5,13 @@ import uuid
 from typing import Optional, Dict, Any
 from datetime import datetime, timedelta
 from jose import JWTError, jwt
-from passlib.context import CryptContext
+import bcrypt
 from backend.db import create_user, get_user_by_phone
 
 
 # JWT configuration
 SECRET_KEY = os.environ.get("JWT_SECRET", "dev-secret-change-me")
 ALGORITHM = "HS256"
-
-# Password hashing context
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 
 def create_access_token(sub: str, expires_in: int = 3600, extra: Optional[Dict] = None) -> str:
@@ -37,12 +34,20 @@ def decode_token(token: str) -> Optional[Dict]:
 
 def hash_password(password: str) -> str:
     """哈希密码"""
-    return pwd_context.hash(password)
+    # bcrypt要求密码不能超过72字节，需要截断
+    password = password[:72]
+    # 直接使用bcrypt库
+    salt = bcrypt.gensalt()
+    hashed = bcrypt.hashpw(password.encode('utf-8'), salt)
+    return hashed.decode('utf-8')
 
 
 def verify_password(password: str, hashed: str) -> bool:
     """验证密码"""
-    return pwd_context.verify(password, hashed)
+    # bcrypt要求密码不能超过72字节，需要截断
+    password = password[:72]
+    # 直接使用bcrypt库
+    return bcrypt.checkpw(password.encode('utf-8'), hashed.encode('utf-8'))
 
 
 def validate_phone(phone: str) -> bool:
