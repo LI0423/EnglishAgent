@@ -1,11 +1,12 @@
 import json
 import re
 from typing import Any, Dict, List, Optional
+
+from agent_core.agents.issue_analysis_agent import IssueAnalysisAgent
 from .base_agent import BaseAgent
 from langchain_core.messages import HumanMessage, AIMessage
 
 from agent_core.history_store import RedisHistoryStore, RedisSummaryStore
-from agent_core.issue_analysis_agent import issue_analysis_agent
 
 class RouterDecision:
     def __init__(self, agent_key: str, reason: str, confidence: float=1.0):
@@ -31,6 +32,7 @@ class CommonAgent(BaseAgent):
         self.fallback_agent = "common_agent"
         self.history_store = RedisHistoryStore()
         self.summary_store = RedisSummaryStore()
+        self.issue_analysis_agent = IssueAnalysisAgent()
         self.routing_keywords: Dict[str, List[str]] = {
             "listening_agent": ["听力", "listening", "听力题", "听力练习", "听写"],
             "reading_agent": ["阅读", "reading", "文章理解", "长篇理解"],
@@ -174,7 +176,7 @@ class CommonAgent(BaseAgent):
         """使用IssueAnalysisAgent增强路由能力"""
         try:
             # 尝试使用IssueAnalysisAgent进行智能路由
-            analysis_result = issue_analysis_agent.analyze_and_route(query)
+            analysis_result = self.issue_analysis_agent.analyze_and_route(query)
             
             # 如果IssueAnalysisAgent成功识别意图且有对应的处理器
             if not analysis_result.get("clarify") and analysis_result.get("handler"):

@@ -1,9 +1,8 @@
 import os
-import time
 import re
 import uuid
 from typing import Optional, Dict, Any
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from jose import JWTError, jwt
 import bcrypt
 from backend.db import create_user, get_user_by_phone
@@ -16,7 +15,7 @@ ALGORITHM = "HS256"
 
 def create_access_token(sub: str, expires_in: int = 3600, extra: Optional[Dict] = None) -> str:
     """创建访问令牌"""
-    to_encode = {"sub": sub, "iat": datetime.utcnow(), "exp": datetime.utcnow() + timedelta(seconds=expires_in)}
+    to_encode = {"sub": sub, "iat": datetime.now(timezone.utc), "exp": datetime.now(timezone.utc) + timedelta(seconds=expires_in)}
     if extra:
         to_encode.update(extra)
     encoded_jwt = jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)

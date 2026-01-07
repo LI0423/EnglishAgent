@@ -253,8 +253,3 @@ class IssueAnalysisAgent:
         except Exception as e:
             logger.error(f"深度搜索失败: {e}")
             return {"error": f"Deep search failed: {e}"}
-
-
-# 实例
-issue_analysis_agent = IssueAnalysisAgent()
-

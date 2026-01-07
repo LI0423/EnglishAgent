@@ -5,3 +5,4 @@ from .reading_agent import ReadingAgent
 from .speaking.speaking_agent import SpeakingAgent
 from .translation_agent import TranslationAgent
 from .writing.writing_agent import WritingAgent
+from .issue_analysis_agent import IssueAnalysisAgent
