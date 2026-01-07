@@ -20,25 +20,48 @@ VOCABULARY_DB_PATH = "ielts_vocabulary.db"
 
 def get_random_vocabulary(limit=100):
     """从雅思核心词汇中随机获取指定数量的单词"""
-    conn = sqlite3.connect(VOCABULARY_DB_PATH)
-    conn.row_factory = sqlite3.Row
+    from utils.milvus_client import MilvusDBClient
+    
     try:
-        # 先获取所有词汇ID
-        cur = conn.execute("SELECT id FROM vocabulary")
-        all_ids = [row['id'] for row in cur.fetchall()]
+        # 初始化Milvus客户端
+        milvus_client = MilvusDBClient(collection_name="vocabulary", db_path="./ielts_vocabulary.db")
         
-        if not all_ids:
+        # 查询所有词汇
+        # 注意：Milvus的查询语法与SQL不同，这里我们使用简单的查询
+        # 由于Milvus主要是向量数据库，我们使用标量查询来获取词汇
+        all_vocabulary = milvus_client.client.query(
+            collection_name="vocabulary",
+            output_fields=["word", "content", "part_of_speech"]
+        )
+        
+        if not all_vocabulary:
             logger.warning("No vocabulary found in database")
             return []
         
-        # 随机选择指定数量的ID
-        selected_ids = random.sample(all_ids, min(limit, len(all_ids)))
+        # 随机选择指定数量的词汇
+        selected_vocabulary = random.sample(all_vocabulary, min(limit, len(all_vocabulary)))
+        logger.info(f"Selected {len(selected_vocabulary)} vocabulary items")
         
-        # 由于数据库中的data字段是二进制格式，无法直接解析
-        # 这里我们使用模拟数据来测试功能
-        logger.info(f"Selected {len(selected_ids)} vocabulary items")
+        # 处理选中的词汇
+        vocabulary_list = []
+        for vocab in selected_vocabulary:
+            try:
+                word_info = {
+                    'word': vocab.get('word', ''),
+                    'definition': vocab.get('content', ''),
+                    'examples': [],  # Milvus数据库中可能没有存储例句
+                    'pronunciation': '',  # Milvus数据库中可能没有存储发音
+                    'part_of_speech': vocab.get('part_of_speech', '')
+                }
+                vocabulary_list.append(word_info)
+            except Exception as e:
+                logger.error(f"Error processing vocabulary: {e}")
+                continue
         
-        # 生成模拟词汇数据
+        return vocabulary_list
+    except Exception as e:
+        logger.error(f"Error getting random vocabulary: {e}")
+        # 出错时返回模拟数据
         vocabulary_list = []
         for i in range(min(limit, 100)):
             word_info = {
@@ -49,10 +72,7 @@ def get_random_vocabulary(limit=100):
                 'part_of_speech': "noun"
             }
             vocabulary_list.append(word_info)
-        
         return vocabulary_list
-    finally:
-        conn.close()
 
 
 def send_email(to_email, subject, content):
