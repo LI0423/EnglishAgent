@@ -1,7 +1,22 @@
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
+import time
+import uuid
 from ..deps import get_current_user
+from ..db import (
+    create_learning_plan,
+    get_learning_plan,
+    list_user_plans,
+    update_plan_status,
+    create_daily_task,
+    get_daily_task,
+    get_daily_tasks_by_plan,
+    get_daily_task_by_date,
+    update_task_completion,
+    update_task_progress,
+    get_plan_progress
+)
 
 
 router = APIRouter()
@@ -30,6 +45,70 @@ class PlanRequest(BaseModel):
     weaknesses: List[str] = []  # List of user's weaknesses
     target_score: float = 7.0  # User's target score
     daily_time_available: str = "1-2 hours"  # Daily time user can dedicate
+
+
+class LearningPlanCreate(BaseModel):
+    target_band: float
+    daily_minutes: int
+    focus_modules: List[str]
+    duration_weeks: int = 7
+
+
+class LearningPlan(BaseModel):
+    id: str
+    user_id: str
+    target_band: float
+    start_date: int
+    end_date: int
+    daily_minutes: int
+    focus_modules: List[str]
+    status: str
+    created_at: int
+
+
+class TaskItem(BaseModel):
+    id: str
+    title: str
+    description: str
+    time_required: int
+    completed: bool = False
+    progress: int = 0
+    time_spent: int = 0
+
+
+class DailyTaskCreate(BaseModel):
+    date: int
+    tasks: List[TaskItem]
+
+
+class DailyTask(BaseModel):
+    id: str
+    plan_id: str
+    date: int
+    tasks: List[TaskItem]
+    completed: bool
+    created_at: int
+    updated_at: int
+
+
+class TaskProgressUpdate(BaseModel):
+    task_id: str
+    completed: bool = False
+    progress: int = 0
+    time_spent: int = 0
+
+
+class PlanProgress(BaseModel):
+    total_tasks: int
+    completed_tasks: int
+    completion_rate: float
+    tasks: List[DailyTask]
+
+
+class PlanCreateResponse(BaseModel):
+    plan_id: str
+    plan: LearningPlan
+    message: str
 
 
 
@@ -167,5 +246,342 @@ async def plan_7d(req: PlanRequest, current_user: dict = Depends(get_current_use
     summary = f"7-day personalized IELTS study plan focusing on {', '.join(weaknesses[:3])}" + (f" and {len(weaknesses) - 3} more" if len(weaknesses) > 3 else "") + f" with a target score of {target_score}."
     
     return PlanResponse(plan=plan, summary=summary, total_hours=total_hours_str)
+
+
+@router.post("/create", response_model=PlanCreateResponse)
+async def create_plan(
+    plan_data: LearningPlanCreate,
+    current_user: dict = Depends(get_current_user)
+):
+    """创建个性化学习计划"""
+    user_id = current_user.get("id")
+    if not user_id:
+        raise HTTPException(status_code=400, detail="User ID not found")
+    
+    # 生成计划ID
+    plan_id = str(uuid.uuid4())
+    
+    # 计算开始和结束日期
+    start_date = int(time.time())
+    end_date = start_date + (plan_data.duration_weeks * 7 * 24 * 3600)
+    
+    # 创建学习计划
+    plan_info = {
+        "target_band": plan_data.target_band,
+        "start_date": start_date,
+        "end_date": end_date,
+        "daily_minutes": plan_data.daily_minutes,
+        "focus_modules": plan_data.focus_modules,
+        "status": "active"
+    }
+    
+    create_learning_plan(plan_id, user_id, plan_info)
+    
+    # 获取创建的计划
+    created_plan = get_learning_plan(plan_id)
+    if not created_plan:
+        raise HTTPException(status_code=500, detail="Failed to create plan")
+    
+    # 转换为响应格式
+    learning_plan = LearningPlan(
+        id=created_plan["id"],
+        user_id=created_plan["user_id"],
+        target_band=created_plan["target_band"],
+        start_date=created_plan["start_date"],
+        end_date=created_plan["end_date"],
+        daily_minutes=created_plan["daily_minutes"],
+        focus_modules=created_plan["focus_modules"],
+        status=created_plan["status"],
+        created_at=created_plan["created_at"]
+    )
+    
+    return PlanCreateResponse(
+        plan_id=plan_id,
+        plan=learning_plan,
+        message="Learning plan created successfully"
+    )
+
+
+@router.get("/{plan_id}", response_model=LearningPlan)
+async def get_plan(
+    plan_id: str,
+    current_user: dict = Depends(get_current_user)
+):
+    """获取学习计划详情"""
+    user_id = current_user.get("id")
+    if not user_id:
+        raise HTTPException(status_code=400, detail="User ID not found")
+    
+    plan = get_learning_plan(plan_id)
+    if not plan:
+        raise HTTPException(status_code=404, detail="Plan not found")
+    
+    # 验证计划属于当前用户
+    if plan["user_id"] != user_id:
+        raise HTTPException(status_code=403, detail="Access denied")
+    
+    return LearningPlan(
+        id=plan["id"],
+        user_id=plan["user_id"],
+        target_band=plan["target_band"],
+        start_date=plan["start_date"],
+        end_date=plan["end_date"],
+        daily_minutes=plan["daily_minutes"],
+        focus_modules=plan["focus_modules"],
+        status=plan["status"],
+        created_at=plan["created_at"]
+    )
+
+
+@router.get("/", response_model=List[LearningPlan])
+async def get_user_plans(
+    current_user: dict = Depends(get_current_user)
+):
+    """获取用户的学习计划列表"""
+    user_id = current_user.get("id")
+    if not user_id:
+        raise HTTPException(status_code=400, detail="User ID not found")
+    
+    plans = list_user_plans(user_id)
+    return [
+        LearningPlan(
+            id=plan["id"],
+            user_id=plan["user_id"],
+            target_band=plan["target_band"],
+            start_date=plan["start_date"],
+            end_date=plan["end_date"],
+            daily_minutes=plan["daily_minutes"],
+            focus_modules=plan["focus_modules"],
+            status=plan["status"],
+            created_at=plan["created_at"]
+        )
+        for plan in plans
+    ]
+
+
+@router.put("/{plan_id}/status")
+async def update_status(
+    plan_id: str,
+    status: str,
+    current_user: dict = Depends(get_current_user)
+):
+    """更新学习计划状态"""
+    user_id = current_user.get("id")
+    if not user_id:
+        raise HTTPException(status_code=400, detail="User ID not found")
+    
+    # 验证计划存在且属于当前用户
+    plan = get_learning_plan(plan_id)
+    if not plan:
+        raise HTTPException(status_code=404, detail="Plan not found")
+    if plan["user_id"] != user_id:
+        raise HTTPException(status_code=403, detail="Access denied")
+    
+    update_plan_status(plan_id, status)
+    return {"message": "Plan status updated successfully", "status": status}
+
+
+@router.post("/{plan_id}/tasks", response_model=DailyTask)
+async def create_task(
+    plan_id: str,
+    task_data: DailyTaskCreate,
+    current_user: dict = Depends(get_current_user)
+):
+    """创建每日任务"""
+    user_id = current_user.get("id")
+    if not user_id:
+        raise HTTPException(status_code=400, detail="User ID not found")
+    
+    # 验证计划存在且属于当前用户
+    plan = get_learning_plan(plan_id)
+    if not plan:
+        raise HTTPException(status_code=404, detail="Plan not found")
+    if plan["user_id"] != user_id:
+        raise HTTPException(status_code=403, detail="Access denied")
+    
+    # 检查是否已存在该日期的任务
+    existing_task = get_daily_task_by_date(plan_id, task_data.date)
+    if existing_task:
+        raise HTTPException(status_code=400, detail="Task for this date already exists")
+    
+    # 生成任务ID
+    task_id = str(uuid.uuid4())
+    
+    # 转换任务数据
+    tasks = [task.dict() for task in task_data.tasks]
+    
+    create_daily_task(task_id, plan_id, task_data.date, tasks)
+    
+    # 获取创建的任务
+    created_task = get_daily_task(task_id)
+    if not created_task:
+        raise HTTPException(status_code=500, detail="Failed to create task")
+    
+    # 转换为响应格式
+    daily_task = DailyTask(
+        id=created_task["id"],
+        plan_id=created_task["plan_id"],
+        date=created_task["date"],
+        tasks=[TaskItem(**task) for task in created_task["tasks"]],
+        completed=bool(created_task["completed"]),
+        created_at=created_task["created_at"],
+        updated_at=created_task["updated_at"]
+    )
+    
+    return daily_task
+
+
+@router.get("/{plan_id}/tasks", response_model=List[DailyTask])
+async def get_plan_tasks(
+    plan_id: str,
+    current_user: dict = Depends(get_current_user)
+):
+    """获取计划的所有每日任务"""
+    user_id = current_user.get("id")
+    if not user_id:
+        raise HTTPException(status_code=400, detail="User ID not found")
+    
+    # 验证计划存在且属于当前用户
+    plan = get_learning_plan(plan_id)
+    if not plan:
+        raise HTTPException(status_code=404, detail="Plan not found")
+    if plan["user_id"] != user_id:
+        raise HTTPException(status_code=403, detail="Access denied")
+    
+    tasks = get_daily_tasks_by_plan(plan_id)
+    return [
+        DailyTask(
+            id=task["id"],
+            plan_id=task["plan_id"],
+            date=task["date"],
+            tasks=[TaskItem(**t) for t in task["tasks"]],
+            completed=bool(task["completed"]),
+            created_at=task["created_at"],
+            updated_at=task["updated_at"]
+        )
+        for task in tasks
+    ]
+
+
+@router.get("/{plan_id}/tasks/{date}", response_model=DailyTask)
+async def get_task_by_date(
+    plan_id: str,
+    date: int,
+    current_user: dict = Depends(get_current_user)
+):
+    """获取指定日期的每日任务"""
+    user_id = current_user.get("id")
+    if not user_id:
+        raise HTTPException(status_code=400, detail="User ID not found")
+    
+    # 验证计划存在且属于当前用户
+    plan = get_learning_plan(plan_id)
+    if not plan:
+        raise HTTPException(status_code=404, detail="Plan not found")
+    if plan["user_id"] != user_id:
+        raise HTTPException(status_code=403, detail="Access denied")
+    
+    task = get_daily_task_by_date(plan_id, date)
+    if not task:
+        raise HTTPException(status_code=404, detail="Task not found")
+    
+    return DailyTask(
+        id=task["id"],
+        plan_id=task["plan_id"],
+        date=task["date"],
+        tasks=[TaskItem(**t) for t in task["tasks"]],
+        completed=bool(task["completed"]),
+        created_at=task["created_at"],
+        updated_at=task["updated_at"]
+    )
+
+
+@router.put("/tasks/{task_id}/complete")
+async def complete_task(
+    task_id: str,
+    completed: bool,
+    current_user: dict = Depends(get_current_user)
+):
+    """更新任务完成状态"""
+    user_id = current_user.get("id")
+    if not user_id:
+        raise HTTPException(status_code=400, detail="User ID not found")
+    
+    # 验证任务存在且属于当前用户
+    task = get_daily_task(task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="Task not found")
+    
+    plan = get_learning_plan(task["plan_id"])
+    if not plan or plan["user_id"] != user_id:
+        raise HTTPException(status_code=403, detail="Access denied")
+    
+    update_task_completion(task_id, completed)
+    return {"message": "Task completion status updated successfully", "completed": completed}
+
+
+@router.put("/tasks/{task_id}/progress")
+async def update_progress(
+    task_id: str,
+    progress: TaskProgressUpdate,
+    current_user: dict = Depends(get_current_user)
+):
+    """更新任务进度"""
+    user_id = current_user.get("id")
+    if not user_id:
+        raise HTTPException(status_code=400, detail="User ID not found")
+    
+    # 验证任务存在且属于当前用户
+    task = get_daily_task(task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="Task not found")
+    
+    plan = get_learning_plan(task["plan_id"])
+    if not plan or plan["user_id"] != user_id:
+        raise HTTPException(status_code=403, detail="Access denied")
+    
+    update_task_progress(task_id, progress.dict())
+    return {"message": "Task progress updated successfully"}
+
+
+@router.get("/{plan_id}/progress", response_model=PlanProgress)
+async def get_progress(
+    plan_id: str,
+    current_user: dict = Depends(get_current_user)
+):
+    """获取计划执行进度"""
+    user_id = current_user.get("id")
+    if not user_id:
+        raise HTTPException(status_code=400, detail="User ID not found")
+    
+    # 验证计划存在且属于当前用户
+    plan = get_learning_plan(plan_id)
+    if not plan:
+        raise HTTPException(status_code=404, detail="Plan not found")
+    if plan["user_id"] != user_id:
+        raise HTTPException(status_code=403, detail="Access denied")
+    
+    progress = get_plan_progress(plan_id)
+    
+    # 转换任务格式
+    daily_tasks = [
+        DailyTask(
+            id=task["id"],
+            plan_id=task["plan_id"],
+            date=task["date"],
+            tasks=[TaskItem(**t) for t in task["tasks"]],
+            completed=bool(task["completed"]),
+            created_at=task["created_at"],
+            updated_at=task["updated_at"]
+        )
+        for task in progress["tasks"]
+    ]
+    
+    return PlanProgress(
+        total_tasks=progress["total_tasks"],
+        completed_tasks=progress["completed_tasks"],
+        completion_rate=progress["completion_rate"],
+        tasks=daily_tasks
+    )
 
 

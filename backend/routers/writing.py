@@ -2,7 +2,9 @@ from fastapi import APIRouter, HTTPException, Depends
 from pydantic import BaseModel, Field
 from typing import List, Dict, Any, Optional, Literal
 import re
+import time
 from ..deps import get_current_user
+from backend.utils.tracking import get_learning_tracker
 
 router = APIRouter()
 
@@ -202,6 +204,36 @@ async def analyze_task1_writing(req: Task1WritingRequest, current_user: dict = D
     common_mistakes = []
     improvement_tips = []
 
+    # 采集学习数据
+    learning_tracker = get_learning_tracker()
+    
+    # 跟踪练习完成
+    exercise_data = {
+        "exercise_id": f"writing_task1_{current_user.id}_{int(time.time())}",
+        "type": "writing_task1",
+        "difficulty": "medium",
+        "completed": True,
+        "correct": False,  # 写作练习没有明确的正确/错误
+        "attempts": 1,
+        "time_spent": 0,  # 后续可添加时间统计
+        "feedback": len(feedback),
+        "score": total_score,
+        "metadata": {
+            "chart_type": req.chart_type,
+            "topic": req.topic,
+            "keywords": req.keywords,
+            "sentence_count": len(sentences)
+        }
+    }
+    learning_tracker.track_exercise(current_user.id, exercise_data)
+    
+    # 跟踪功能使用
+    learning_tracker.track_feature_usage(
+        current_user.id, 
+        "writing_task1_analysis",
+        {"chart_type": req.chart_type, "topic": req.topic}
+    )
+
     return Task1Analysis(
         structure_score=structure_score,
         content_score=content_score,
@@ -216,19 +248,59 @@ async def analyze_task1_writing(req: Task1WritingRequest, current_user: dict = D
 @router.post("/task1/practice")
 async def save_task1_practice(req: Task1WritingRequest, current_user: dict = Depends(get_current_user)):
     """保存Task 1 写作练习"""
+    # 采集学习数据
+    learning_tracker = get_learning_tracker()
+    
+    # 跟踪练习保存
+    exercise_data = {
+        "exercise_id": f"writing_task1_save_{current_user.id}_{int(time.time())}",
+        "type": "writing_task1_save",
+        "difficulty": "medium",
+        "completed": True,
+        "correct": False,
+        "attempts": 1,
+        "time_spent": 0,
+        "feedback": 0,
+        "score": 0,  # 保存时还没有评分
+        "metadata": {
+            "chart_type": req.chart_type,
+            "topic": req.topic,
+            "keywords": req.keywords,
+            "text_length": len(req.text)
+        }
+    }
+    learning_tracker.track_exercise(current_user.id, exercise_data)
+    
+    # 跟踪功能使用
+    learning_tracker.track_feature_usage(
+        current_user.id, 
+        "writing_task1_save",
+        {"chart_type": req.chart_type, "topic": req.topic}
+    )
+    
     # 后续实现数据库存储
     return {
-        "id": 1,  # 模拟ID
+        "id": f"writing_task1_{current_user.id}_{int(time.time())}",
         "message": "练习已保存",
         "data": {
-            "task_id": 1,
-            "created_at": "2025-01-12T10:30:00"
+            "task_id": f"writing_task1_{current_user.id}_{int(time.time())}",
+            "created_at": time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime())
         }
     }
 
 @router.get("/task1/practices")
 async def get_task1_practices(page: int = 1, limit: int = 10, current_user: dict = Depends(get_current_user)):
     """获取Task 1 写作练习历史"""
+    # 采集学习数据
+    learning_tracker = get_learning_tracker()
+    
+    # 跟踪功能使用
+    learning_tracker.track_feature_usage(
+        current_user.id, 
+        "writing_task1_practices",
+        {"page": page, "limit": limit}
+    )
+    
     # 后续实现数据库查询
     return {
         "page": page,
@@ -240,6 +312,16 @@ async def get_task1_practices(page: int = 1, limit: int = 10, current_user: dict
 @router.get("/task1/common-structures")
 async def get_common_task1_structures(chart_type: Optional[str] = None, current_user: dict = Depends(get_current_user)):
     """获取Task 1 常用写作结构"""
+    # 采集学习数据
+    learning_tracker = get_learning_tracker()
+    
+    # 跟踪功能使用
+    learning_tracker.track_feature_usage(
+        current_user.id, 
+        "writing_task1_structures",
+        {"chart_type": chart_type}
+    )
+    
     filtered_structures = task1_structures
     if chart_type:
         # 后续根据图表类型过滤结构
@@ -251,6 +333,16 @@ async def get_common_task1_structures(chart_type: Optional[str] = None, current_
 @router.get("/task1/common-vocabulary")
 async def get_common_task1_vocabulary(category: Optional[str] = None, current_user: dict = Depends(get_current_user)):
     """获取Task 1 常用词汇"""
+    # 采集学习数据
+    learning_tracker = get_learning_tracker()
+    
+    # 跟踪功能使用
+    learning_tracker.track_feature_usage(
+        current_user.id, 
+        "writing_task1_vocabulary",
+        {"category": category}
+    )
+    
     filtered_vocab = task1_vocabulary
     if category and category in task1_vocabulary:
         filtered_vocab = {category: task1_vocabulary[category]}

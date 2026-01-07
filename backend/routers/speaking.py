@@ -2,10 +2,12 @@ from fastapi import APIRouter, HTTPException, Depends
 from pydantic import BaseModel
 from typing import List, Optional
 from uuid import uuid4
+import time
 from ..state import store, Session as Sess, Part as SessPart
 from ..deps import get_current_user
 from ..db import create_session as db_create_session, append_session_transcript, finish_session as db_finish_session, get_session as db_get_session
 from ..db import list_sessions as db_list_sessions
+from backend.utils.tracking import get_learning_tracker
 
 
 router = APIRouter()
@@ -64,6 +66,32 @@ async def create_session(current_user: dict = Depends(get_current_user)):
     ]
     # persist to DB
     db_create_session(session_id, "General", [p.dict() for p in parts])
+    
+    # 采集学习数据
+    learning_tracker = get_learning_tracker()
+    
+    # 跟踪会话创建
+    learning_tracker.track_feature_usage(
+        current_user.id, 
+        "speaking_session_create",
+        {"topic": "General", "part_count": len(parts)}
+    )
+    
+    # 跟踪学习会话开始
+    session_data = {
+        "session_id": session_id,
+        "module": "speaking",
+        "duration": 0,
+        "completed": False,
+        "score": 0,
+        "activities": ["session_started"],
+        "metadata": {
+            "topic": "General",
+            "parts": [p.type for p in parts]
+        }
+    }
+    learning_tracker.track_event(current_user.id, "study_session_started", session_data)
+    
     return CreateSessionResponse(sessionId=session_id, topic="General", parts=parts)
 
 
@@ -76,6 +104,17 @@ class StartPartResponse(BaseModel):
 async def start_part(session_id: str, part_index: int, current_user: dict = Depends(get_current_user)):
     if not db_get_session(session_id):
         raise HTTPException(status_code=404, detail="Session not found")
+    
+    # 采集学习数据
+    learning_tracker = get_learning_tracker()
+    
+    # 跟踪功能使用
+    learning_tracker.track_feature_usage(
+        current_user.id, 
+        "speaking_part_start",
+        {"session_id": session_id, "part_index": part_index}
+    )
+    
     return StartPartResponse(ok=True, partIndex=part_index)
 
 
@@ -95,6 +134,17 @@ async def ingest_audio(session_id: str, chunk: AudioChunk, current_user: dict = 
         raise HTTPException(status_code=404, detail="Session not found")
     if chunk.textPartial:
         append_session_transcript(session_id, chunk.textPartial)
+    
+    # 采集学习数据
+    learning_tracker = get_learning_tracker()
+    
+    # 跟踪音频上传
+    learning_tracker.track_feature_usage(
+        current_user.id, 
+        "speaking_audio_ingest",
+        {"session_id": session_id, "has_text": bool(chunk.textPartial)}
+    )
+    
     return AudioIngestResponse(asrPartial=chunk.textPartial, timestamps=None)
 
 
@@ -108,6 +158,31 @@ async def finish_session(session_id: str, current_user: dict = Depends(get_curre
         raise HTTPException(status_code=404, detail="Session not found")
     transcript_id = str(uuid4())
     db_finish_session(session_id, transcript_id)
+    
+    # 采集学习数据
+    learning_tracker = get_learning_tracker()
+    
+    # 跟踪会话完成
+    session_data = {
+        "session_id": session_id,
+        "module": "speaking",
+        "duration": 0,  # 后续可添加时间统计
+        "completed": True,
+        "score": 0,  # 后续可添加评分
+        "activities": ["session_completed"],
+        "metadata": {
+            "transcript_id": transcript_id
+        }
+    }
+    learning_tracker.track_study_session(current_user.id, session_data)
+    
+    # 跟踪功能使用
+    learning_tracker.track_feature_usage(
+        current_user.id, 
+        "speaking_session_finish",
+        {"session_id": session_id, "transcript_id": transcript_id}
+    )
+    
     return FinishResponse(transcriptId=transcript_id)
 
 

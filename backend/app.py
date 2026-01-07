@@ -1,7 +1,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from .routers import auth, speaking, scoring, report, profile, plan, reading, writing, listening, history
+from .routers import auth, speaking, scoring, report, profile, plan, reading, writing, listening, history, chat, diagnostic, reminder, stats
 from .db import init_db
 
 
@@ -25,6 +25,10 @@ app.include_router(reading.router, prefix="/reading", tags=["reading"])  # 阅�
 app.include_router(writing.router, prefix="/writing", tags=["writing"])  # 写作模块
 app.include_router(listening.router, prefix="/listening", tags=["listening"])  # 听力模块
 app.include_router(history.router, prefix="/history", tags=["history"])  # 学习历史记录
+app.include_router(chat.router, prefix="/chat", tags=["chat"])  # 智能体对话接口
+app.include_router(diagnostic.router, prefix="/diagnostic", tags=["diagnostic"])  # 诊断测评
+app.include_router(reminder.router, prefix="/reminder", tags=["reminder"])  # 提醒管理
+app.include_router(stats.router)  # 学习统计
 
 
 @app.get("/")

@@ -1,11 +1,14 @@
+import os
 import logging
 import threading
 from typing import List
-
+from dotenv import load_dotenv
 from sentence_transformers import CrossEncoder
 from transformers import AutoTokenizer
 
-MODEL_PATH = "/Users/litengjiang/.cache/modelscope/hub/models/Qwen/Qwen3-Reranker-0.6B"
+load_dotenv()
+
+MODEL_PATH = os.getenv('QWEN_RERANKER_MODEL')
 
 # 配置日志
 logging.basicConfig(level=logging.INFO)

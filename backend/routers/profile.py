@@ -1,125 +1,172 @@
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
-from typing import List, Dict, Any
-# from ..db import get_scores, get_transcripts  # 引入数据库查询函数（暂未实现）
+from typing import List, Dict, Any, Optional
+from ..db import get_user_profile, create_user_profile
 from ..deps import get_current_user
 
 
 router = APIRouter()
 
 
-class WeaknessDetail(BaseModel):
-    section: str  # 模块: L/R/W/S
-    category: str  # 类别: fluency, vocabulary, grammar等
-    item: str  # 具体薄弱点
-    score: float  # 对应评分
-    improvement_tip: str  # 提升建议
+class UserProfileBase(BaseModel):
+    target_band: Optional[float] = None
+    current_band_overall: Optional[float] = None
+    current_band_listening: Optional[float] = None
+    current_band_reading: Optional[float] = None
+    current_band_writing: Optional[float] = None
+    current_band_speaking: Optional[float] = None
+    skill_vocabulary: Optional[float] = None
+    skill_grammar: Optional[float] = None
+    skill_pronunciation: Optional[float] = None
+    skill_fluency: Optional[float] = None
+    skill_coherence: Optional[float] = None
+    learning_total_hours: Optional[float] = None
+    learning_sessions_count: Optional[int] = None
+    learning_streak_days: Optional[int] = None
+    learning_avg_daily_minutes: Optional[float] = None
+    weaknesses: Optional[List[str]] = None
+    strong_areas: Optional[List[str]] = None
 
-class DetailedWeakness(BaseModel):
-    main_weaknesses: List[str]  # 主要薄弱环节
-    detailed: List[WeaknessDetail]  # 详细薄弱点分析
-    improvement_plan: List[str]  # 初步提升计划
+class UserProfileCreate(UserProfileBase):
+    pass
 
-class Profile(BaseModel):
-    radar: dict  # 各项能力雷达图
-    history: List[dict]  # 历史成绩记录
-    weaknesses: DetailedWeakness  # 详细薄弱环节分析
-    strengths: List[str]  # 优势领域
+class UserProfile(UserProfileBase):
+    user_id: str
+    created_at: Optional[int] = None
+    updated_at: Optional[int] = None
+
+    class Config:
+        from_attributes = True
 
 
-@router.get("/me", response_model=Profile)
-async def me(current_user: dict = Depends(get_current_user)):
+@router.get("/me", response_model=UserProfile)
+async def get_my_profile(current_user: dict = Depends(get_current_user)):
     """获取用户详细能力画像"""
-    user_id = current_user.get("id") or 1  # 使用模拟数据
+    user_id = current_user.get("id")
+    if not user_id:
+        raise HTTPException(status_code=400, detail="User ID not found")
     
-    # 从数据库获取用户成绩（这里使用模拟数据，后续替换为真实查询）
-    # scores = get_scores(user_id, limit=20)
-    # transcripts = get_transcripts(user_id, limit=10)
+    profile = get_user_profile(user_id)
+    if not profile:
+        # 如果没有用户画像，返回默认值
+        return UserProfile(
+            user_id=user_id,
+            target_band=6.5,
+            current_band_overall=5.0,
+            current_band_listening=5.0,
+            current_band_reading=5.0,
+            current_band_writing=5.0,
+            current_band_speaking=5.0,
+            skill_vocabulary=5.0,
+            skill_grammar=5.0,
+            skill_pronunciation=5.0,
+            skill_fluency=5.0,
+            skill_coherence=5.0,
+            learning_total_hours=0.0,
+            learning_sessions_count=0,
+            learning_streak_days=0,
+            learning_avg_daily_minutes=0.0,
+            weaknesses=[],
+            strong_areas=[]
+        )
     
-    # 模拟综合成绩数据
-    radar_scores = {"L": 6.5, "R": 6.0, "W": 6.0, "S": 6.5}
+    # 转换数据库格式到响应格式
+    return UserProfile(
+        user_id=profile['user_id'],
+        target_band=profile['target_band'],
+        current_band_overall=profile['current_band_overall'],
+        current_band_listening=profile['current_band_listening'],
+        current_band_reading=profile['current_band_reading'],
+        current_band_writing=profile['current_band_writing'],
+        current_band_speaking=profile['current_band_speaking'],
+        skill_vocabulary=profile['skill_vocabulary'],
+        skill_grammar=profile['skill_grammar'],
+        skill_pronunciation=profile['skill_pronunciation'],
+        skill_fluency=profile['skill_fluency'],
+        skill_coherence=profile['skill_coherence'],
+        learning_total_hours=profile['learning_total_hours'],
+        learning_sessions_count=profile['learning_sessions_count'],
+        learning_streak_days=profile['learning_streak_days'],
+        learning_avg_daily_minutes=profile['learning_avg_daily_minutes'],
+        weaknesses=profile['weaknesses'],
+        strong_areas=profile['strong_areas'],
+        created_at=profile['created_at'],
+        updated_at=profile['updated_at']
+    )
+
+
+@router.put("/me", response_model=UserProfile)
+async def update_my_profile(
+    profile_data: UserProfileCreate,
+    current_user: dict = Depends(get_current_user)
+):
+    """更新用户能力画像"""
+    user_id = current_user.get("id")
+    if not user_id:
+        raise HTTPException(status_code=400, detail="User ID not found")
     
-    # 详细薄弱环节分析
-    weaknesses = []
-    detailed_weaknesses = []
-    strengths = []
-    
-    # 评分标准与薄弱点映射
-    criteria_mapping = {
-        "S": {
-            "FC": {"name": "Fluency & Coherence", "weak": ["hesitations", "disorganization", "lack of linking words"], "tip": "Practice speaking with a timer; use linking words like 'however', 'furthermore'"},
-            "LR": {"name": "Lexical Resource", "weak": ["limited vocabulary", "inappropriate word choices"], "tip": "Learn topic-specific vocabulary; practice collocations"},
-            "GR": {"name": "Grammar", "weak": ["tense errors", "subject-verb agreement"], "tip": "Review grammar rules; practice complex sentences"},
-            "PR": {"name": "Pronunciation", "weak": ["mispronunciation", "intonation"], "tip": "Listen to native speakers; record and compare"}
-        },
-        "W": {
-            "TR": {"name": "Task Response", "weak": ["insufficient data analysis", "off-topic"], "tip": "Focus on answering all parts of the task; include specific details"},
-            "CC": {"name": "Coherence", "weak": ["poor organization", "lack of logical flow"], "tip": "Use paragraph structure; plan before writing"},
-            "LR": {"name": "Vocabulary", "weak": ["simple words", "repetition"], "tip": "Expand your vocabulary with synonyms"},
-            "GR": {"name": "Grammar", "weak": ["punctuation errors", "sentence fragments"], "tip": "Proofread carefully; use grammar checking tools"}
-        },
-        "R": {
-            "TFNG": {"name": "True/False/Not Given", "weak": ["inferencing", "detail matching"], "tip": "Practice locating keywords; learn to distinguish fact from opinion"},
-            "MC": {"name": "Multiple Choice", "weak": ["distractors", "main idea"], "tip": "Read questions first; eliminate wrong answers"},
-            "MH": {"name": "Matching Headings", "weak": ["topic sentences", "skimming"], "tip": "Identify paragraph topics; practice skimming"}
-        },
-        "L": {
-            "MC": {"name": "Multiple Choice", "weak": ["distractors", "note-taking"], "tip": "Practice note-taking skills; focus on key words"},
-            "FC": {"name": "Form Completion", "weak": ["spelling", "number recognition"], "tip": "Practice spelling common words; listen carefully for numbers"},
-            "MA": {"name": "Matching", "weak": ["speaker identification", "synonyms"], "tip": "Identify speaker voices; learn synonyms"}
-        }
+    # 构建更新数据
+    update_data = {
+        "target_band": profile_data.target_band,
+        "current_band_overall": profile_data.current_band_overall,
+        "current_band_listening": profile_data.current_band_listening,
+        "current_band_reading": profile_data.current_band_reading,
+        "current_band_writing": profile_data.current_band_writing,
+        "current_band_speaking": profile_data.current_band_speaking,
+        "skill_vocabulary": profile_data.skill_vocabulary,
+        "skill_grammar": profile_data.skill_grammar,
+        "skill_pronunciation": profile_data.skill_pronunciation,
+        "skill_fluency": profile_data.skill_fluency,
+        "skill_coherence": profile_data.skill_coherence,
+        "learning_total_hours": profile_data.learning_total_hours,
+        "learning_sessions_count": profile_data.learning_sessions_count,
+        "learning_streak_days": profile_data.learning_streak_days,
+        "learning_avg_daily_minutes": profile_data.learning_avg_daily_minutes,
+        "weaknesses": profile_data.weaknesses,
+        "strong_areas": profile_data.strong_areas
     }
     
-    # 模拟详细薄弱点分析
-    detailed_weaknesses = [
-        WeaknessDetail(
-            section="S",
-            category="FC",
-            item="lack of linking words",
-            score=6.0,
-            improvement_tip="Practice using linking words like 'however', 'furthermore' to connect ideas"
-        ),
-        WeaknessDetail(
-            section="W",
-            category="TR",
-            item="insufficient data analysis",
-            score=5.5,
-            improvement_tip="Include specific data points and explanations in your response"
-        ),
-        WeaknessDetail(
-            section="R",
-            category="TFNG",
-            item="inferencing",
-            score=6.0,
-            improvement_tip="Learn to identify implicit information in the text"
-        )
-    ]
+    # 过滤掉None值
+    update_data = {k: v for k, v in update_data.items() if v is not None}
     
-    # 提取主要薄弱点
-    main_weaknesses = list(set(dw.item for dw in detailed_weaknesses))
+    # 如果没有提供任何数据，获取现有数据
+    existing_profile = get_user_profile(user_id)
+    if existing_profile:
+        # 合并现有数据和更新数据
+        for key, value in existing_profile.items():
+            if key not in update_data and key not in ['user_id', 'created_at', 'updated_at']:
+                update_data[key] = value
     
-    # 识别优势领域
-    for section, score in radar_scores.items():
-        if score >= 7.0:
-            strengths.append(f"{section} section: strong overall performance")
+    # 创建或更新用户画像
+    create_user_profile(user_id, update_data)
     
-    # 生成提升计划
-    improvement_plan = []
-    for dw in detailed_weaknesses[:3]:  # 只取前3个重点
-        improvement_plan.append(f"For {dw.section} {dw.category}, focus on: {dw.improvement_tip}")
+    # 返回更新后的画像
+    updated_profile = get_user_profile(user_id)
+    if not updated_profile:
+        raise HTTPException(status_code=500, detail="Failed to update profile")
     
-    # 历史记录
-    history = [{"date": "2025-11-01", "S": 6.0}, {"date": "2025-11-03", "S": 6.5}]
-    
-    return Profile(
-        radar=radar_scores,
-        history=history,
-        weaknesses=DetailedWeakness(
-            main_weaknesses=main_weaknesses,
-            detailed=detailed_weaknesses,
-            improvement_plan=improvement_plan
-        ),
-        strengths=strengths
+    return UserProfile(
+        user_id=updated_profile['user_id'],
+        target_band=updated_profile['target_band'],
+        current_band_overall=updated_profile['current_band_overall'],
+        current_band_listening=updated_profile['current_band_listening'],
+        current_band_reading=updated_profile['current_band_reading'],
+        current_band_writing=updated_profile['current_band_writing'],
+        current_band_speaking=updated_profile['current_band_speaking'],
+        skill_vocabulary=updated_profile['skill_vocabulary'],
+        skill_grammar=updated_profile['skill_grammar'],
+        skill_pronunciation=updated_profile['skill_pronunciation'],
+        skill_fluency=updated_profile['skill_fluency'],
+        skill_coherence=updated_profile['skill_coherence'],
+        learning_total_hours=updated_profile['learning_total_hours'],
+        learning_sessions_count=updated_profile['learning_sessions_count'],
+        learning_streak_days=updated_profile['learning_streak_days'],
+        learning_avg_daily_minutes=updated_profile['learning_avg_daily_minutes'],
+        weaknesses=updated_profile['weaknesses'],
+        strong_areas=updated_profile['strong_areas'],
+        created_at=updated_profile['created_at'],
+        updated_at=updated_profile['updated_at']
     )
+
 
 
