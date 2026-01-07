@@ -27,7 +27,7 @@ async def get_stats_overview(
     """
     try:
         learning_tracker = get_learning_tracker()
-        stats = learning_tracker.get_event_stats(current_user.id, time_range)
+        stats = learning_tracker.get_event_stats(current_user['id'], time_range)
         return stats
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"获取统计数据失败: {str(e)}")
@@ -50,7 +50,7 @@ async def get_user_activity_list(
         List[Dict]: 用户活动列表
     """
     try:
-        activities = get_user_activities(current_user.id, limit, offset)
+        activities = get_user_activities(current_user['id'], limit, offset)
         return {"activities": activities, "total": len(activities)}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"获取活动数据失败: {str(e)}")
@@ -73,7 +73,7 @@ async def get_user_event_list(
         List[Dict]: 用户事件列表
     """
     try:
-        events = get_user_events(current_user.id, limit, offset)
+        events = get_user_events(current_user['id'], limit, offset)
         return {"events": events, "total": len(events)}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"获取事件数据失败: {str(e)}")
@@ -95,11 +95,11 @@ async def get_detailed_stats(
     """
     try:
         learning_tracker = get_learning_tracker()
-        overview = learning_tracker.get_event_stats(current_user.id, time_range)
+        overview = learning_tracker.get_event_stats(current_user['id'], time_range)
         
         # 获取最近的活动和事件
-        recent_activities = get_user_activities(current_user.id, 10, 0)
-        recent_events = get_user_events(current_user.id, 20, 0)
+        recent_activities = get_user_activities(current_user['id'], 10, 0)
+        recent_events = get_user_events(current_user['id'], 20, 0)
         
         # 构建详细统计
         detailed_stats = {

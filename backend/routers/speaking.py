@@ -72,7 +72,7 @@ async def create_session(current_user: dict = Depends(get_current_user)):
     
     # 跟踪会话创建
     learning_tracker.track_feature_usage(
-        current_user.id, 
+        current_user['id'], 
         "speaking_session_create",
         {"topic": "General", "part_count": len(parts)}
     )
@@ -90,7 +90,7 @@ async def create_session(current_user: dict = Depends(get_current_user)):
             "parts": [p.type for p in parts]
         }
     }
-    learning_tracker.track_event(current_user.id, "study_session_started", session_data)
+    learning_tracker.track_event(current_user['id'], "study_session_started", session_data)
     
     return CreateSessionResponse(sessionId=session_id, topic="General", parts=parts)
 
@@ -110,7 +110,7 @@ async def start_part(session_id: str, part_index: int, current_user: dict = Depe
     
     # 跟踪功能使用
     learning_tracker.track_feature_usage(
-        current_user.id, 
+        current_user['id'], 
         "speaking_part_start",
         {"session_id": session_id, "part_index": part_index}
     )
@@ -140,7 +140,7 @@ async def ingest_audio(session_id: str, chunk: AudioChunk, current_user: dict = 
     
     # 跟踪音频上传
     learning_tracker.track_feature_usage(
-        current_user.id, 
+        current_user['id'], 
         "speaking_audio_ingest",
         {"session_id": session_id, "has_text": bool(chunk.textPartial)}
     )
@@ -174,11 +174,11 @@ async def finish_session(session_id: str, current_user: dict = Depends(get_curre
             "transcript_id": transcript_id
         }
     }
-    learning_tracker.track_study_session(current_user.id, session_data)
+    learning_tracker.track_study_session(current_user['id'], session_data)
     
     # 跟踪功能使用
     learning_tracker.track_feature_usage(
-        current_user.id, 
+        current_user['id'], 
         "speaking_session_finish",
         {"session_id": session_id, "transcript_id": transcript_id}
     )

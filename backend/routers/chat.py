@@ -1,7 +1,8 @@
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Depends
 from pydantic import BaseModel
 
 from agent_core.agent import ielts_agent
+from ..deps import get_current_user
 
 router = APIRouter()
 
@@ -18,7 +19,7 @@ class ChatResponse(BaseModel):
 
 
 @router.post("/", response_model=ChatResponse)
-async def chat(request: ChatRequest):
+async def chat(request: ChatRequest, current_user = Depends(get_current_user)):
     """与智能体对话接口
     
     用户发送问题，由CommonAgent根据问题选择合适的专用智能体处理
@@ -26,6 +27,7 @@ async def chat(request: ChatRequest):
     
     Args:
         request: 包含查询内容和会话ID的请求
+        current_user: 当前登录用户
         
     Returns:
         包含处理智能体、响应内容和路由信息的响应
@@ -45,13 +47,14 @@ async def chat(request: ChatRequest):
 
 
 @router.post("/translation")
-async def translation_practice(request: dict):
+async def translation_practice(request: dict, current_user = Depends(get_current_user)):
     """翻译练习接口
     
     生成翻译题目或检查翻译
     
     Args:
         request: 包含action、difficulty（生成题目时）或chinese_sentence、user_translation（检查翻译时）的请求
+        current_user: 当前登录用户
         
     Returns:
         翻译题目或检查结果

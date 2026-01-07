@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Header, HTTPException
 from pydantic import BaseModel
 from typing import Optional
-from ..auth import create_access_token, hash_password, verify_password, decode_token
+from ..auth import create_access_token, hash_password, verify_password, decode_token, register
 from ..redis_client import save_token, get_user_by_token
 from ..db import get_user_by_username, create_user, get_user_by_id
 
@@ -52,6 +52,24 @@ async def register(req: RegisterRequest):
     token = create_access_token(sub=user_id, expires_in=3600)
     save_token(user_id, token, ttl=3600)
     return LoginResponse(token=token)
+
+
+class PhoneRegisterRequest(BaseModel):
+    phone: str
+    password: str
+
+
+class PhoneRegisterResponse(BaseModel):
+    success: bool
+    message: str
+    data: Optional[dict] = None
+
+
+@router.post("/register/phone", response_model=PhoneRegisterResponse)
+async def phone_register(req: PhoneRegisterRequest):
+    from ..auth import register as phone_register_func
+    result = phone_register_func(req.phone, req.password)
+    return PhoneRegisterResponse(**result)
 
 
 class MeResponse(BaseModel):

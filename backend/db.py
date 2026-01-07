@@ -33,6 +33,7 @@ def init_db():
                   username TEXT UNIQUE NOT NULL,
                   password_hash TEXT NOT NULL,
                   email TEXT,
+                  phone TEXT UNIQUE,
                   created_at INTEGER
                 );
                 """
@@ -287,14 +288,23 @@ def get_user_by_id(user_id: str) -> Optional[sqlite3.Row]:
         conn.close()
 
 
-def create_user(user_id: str, username: str, password_hash: str, email: Optional[str] = None) -> Tuple[bool, Optional[str]]:
+def create_user(user_id: str, username: str, password_hash: str, email: Optional[str] = None, phone: Optional[str] = None) -> Tuple[bool, Optional[str]]:
     conn = get_conn()
     try:
-        conn.execute("INSERT INTO users (id, username, password_hash, email, created_at) VALUES (?, ?, ?, ?, ?)", (user_id, username, password_hash, email, int(time.time())))
+        conn.execute("INSERT INTO users (id, username, password_hash, email, phone, created_at) VALUES (?, ?, ?, ?, ?, ?)", (user_id, username, password_hash, email, phone, int(time.time())))
         conn.commit()
         return True, None
     except sqlite3.IntegrityError as e:
         return False, str(e)
+    finally:
+        conn.close()
+
+
+def get_user_by_phone(phone: str) -> Optional[sqlite3.Row]:
+    conn = get_conn()
+    try:
+        cur = conn.execute("SELECT * FROM users WHERE phone = ?", (phone,))
+        return cur.fetchone()
     finally:
         conn.close()
 

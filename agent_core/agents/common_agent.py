@@ -5,6 +5,7 @@ from .base_agent import BaseAgent
 from langchain_core.messages import HumanMessage, AIMessage
 
 from agent_core.history_store import RedisHistoryStore, RedisSummaryStore
+from agent_core.issue_analysis_agent import issue_analysis_agent
 
 class RouterDecision:
     def __init__(self, agent_key: str, reason: str, confidence: float=1.0):
@@ -170,6 +171,39 @@ class CommonAgent(BaseAgent):
             return None
         
     def _select_agent(self, query: str, session_id: str) -> RouterDecision:
+        """使用IssueAnalysisAgent增强路由能力"""
+        try:
+            # 尝试使用IssueAnalysisAgent进行智能路由
+            analysis_result = issue_analysis_agent.analyze_and_route(query)
+            
+            # 如果IssueAnalysisAgent成功识别意图且有对应的处理器
+            if not analysis_result.get("clarify") and analysis_result.get("handler"):
+                handler_name = analysis_result["handler"]
+                
+                # 将IssueAnalysisAgent的处理器映射到CommonAgent的智能体
+                handler_to_agent = {
+                    "_handle_rag": "vocabulary_agent",
+                    "_handle_speaking": "speaking_agent",
+                    "_handle_writing": "writing_agent",
+                    "_handle_reading": "reading_agent",
+                    "_handle_listening": "listening_agent",
+                    "_handle_planning": "planning_agent",
+                    "_handle_translation": "translation_agent",
+                    "_handle_deep_search": "deep_search_agent"
+                }
+                
+                agent_key = handler_to_agent.get(handler_name, self.fallback_agent)
+                
+                # 确保映射的智能体存在
+                if agent_key in self.agents:
+                    reason = f"IssueAnalysisAgent 路由: {analysis_result.get('intent', {}).get('type', 'general')}"
+                    confidence = float(analysis_result.get('intent', {}).get('confidence', 0.9))
+                    return RouterDecision(agent_key, reason, confidence)
+        except Exception as e:
+            # 如果IssueAnalysisAgent失败，回退到原来的路由方式
+            print(f"IssueAnalysisAgent 路由失败，回退到默认路由: {e}")
+        
+        # 回退到原来的路由方式
         return (
             self._keyword_route(query)
             or self._llm_route(query, session_id)

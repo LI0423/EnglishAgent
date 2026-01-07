@@ -209,7 +209,7 @@ async def analyze_task1_writing(req: Task1WritingRequest, current_user: dict = D
     
     # 跟踪练习完成
     exercise_data = {
-        "exercise_id": f"writing_task1_{current_user.id}_{int(time.time())}",
+        "exercise_id": f"writing_task1_{current_user['id']}_{int(time.time())}",
         "type": "writing_task1",
         "difficulty": "medium",
         "completed": True,
@@ -253,7 +253,7 @@ async def save_task1_practice(req: Task1WritingRequest, current_user: dict = Dep
     
     # 跟踪练习保存
     exercise_data = {
-        "exercise_id": f"writing_task1_save_{current_user.id}_{int(time.time())}",
+        "exercise_id": f"writing_task1_save_{current_user['id']}_{int(time.time())}",
         "type": "writing_task1_save",
         "difficulty": "medium",
         "completed": True,
@@ -280,10 +280,10 @@ async def save_task1_practice(req: Task1WritingRequest, current_user: dict = Dep
     
     # 后续实现数据库存储
     return {
-        "id": f"writing_task1_{current_user.id}_{int(time.time())}",
+        "id": f"writing_task1_{current_user['id']}_{int(time.time())}",
         "message": "练习已保存",
         "data": {
-            "task_id": f"writing_task1_{current_user.id}_{int(time.time())}",
+            "task_id": f"writing_task1_{current_user['id']}_{int(time.time())}",
             "created_at": time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime())
         }
     }

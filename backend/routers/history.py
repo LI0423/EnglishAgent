@@ -3,6 +3,7 @@ from pydantic import BaseModel
 from typing import List, Optional
 from datetime import datetime, timezone
 from ..db import get_conn
+from ..deps import get_current_user
 
 router = APIRouter(prefix="/history", tags=["history"])
 
@@ -17,7 +18,7 @@ class Session(BaseModel):
     accuracy: float
 
 @router.get("/sessions", response_model=List[Session])
-def get_recent_sessions(limit: int = 10):
+def get_recent_sessions(limit: int = 10, current_user: dict = Depends(get_current_user)):
     conn = get_conn()
     try:
         cur = conn.execute("""

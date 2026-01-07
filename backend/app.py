@@ -36,7 +36,7 @@ async def root():
     return {"message": "IELTS-Agent API is running"}
 
 
-@app.on_event("startup")
+@app.lifespan("startup")
 async def on_startup():
     init_db()
 

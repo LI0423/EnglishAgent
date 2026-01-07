@@ -4,7 +4,10 @@ import hmac
 import hashlib
 import base64
 import json
-from typing import Optional, Dict
+import re
+import uuid
+from typing import Optional, Dict, Any
+from backend.db import create_user, get_user_by_phone
 
 
 # Simple JWT (HS256) without external deps
@@ -67,5 +70,78 @@ def verify_password(password: str, hashed: str) -> bool:
         return hash_password(password, salt) == hashed
     except Exception:
         return False
+
+
+def validate_phone(phone: str) -> bool:
+    """验证手机号格式"""
+    # 中国大陆手机号格式验证
+    pattern = r'^1[3-9]\d{9}$'
+    return bool(re.match(pattern, phone))
+
+
+def generate_username(phone: str) -> str:
+    """基于手机号生成用户名"""
+    # 使用手机号后8位作为用户名
+    suffix = phone[-8:]
+    return f"user_{suffix}"
+
+
+def register(phone: str, password: str) -> Dict[str, Any]:
+    """用户注册
+    
+    Args:
+        phone: 手机号
+        password: 密码
+        
+    Returns:
+        Dict: 注册结果
+    """
+    
+    # 验证手机号格式
+    if not validate_phone(phone):
+        return {
+            "success": False,
+            "message": "手机号格式不正确"
+        }
+    
+    # 检查手机号是否已注册
+    if get_user_by_phone(phone):
+        return {
+            "success": False,
+            "message": "手机号已注册"
+        }
+    
+    # 生成用户ID和用户名
+    user_id = str(uuid.uuid4())
+    username = generate_username(phone)
+    
+    # 哈希密码
+    password_hash = hash_password(password)
+    
+    # 创建用户
+    success, error = create_user(user_id, username, password_hash, phone=phone)
+    
+    if not success:
+        return {
+            "success": False,
+            "message": f"注册失败: {error}"
+        }
+    
+    # 生成访问令牌
+    access_token = create_access_token(user_id, extra={
+        "phone": phone,
+        "username": username
+    })
+    
+    return {
+        "success": True,
+        "message": "注册成功",
+        "data": {
+            "user_id": user_id,
+            "username": username,
+            "phone": phone,
+            "access_token": access_token
+        }
+    }
 
 
