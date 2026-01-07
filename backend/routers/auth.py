@@ -3,7 +3,7 @@ from pydantic import BaseModel
 from typing import Optional
 from ..auth import create_access_token, hash_password, verify_password, decode_token, register
 from ..redis_client import save_token, get_user_by_token
-from ..db import get_user_by_username, create_user, get_user_by_id
+from ..db import get_user_by_username, create_user, get_user_by_id, get_user_by_phone
 
 
 router = APIRouter()
@@ -12,7 +12,8 @@ DEMO_BOOTSTRAPPED = False
 
 
 class LoginRequest(BaseModel):
-    username: str
+    username: Optional[str] = None
+    phone: Optional[str] = None
     password: str
 
 
@@ -27,7 +28,15 @@ async def login(req: LoginRequest):
     if not DEMO_BOOTSTRAPPED and not get_user_by_username("demo"):
         create_user("u_demo", "demo", hash_password("demo"))
         DEMO_BOOTSTRAPPED = True
-    row = get_user_by_username(req.username)
+    
+    # 优先使用手机号登录
+    if req.phone:
+        row = get_user_by_phone(req.phone)
+    elif req.username:
+        row = get_user_by_username(req.username)
+    else:
+        raise HTTPException(status_code=400, detail="Either username or phone is required")
+    
     if not row or not verify_password(req.password, row["password_hash"]):
         raise HTTPException(status_code=401, detail="Invalid credentials")
     token = create_access_token(sub=row["id"], expires_in=3600)

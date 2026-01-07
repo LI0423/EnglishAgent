@@ -1,75 +1,48 @@
 import os
 import time
-import hmac
-import hashlib
-import base64
-import json
 import re
 import uuid
 from typing import Optional, Dict, Any
+from datetime import datetime, timedelta
+from jose import JWTError, jwt
+from passlib.context import CryptContext
 from backend.db import create_user, get_user_by_phone
 
 
-# Simple JWT (HS256) without external deps
+# JWT configuration
 SECRET_KEY = os.environ.get("JWT_SECRET", "dev-secret-change-me")
 ALGORITHM = "HS256"
 
-
-def _b64url(data: bytes) -> str:
-    return base64.urlsafe_b64encode(data).rstrip(b"=").decode()
-
-
-def _b64url_decode(data: str) -> bytes:
-    padding = '=' * (-len(data) % 4)
-    return base64.urlsafe_b64decode(data + padding)
+# Password hashing context
+pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 
 def create_access_token(sub: str, expires_in: int = 3600, extra: Optional[Dict] = None) -> str:
-    header = {"typ": "JWT", "alg": ALGORITHM}
-    now = int(time.time())
-    payload = {"sub": sub, "iat": now, "exp": now + expires_in}
+    """创建访问令牌"""
+    to_encode = {"sub": sub, "iat": datetime.utcnow(), "exp": datetime.utcnow() + timedelta(seconds=expires_in)}
     if extra:
-        payload.update(extra)
-    header_b64 = _b64url(json.dumps(header, separators=(',', ':')).encode())
-    payload_b64 = _b64url(json.dumps(payload, separators=(',', ':')).encode())
-    to_sign = f"{header_b64}.{payload_b64}".encode()
-    sig = hmac.new(SECRET_KEY.encode(), to_sign, hashlib.sha256).digest()
-    sig_b64 = _b64url(sig)
-    return f"{header_b64}.{payload_b64}.{sig_b64}"
+        to_encode.update(extra)
+    encoded_jwt = jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
+    return encoded_jwt
 
 
 def decode_token(token: str) -> Optional[Dict]:
+    """解码令牌"""
     try:
-        parts = token.split('.')
-        if len(parts) != 3:
-            return None
-        header_b64, payload_b64, sig_b64 = parts
-        to_sign = f"{header_b64}.{payload_b64}".encode()
-        expected = hmac.new(SECRET_KEY.encode(), to_sign, hashlib.sha256).digest()
-        if not hmac.compare_digest(expected, _b64url_decode(sig_b64)):
-            return None
-        payload = json.loads(_b64url_decode(payload_b64))
-        if int(payload.get("exp", 0)) < int(time.time()):
-            return None
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
         return payload
-    except Exception:
+    except JWTError:
         return None
 
 
-# Password hashing (demo): salted sha256
-def hash_password(password: str, salt: Optional[str] = None) -> str:
-    if salt is None:
-        salt = os.urandom(8).hex()
-    h = hashlib.sha256((salt + password).encode()).hexdigest()
-    return f"{salt}${h}"
+def hash_password(password: str) -> str:
+    """哈希密码"""
+    return pwd_context.hash(password)
 
 
 def verify_password(password: str, hashed: str) -> bool:
-    try:
-        salt, h = hashed.split('$', 1)
-        return hash_password(password, salt) == hashed
-    except Exception:
-        return False
+    """验证密码"""
+    return pwd_context.verify(password, hashed)
 
 
 def validate_phone(phone: str) -> bool:
