@@ -32,7 +32,7 @@ class TranslationAgent(BaseAgent):
         - topic: str
         """
         
-        _, response = self.qwen_llm.invoke(prompt)
+        _, response = self.qwen_llm.communicate(prompt)
         return self._parse_translation_question(response, default={
             "chinese_sentence": "",
             "difficulty": difficulty,
@@ -65,7 +65,7 @@ class TranslationAgent(BaseAgent):
         """
         
         try:
-            _, response = self.qwen_llm.invoke(prompt)
+            _, response = self.qwen_llm.communicate(prompt)
         except Exception:
             return {"error": "翻译检查失败，请稍后重试"}
 

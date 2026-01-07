@@ -14,9 +14,17 @@ class ReadingAgent(BaseAgent):
 
     def analyze_passage(self, passage: str) -> Dict[str, Any]:
         """分析阅读文章"""
+        # 使用RAG系统获取相关阅读资料和技巧
+        from rag_core.rag_system import RAGSystem
+        rag_system = RAGSystem()
+        rag_result = rag_system.query(passage, top_k=5, module="reading")
+        
         prompt = f"""请作为专业的雅思阅读教练，分析以下文章：
 
         {passage}
+
+        相关阅读资料：
+        {rag_result}
 
         请提供：
         1. 文章的主题和结构
@@ -33,7 +41,7 @@ class ReadingAgent(BaseAgent):
         """
         
         try:
-            _, response = self.qwen_llm.invoke(prompt)
+            _, response = self.qwen_llm.communicate(prompt)
         except Exception:
             return {"error": "阅读分析失败，请稍后重试"}
         return self._parse_reading_analysis(response)

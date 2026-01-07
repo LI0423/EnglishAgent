@@ -32,8 +32,16 @@ class WritingEvaluator:
         )
 
     def evaluate(self, essay: str, task_type: str) -> Dict[str, Any]:
+        # 使用RAG系统获取相关的写作评估标准和建议
+        from rag_core.rag_system import RAGSystem
+        rag_system = RAGSystem()
+        rag_result = rag_system.query(essay, top_k=5, module="writing")
+        
         prompt = self.build_prompt(essay, task_type)
-        _, raw = self.llm.invoke(prompt)
+        # 添加RAG系统获取的评估资料
+        enhanced_prompt = prompt + f"\n\n相关写作评估资料：\n{rag_result}"
+        
+        _, raw = self.llm.communicate(enhanced_prompt)
 
         parsed = extract_json(raw)
         if not parsed:

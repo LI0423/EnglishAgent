@@ -170,7 +170,7 @@ class ListeningAgent(BaseAgent):
             "只输出 JSON。"
         )
         try:
-            _, raw = self.qwen_llm.invoke(prompt)
+            _, raw = self.qwen_llm.communicate(prompt)
             parsed = self._safe_extract_json(raw)
             if not parsed:
                 return None

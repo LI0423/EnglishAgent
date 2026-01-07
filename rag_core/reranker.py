@@ -51,11 +51,23 @@ class Reranker:
     def __init__(self):
         self.rerank_model = RerankerModel()
 
-    def rerank(self, query: str, res_list: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    def rerank(self, query: str, res_list: List[Dict[str, Any]], module: str = "general") -> List[Dict[str, Any]]:
         parsed_results = parse_search_results(res_list)
         documents = [result['content'] for result in parsed_results]
+        
+        # 为不同模块定制重排序提示词
+        module_prompts = {
+            "vocabulary": "请判断该候选文本是否包含词汇的详细释义、例句、词根词缀分析或同义词信息，与用户问题的相关性如何。",
+            "reading": "请判断该候选文本是否包含阅读文章的分析、结构解析、阅读技巧或长难句分析，与用户问题的相关性如何。",
+            "writing": "请判断该候选文本是否包含写作指导、写作技巧、常见错误分析或写作模板，与用户问题的相关性如何。",
+            "speaking": "请判断该候选文本是否包含口语练习建议、口语技巧、常见错误分析或口语范例，与用户问题的相关性如何。",
+            "deep_search": "请判断该候选文本是否包含与用户问题相关的全面、准确的信息，与用户问题的相关性如何。"
+        }
+        
         rerank_prompt = RERANK_PROMPT
-        rerank_prompt += f"用户问题: {query}\n请判断该候选文本是否能直接回答问题（Relevant/NotRelevant 或 0-1 分数）。"
+        module_prompt = module_prompts.get(module, "请判断该候选文本是否能直接回答问题，与用户问题的相关性如何。")
+        rerank_prompt += f"用户问题: {query}\n{module_prompt}"
+        
         format_output = format_instruction(instruction=rerank_prompt, query=query)
         rerank_results = self.rerank_model.rerank(format_output, documents)
         return map_rerank_to_retrieval(documents, rerank_results)

@@ -1,6 +1,5 @@
 from typing import Any, List, Optional
-from agent_core.tools import retrieve, tavily_search
-from models.pipeline_wrapper import QwenPipelineWrapper
+from models.generator_model import GeneratorModel
 from langchain_core.messages import BaseMessage
 
 class BaseAgent:
@@ -9,15 +8,8 @@ class BaseAgent:
     agent_key: str = "base"
     
     def __init__(self, temperature: float=0.7, enable_thinking: bool=True, use_streamer: bool=True):
-        model_wrapper = QwenPipelineWrapper(
-            device="mps",  # 自动选择设备
-            max_new_tokens=2048,
-            temperature=temperature,
-            enable_thinking=enable_thinking,
-            use_streamer=use_streamer
-        )
-        self.qwen_llm = model_wrapper.get_langchain_llm()
-        self.tools = [retrieve, tavily_search]
+        self.qwen_llm = GeneratorModel()
+        self.temperature = temperature
 
         self.session_id: Optional[str] = None
         self.summary_store = None
@@ -39,12 +31,6 @@ class BaseAgent:
     
     def after_run(self, response: str) -> str:
         return response
-    
-    def allow_tools(self) -> bool:
-        return True
-    
-    def get_tools(self) -> List[Any]:
-        return self.tools if self.allow_tools() else []
     
     def can_handle(self, query: str) -> bool:
         return True
@@ -71,7 +57,7 @@ class BaseAgent:
         self.before_run(query, history)
         prompt = self.build_prompt(query, history)
         try:
-            _, response = self.qwen_llm.invoke(prompt)
+            _, response = self.qwen_llm.communicate(prompt, temperature=self.temperature)
         except Exception:
             return self.fallback()
         

@@ -16,6 +16,11 @@ class SpeakingAgent(BaseAgent):
     
     def evaluate_speaking(self, transcript: str, audio_url: Optional[str] = None) -> Dict[str, Any]:
         """评估口语表现"""
+        # 使用RAG系统获取相关的口语评估标准和建议
+        from rag_core.rag_system import RAGSystem
+        rag_system = RAGSystem()
+        rag_result = rag_system.query(transcript, top_k=5, module="speaking")
+        
         prompt = f"""请作为专业的雅思口语考官，从以下四个维度评估学生的口语表现：
         1. 流利度与连贯性(Fluency & Coherence, FC)
         2. 词汇资源(Lexical Resource, LR)
@@ -23,6 +28,9 @@ class SpeakingAgent(BaseAgent):
         4. 发音(Pronunciation, PR)
 
         学生的回答：{transcript}
+
+        相关口语评估资料：
+        {rag_result}
 
         请提供：
         - 每个维度的分数(1-9分)
@@ -39,7 +47,7 @@ class SpeakingAgent(BaseAgent):
         """
         
         try:
-            _, response = self.qwen_llm.invoke(prompt)
+            _, response = self.qwen_llm.communicate(prompt)
         except Exception:
             return {"error": "口语评估失败，请稍后重试"}
 

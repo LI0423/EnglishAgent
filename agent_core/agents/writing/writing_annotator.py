@@ -59,7 +59,7 @@ class WritingAnnotator:
         target_band: float,
     ) -> Dict[str, Any]:
         prompt = self.build_prompt(essay, target_band)
-        _, raw = self.llm.invoke(prompt)
+        _, raw = self.llm.communicate(prompt)
 
         parsed = extract_json(raw)
         if not parsed:

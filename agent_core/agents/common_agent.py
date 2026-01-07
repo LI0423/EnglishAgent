@@ -1,7 +1,7 @@
 import json
 import re
 from typing import Any, Dict, List, Optional
-from agent_core.agents.base_agent import BaseAgent
+from .base_agent import BaseAgent
 from langchain_core.messages import HumanMessage, AIMessage
 
 from agent_core.history_store import RedisHistoryStore, RedisSummaryStore
@@ -54,7 +54,7 @@ class CommonAgent(BaseAgent):
             "请输出新的【完整摘要】："
         )
 
-        _, summary = self.qwen_llm.invoke(prompt)
+        _, summary = self.qwen_llm.communicate(prompt)
         return summary.strip()
     
     def maybe_summarize(self, session_id: str):
@@ -162,7 +162,7 @@ class CommonAgent(BaseAgent):
         )
     
         try:
-            _, raw = self.qwen_llm.invoke(prompt)
+            _, raw = self.qwen_llm.communicate(prompt)
             j = json.loads(raw[raw.find("{") : raw.rfind("}") + 1])
             if j["agent"] in self.agents:
                 return RouterDecision(j["agent"], j.get("reason", ""), j.get("confidence", 0.0))
@@ -190,7 +190,7 @@ class CommonAgent(BaseAgent):
         )
 
         try:
-            _, raw = self.qwen_llm.invoke(prompt)
+            _, raw = self.qwen_llm.communicate(prompt)
             j = json.loads(raw[raw.find("{") : raw.rfind("}") + 1])
             return j["response"] if j.get("solvable") else self.DEFAULT_FALLBACK_MESSAGE
         except Exception:

@@ -14,7 +14,7 @@ from .agent import (
     deep_search_agent,
     ielts_agent
 )
-from .deep_search_agent import DeepSearchAgent
+from .agents.deep_search_agent import DeepSearchAgent
 from .issue_analysis_agent import IssueAnalysisAgent, issue_analysis_agent
 
 from .tools import retrieve

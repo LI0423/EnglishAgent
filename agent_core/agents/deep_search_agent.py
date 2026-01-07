@@ -1,6 +1,6 @@
 from typing import Optional, Dict, List, Any
-from .tools import retrieve, tavily_search
-from .agents.base_agent import BaseAgent
+from agent_core.tools import retrieve, tavily_search
+from .base_agent import BaseAgent
 
 
 class DeepSearchAgent(BaseAgent):
@@ -75,7 +75,9 @@ class DeepSearchAgent(BaseAgent):
             Dict[str, Any]: 迭代结果
         """
         # 1. 使用RAG系统检索相关文档
-        rag_results = retrieve(query)
+        from rag_core.rag_system import RAGSystem
+        rag_system = RAGSystem()
+        rag_results = rag_system.query(query, top_k=5, module="deep_search")
         
         # 2. 使用在线搜索获取最新信息
         online_results = tavily_search(query, max_results=self.max_results)
@@ -153,7 +155,7 @@ class DeepSearchAgent(BaseAgent):
         prompt += "请提供一个详细的摘要，涵盖所有重要信息。"
         
         try:
-            _, summary = self.qwen_llm.invoke(prompt)
+            _, summary = self.qwen_llm.communicate(prompt)
             return summary
         except Exception:
             return "无法生成摘要，请稍后重试"

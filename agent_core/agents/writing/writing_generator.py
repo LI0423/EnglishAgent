@@ -48,11 +48,20 @@ class WritingGenerator:
         task_type: str = "task2",
         target_band: float = 7.0,
     ) -> str:
+        # 使用RAG系统获取相关写作资料和技巧
+        from rag_core.rag_system import RAGSystem
+        rag_system = RAGSystem()
+        rag_result = rag_system.query(topic, top_k=5, module="writing")
+        
         prompt = self.build_prompt(
             topic,
             task_type,
             target_band,
             250 if task_type == "task2" else 150,
         )
-        _, essay = self.llm.invoke(prompt)
+        
+        # 添加RAG系统获取的写作资料
+        enhanced_prompt = prompt + f"\n\n相关写作资料：\n{rag_result}"
+        
+        _, essay = self.llm.communicate(enhanced_prompt)
         return essay.strip()

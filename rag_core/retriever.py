@@ -177,19 +177,36 @@ class Retriever:
                     self.milvus_client.search_by_word_type(target_word, chunk_type)
 
     def multi_way_retrieve(self, query: str, intent: Dict[str, Any], top_k: int = 10,
-                           strategies: Optional[List[str]] = None) -> List[Dict[str, Any]]:
+                           strategies: Optional[List[str]] = None, module: str = "general") -> List[Dict[str, Any]]:
 
         if strategies is None:
             strategies = list(self.retrieval_strategies.keys())
+        
+        # 根据模块类型调整检索策略
+        adjusted_strategies = self._adjust_strategies_by_module(strategies, module)
+        
         # 步骤1: 多路执行（根据意图调整策略）
-        all_results = self._execute_intention_aware_retrieval(query, strategies, intent)
+        all_results = self._execute_intention_aware_retrieval(query, adjusted_strategies, intent, module)
         # 步骤2: 意图感知的结果融合
-        fused_results = self._intention_aware_fusion(all_results, strategies, intent)
+        fused_results = self._intention_aware_fusion(all_results, adjusted_strategies, intent, module)
 
         return fused_results[:top_k]
 
+    def _adjust_strategies_by_module(self, strategies: List[str], module: str) -> List[str]:
+        """根据模块类型调整检索策略"""
+        # 为不同模块定制检索策略
+        module_strategies = {
+            "vocabulary": ["intention_aware", "semantic", "keyword_bm25"],  # 词汇模块优先意图感知
+            "reading": ["semantic", "keyword_bm25", "intention_aware"],  # 阅读模块优先语义检索
+            "writing": ["semantic", "keyword_bm25", "intention_aware"],  # 写作模块优先语义检索
+            "speaking": ["intention_aware", "semantic", "keyword_bm25"],  # 口语模块优先意图感知
+            "deep_search": ["keyword_bm25", "semantic", "intention_aware"]  # 深度搜索模块优先关键词
+        }
+        
+        return module_strategies.get(module, strategies)
+
     def _execute_intention_aware_retrieval(self, query: str, strategies: List[str],
-                                           intent: Dict[str, Any]) -> Dict[str, List[Dict]]:
+                                           intent: Dict[str, Any], module: str = "general") -> Dict[str, List[Dict]]:
         """意图感知的多路召回执行"""
         results = {}
         for strategy in strategies:
@@ -313,9 +330,20 @@ class Retriever:
         return formatted_results
 
     def _intention_aware_fusion(self, all_results: Dict[str, List[Dict]],
-                                strategies: List[str], intent: Dict[str, Any]) -> List[Dict]:
+                                strategies: List[str], intent: Dict[str, Any], module: str = "general") -> List[Dict]:
         """意图感知的结果融合"""
         k = 60  # RRF平滑参数
+
+        # 为不同模块设置不同的权重调整
+        module_weights = {
+            "vocabulary": 1.5,  # 词汇模块增加权重
+            "reading": 1.2,  # 阅读模块轻微增加权重
+            "writing": 1.2,  # 写作模块轻微增加权重
+            "speaking": 1.3,  # 口语模块适度增加权重
+            "deep_search": 1.0  # 深度搜索模块保持默认权重
+        }
+        
+        module_weight = module_weights.get(module, 1.0)
 
         # 为每个策略的结果分配排名，考虑意图权重
         ranked_results = {}
@@ -325,6 +353,8 @@ class Retriever:
 
                 # 根据意图调整策略权重
                 adjusted_weight = _adjust_strategy_weight_by_intent(strategy, intent, strategy_weight)
+                # 根据模块调整权重
+                adjusted_weight *= module_weight
 
                 for rank, doc in enumerate(all_results[strategy]):
                     doc_id = doc["id"]
