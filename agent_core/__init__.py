@@ -15,7 +15,6 @@ from .agent import (
     ielts_agent
 )
 from .agents.deep_search_agent import DeepSearchAgent
-from .issue_analysis_agent import IssueAnalysisAgent, issue_analysis_agent
 
 from .tools import retrieve
 
@@ -35,5 +34,4 @@ __all__ = [
     "translation_agent",
     "deep_search_agent",
     "ielts_agent"
-    ,"IssueAnalysisAgent", "issue_analysis_agent"
 ]

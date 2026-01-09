@@ -135,25 +135,6 @@ class EnhancedRewriteQueryStrategy:
             "model_prompts": model_prompts,
         }
 
-        analysis = _analyze_query(original_query, retrieval_context)
-
-        if rewrite_strategy == "auto":
-            rewrite_strategy = self._select_rewrite_strategy(analysis)
-
-        candidates = self._rewrite_query(original_query, analysis, rewrite_strategy)
-
-        # Score and deduplicate
-        scored = self._score_and_dedup(candidates, analysis)
-
-        # trim
-        scored = scored[: self.max_rewrites]
-
-        return {
-            "original_query": original_query,
-            "analysis": analysis,
-            "strategy_used": rewrite_strategy,
-            "rewrites": scored,
-        }
 
     # -------------------- Analysis Helpers --------------------
     def _analyze_query(self, query: str, retrieval_context: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:

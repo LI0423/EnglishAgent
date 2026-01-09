@@ -1,7 +1,13 @@
+import os
+from dotenv import load_dotenv
+
 import logging
 from typing import List
 
 from pymilvus import MilvusClient, DataType
+
+# 加载环境变量
+load_dotenv()
 
 # 配置日志
 logging.basicConfig(level=logging.INFO)
@@ -10,7 +16,8 @@ logger = logging.getLogger(__name__)
 
 class MilvusDBClient:
     def __init__(self, collection_name: str = "vocabulary", vector_dim: int = 1024,
-                 db_path: str = "./ielts_vocabulary.db"):
+                 db_path: str = os.getenv("MILVUS_DB_PATH")):
+        
         # 初始化客户端并验证连接
         self.client = MilvusClient(db_path)
         self.collection_name = collection_name

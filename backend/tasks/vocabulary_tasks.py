@@ -1,14 +1,12 @@
 from ..tasks import celery_app
-from ..db import get_user_by_id, get_user_profile
 from ..utils.tracking import learning_tracker
-import time
 import logging
 import random
 import sqlite3
-import json
 from datetime import datetime, time as dt_time
 import yagmail
 import os
+from utils.milvus_client import MilvusDBClient
 
 # 配置日志
 logging.basicConfig(level=logging.INFO)
@@ -20,59 +18,41 @@ VOCABULARY_DB_PATH = "ielts_vocabulary.db"
 
 def get_random_vocabulary(limit=100):
     """从雅思核心词汇中随机获取指定数量的单词"""
-    from utils.milvus_client import MilvusDBClient
-    
-    try:
-        # 初始化Milvus客户端
-        milvus_client = MilvusDBClient(collection_name="vocabulary", db_path="./ielts_vocabulary.db")
-        
-        # 查询所有词汇
-        # 注意：Milvus的查询语法与SQL不同，这里我们使用简单的查询
-        # 由于Milvus主要是向量数据库，我们使用标量查询来获取词汇
-        all_vocabulary = milvus_client.client.query(
-            collection_name="vocabulary",
-            output_fields=["word", "content", "part_of_speech"]
-        )
-        
-        if not all_vocabulary:
-            logger.warning("No vocabulary found in database")
-            return []
-        
-        # 随机选择指定数量的词汇
-        selected_vocabulary = random.sample(all_vocabulary, min(limit, len(all_vocabulary)))
-        logger.info(f"Selected {len(selected_vocabulary)} vocabulary items")
-        
-        # 处理选中的词汇
-        vocabulary_list = []
-        for vocab in selected_vocabulary:
-            try:
-                word_info = {
-                    'word': vocab.get('word', ''),
-                    'definition': vocab.get('content', ''),
-                    'examples': [],  # Milvus数据库中可能没有存储例句
-                    'pronunciation': '',  # Milvus数据库中可能没有存储发音
-                    'part_of_speech': vocab.get('part_of_speech', '')
-                }
-                vocabulary_list.append(word_info)
-            except Exception as e:
-                logger.error(f"Error processing vocabulary: {e}")
-                continue
-        
-        return vocabulary_list
-    except Exception as e:
-        logger.error(f"Error getting random vocabulary: {e}")
-        # 出错时返回模拟数据
-        vocabulary_list = []
-        for i in range(min(limit, 100)):
+    # 初始化Milvus客户端
+    milvus_client = MilvusDBClient()
+
+    filter_condition = f''
+    results = milvus_client.query(
+        filter=filter_condition,
+        output_fields=["word", "content", "part_of_speech"],
+        limit=limit,
+    )
+
+    if not results:
+        logger.warning("No vocabulary found in database")
+        return []
+
+    # 随机选择指定数量的词汇
+    selected_vocabulary = random.sample(results, min(limit, len(results)))
+    logger.info(f"Selected {len(selected_vocabulary)} vocabulary items")
+
+    # 处理选中的词汇
+    vocabulary_list = []
+    for vocab in selected_vocabulary:
+        try:
             word_info = {
-                'word': f"Word{i+1}",
-                'definition': f"Definition for Word{i+1}",
-                'examples': [f"This is an example of Word{i+1}.", f"Another example using Word{i+1}."],
-                'pronunciation': f"/wɜːd{i+1}/",
-                'part_of_speech': "noun"
+                'word': vocab.get('word', ''),
+                'definition': vocab.get('content', ''),
+                'examples': [],  # Milvus数据库中可能没有存储例句
+                'pronunciation': '',  # Milvus数据库中可能没有存储发音
+                'part_of_speech': vocab.get('part_of_speech', '')
             }
             vocabulary_list.append(word_info)
-        return vocabulary_list
+        except Exception as e:
+            logger.error(f"Error processing vocabulary: {e}")
+            continue
+    
+    return vocabulary_list
 
 
 def send_email(to_email, subject, content):

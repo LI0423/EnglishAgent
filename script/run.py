@@ -1,15 +1,17 @@
-from models.embedding_model import EmbeddingModel
-from script.IELTSVectorStore import IELTSVectorStore
+import os
+from dotenv import load_dotenv
 from utils import MilvusDBClient
+from models.embedding_model import EmbeddingModel
+
+load_dotenv()
 
 
 def main():
-    db_path = '/Users/litengjiang/Desktop/MyCode/EnglishAgent/ielts_vocabulary.db'
     # # 初始化向量存储
     # vector_store = IELTSVectorStore(db_path)
     # vector_store.store_data()
 
-    milvus_client = MilvusDBClient(db_path=db_path)
+    milvus_client = MilvusDBClient(db_path=os.getenv("MILVUS_DB_PATH"))
     # # 测试1: 标量搜索
     # results = milvus_client.search_by_word("sensible")
     # for i, doc in enumerate(results):
