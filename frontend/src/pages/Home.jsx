@@ -13,14 +13,12 @@ const Home = () => {
     learningStreak: 7
   });
 
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState(null);
+
 
   // 获取用户数据
   useEffect(() => {
     const fetchUserData = async () => {
       try {
-        setLoading(true);
         // 获取当前用户信息
         const user = await getCurrentUser();
         if (user) {
@@ -53,12 +51,8 @@ const Home = () => {
             // 这里可以处理任务数据
           }
         }
-        
-        setLoading(false);
       } catch (err) {
         console.error('Failed to fetch user data:', err);
-        setError('Failed to fetch user data');
-        setLoading(false);
       }
     };
 
@@ -72,20 +66,20 @@ const Home = () => {
     { id: 4, title: '完成1篇写作练习', completed: false, target: 1, completedCount: 0 }
   ]);
 
-  const [modules, setModules] = useState([
+  const [modules] = useState([
     { id: 1, name: '听力练习', icon: '🎧', todayCount: 0, targetCount: 3, color: '#3B82F6' },
     { id: 2, name: '阅读练习', icon: '📚', todayCount: 0, targetCount: 3, color: '#10B981' },
     { id: 3, name: '写作练习', icon: '✍️', todayCount: 0, targetCount: 2, color: '#F59E0B' },
     { id: 4, name: '口语练习', icon: '💬', todayCount: 0, targetCount: 2, color: '#8B5CF6' }
   ]);
 
-  const [recommendations, setRecommendations] = useState([
+  const [recommendations] = useState([
     { id: 1, title: '针对听力Section 3的专项练习', description: '提升讲座类听力理解能力' },
     { id: 2, title: '阅读匹配题技巧提升', description: '掌握快速定位关键词的方法' },
     { id: 3, title: '写作Task 2论证结构指导', description: '学习如何构建逻辑严密的论点' }
   ]);
 
-  const [learningProgress, setLearningProgress] = useState({
+  const [learningProgress] = useState({
     totalCompletion: 45,
     trendData: [
       { day: 'Mon', hours: 1.5 },
@@ -104,37 +98,13 @@ const Home = () => {
     ));
   };
 
-  const handleModuleClick = (moduleId) => {
-    console.log(`Clicked module: ${moduleId}`);
-    // 这里可以添加导航到对应模块的逻辑
-  };
+
 
   return (
     <div className="home-page">
-      {/* 左侧导航栏（网页端） */}
-      <div className="sidebar">
-        <div className="sidebar-header">
-          <h2>🎓 IELTS Agent</h2>
-        </div>
-        <nav className="sidebar-nav">
-          <ul>
-            <li className="active">🏠 首页</li>
-            <li>🎧 听力练习</li>
-            <li>📚 阅读练习</li>
-            <li>✍️ 写作练习</li>
-            <li>💬 口语练习</li>
-            <li>📝 词汇学习</li>
-            <li>� 学习报告</li>
-            <li>🎯 个性化计划</li>
-            <li>🏆 成就中心</li>
-          </ul>
-        </nav>
-      </div>
-
-      {/* 右侧内容区 */}
-      <div className="content-area">
-        {/* 顶部导航栏 */}
-        <header className="top-nav">
+      {/* 顶部导航栏 */}
+      <header className="top-nav">
+        <div className="nav-content">
           <div className="nav-left">
             <h1>🎓 IELTS Agent</h1>
           </div>
@@ -151,14 +121,40 @@ const Home = () => {
               <span className="icon">⚙️</span>
             </div>
           </div>
-        </header>
+        </div>
+      </header>
+
+      {/* 主要内容布局 */}
+      <div className="main-layout">
+        {/* 左侧导航栏（网页端） */}
+        <div className="sidebar">
+          <div className="sidebar-header">
+            <h2>🎓 IELTS Agent</h2>
+          </div>
+          <nav className="sidebar-nav">
+            <ul>
+              <li className="active">🏠 首页</li>
+              <li>🎧 听力练习</li>
+              <li>📚 阅读练习</li>
+              <li>✍️ 写作练习</li>
+              <li>💬 口语练习</li>
+              <li>📝 词汇学习</li>
+              <li>📊 学习报告</li>
+              <li>🎯 个性化计划</li>
+              <li>🏆 成就中心</li>
+            </ul>
+          </nav>
+        </div>
+
+        {/* 右侧内容区 */}
+        <div className="content-area">
 
         <main className="main-content">
           {/* 欢迎区域 */}
           <section className="welcome-section">
             <div className="welcome-content">
               <h2>👋 你好，{userData.username}！</h2>
-              <p>今天是你学习的第{userData.learningDays}天</p>
+              <p>今天是你学习的第{userData.learningDays}天，已连续学习{userData.learningStreak}天</p>
               <p>🔥 保持当前进度，继续加油！</p>
             </div>
           </section>
@@ -226,7 +222,7 @@ const Home = () => {
             <h2>学习进度</h2>
             <div className="progress-container">
               <div className="trend-chart">
-                <ResponsiveContainer width="100%" height={200}>
+                <ResponsiveContainer width="100%" height={250}>
                   <LineChart data={learningProgress.trendData}>
                     <CartesianGrid strokeDasharray="3 3" stroke="#F8F9FA" />
                     <XAxis dataKey="day" stroke="#86909C" />
@@ -272,6 +268,7 @@ const Home = () => {
         </main>
       </div>
     </div>
+  </div>
   );
 };
 
