@@ -1,6 +1,6 @@
 INFO:     Will watch for changes in these directories: ['/Users/litengjiang/Desktop/MyCode/EnglishAgent']
 INFO:     Uvicorn running on http://0.0.0.0:8000 (Press CTRL+C to quit)
-INFO:     Started reloader process [37360] using StatReload
+INFO:     Started reloader process [7025] using StatReload
 /Users/litengjiang/Desktop/MyCode/EnglishAgent/venv/lib/python3.12/site-packages/milvus_lite/__init__.py:15: UserWarning: pkg_resources is deprecated as an API. See https://setuptools.pypa.io/en/latest/pkg_resources.html. The pkg_resources package is slated for removal as early as 2025-11-30. Refrain from using this package or pin to Setuptools<81.
   from pkg_resources import DistributionNotFound, get_distribution
 INFO:root:云服务器embedding model 加载完成
@@ -12,11 +12,6 @@ INFO:sentence_transformers.cross_encoder.CrossEncoder:Use pytorch device: mps
 INFO:models.reranker_model:reranker model 加载完成
 INFO:root:云服务器generator model 加载完成
 INFO:root:使用云服务器generator模型
-INFO:     Started server process [37362]
+INFO:     Started server process [7029]
 INFO:     Waiting for application startup.
 INFO:     Application startup complete.
-INFO:     Shutting down
-INFO:     Waiting for application shutdown.
-INFO:     Application shutdown complete.
-INFO:     Finished server process [37362]
-INFO:     Stopping reloader process [37360]
