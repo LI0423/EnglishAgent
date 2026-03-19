@@ -1,0 +1,45 @@
+{
+  "version": "listening-quiz-v1",
+  "questions": [
+    {
+      "id": "lst_q_001",
+      "audio_id": "audio_001",
+      "prompt": "In Section 1, where will the student meet the tutor?",
+      "answer": "library",
+      "options": ["library", "cafeteria", "office", "hall"],
+      "question_type": "multiple_choice",
+      "difficulty": "easy",
+      "explanation": "The location mentioned in the conversation is library."
+    },
+    {
+      "id": "lst_q_002",
+      "audio_id": "audio_001",
+      "prompt": "What time does the lecture start?",
+      "answer": "9",
+      "options": ["8", "9", "10", "11"],
+      "question_type": "multiple_choice",
+      "difficulty": "easy",
+      "explanation": "The correct start time is 9."
+    },
+    {
+      "id": "lst_q_003",
+      "audio_id": "audio_002",
+      "prompt": "Which problem does the speaker mention first?",
+      "answer": "budget",
+      "options": ["schedule", "budget", "venue", "staff"],
+      "question_type": "multiple_choice",
+      "difficulty": "intermediate",
+      "explanation": "Budget pressure is the first issue raised."
+    },
+    {
+      "id": "lst_q_004",
+      "audio_id": "audio_003",
+      "prompt": "The speaker's tone is best described as ____.",
+      "answer": "cautiously optimistic",
+      "options": ["frustrated", "neutral", "cautiously optimistic", "sarcastic"],
+      "question_type": "multiple_choice",
+      "difficulty": "advanced",
+      "explanation": "The speaker is positive but still cautious."
+    }
+  ]
+}

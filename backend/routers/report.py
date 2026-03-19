@@ -18,7 +18,7 @@ class Report(BaseModel):
 
 @router.get("/{session_id}", response_model=Report)
 async def get_report(session_id: str, current_user: dict = Depends(get_current_user)):
-    if not db_get_session(session_id):
+    if not db_get_session(session_id, user_id=str(current_user["id"])):
         raise HTTPException(status_code=404, detail="Session not found")
     score = db_get_score(session_id)
     scores = {"FC": score.get('FC'), "LR": score.get('LR'), "GR": score.get('GR'), "PR": score.get('PR'), "overall": score.get('overall')} if score else {}
@@ -51,5 +51,4 @@ async def get_report(session_id: str, current_user: dict = Depends(get_current_u
         suggestions=suggestions or ["Good job! Keep practicing."],
         plan7d=plan7d,
     )
-
 

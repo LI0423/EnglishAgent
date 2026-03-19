@@ -51,6 +51,8 @@ class ReminderService:
                 return self.send_email_reminder(reminder)
             elif channel == 'app':
                 return self.send_app_reminder(reminder)
+            elif channel == 'sms':
+                return self.send_sms_reminder(reminder)
             else:
                 logger.error(f"Unsupported channel: {channel}")
                 return False

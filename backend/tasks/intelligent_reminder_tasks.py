@@ -3,7 +3,7 @@
 实现基于用户学习习惯的智能提醒
 """
 from ..tasks import celery_app
-from ..db import get_reminder_preferences
+from ..db import get_last_reminder_time, get_recent_learning_sessions, get_reminder_preferences
 from ..services.intelligent_reminder import get_intelligent_reminder_strategy
 from ..services.reminder_service import get_reminder_service
 import time
@@ -33,10 +33,7 @@ def generate_intelligent_reminders(user_id):
             logger.info(f"Reminders disabled for user {user_id}, skipping")
             return False
         
-        # 获取用户学习会话数据
-        # 这里应该从数据库获取用户的学习会话
-        # 由于我们没有获取学习会话的方法，这里模拟数据
-        learning_sessions = _get_mock_learning_sessions(user_id)
+        learning_sessions = _get_user_learning_sessions(user_id)
         
         # 分析学习习惯
         habits = strategy.analyze_learning_habits(user_id, learning_sessions)
@@ -76,8 +73,7 @@ def analyze_user_habits(user_id):
         # 获取智能提醒策略
         strategy = get_intelligent_reminder_strategy()
         
-        # 获取用户学习会话数据
-        learning_sessions = _get_mock_learning_sessions(user_id)
+        learning_sessions = _get_user_learning_sessions(user_id)
         
         # 分析学习习惯
         habits = strategy.analyze_learning_habits(user_id, learning_sessions)
@@ -138,14 +134,13 @@ def check_user_activity(user_id):
             logger.info(f"Reminders disabled for user {user_id}, skipping")
             return False
         
-        # 获取用户学习会话数据
-        learning_sessions = _get_mock_learning_sessions(user_id)
+        learning_sessions = _get_user_learning_sessions(user_id)
         
         # 分析学习习惯
         habits = strategy.analyze_learning_habits(user_id, learning_sessions)
         
         # 检查是否需要发送提醒
-        last_reminder_time = _get_last_reminder_time(user_id)
+        last_reminder_time = get_last_reminder_time(user_id)
         if strategy.should_send_reminder(user_id, last_reminder_time, habits):
             # 发送提醒
             context = {
@@ -165,48 +160,11 @@ def check_user_activity(user_id):
         return False
 
 
-def _get_mock_learning_sessions(user_id):
-    """获取模拟的学习会话数据
-    
-    Args:
-        user_id: 用户ID
-        
-    Returns:
-        List: 学习会话列表
+def _get_user_learning_sessions(user_id):
     """
-    # 生成模拟的学习会话数据
-    sessions = []
-    now = time.time()
-    
-    # 生成过去14天的学习会话
-    for i in range(14):
-        # 随机生成学习会话
-        if i % 2 == 0:  # 每两天生成一个会话
-            session_time = now - (i * 24 * 3600)
-            # 随机学习时间（9-21点）
-            hour_offset = (i % 12) + 9
-            session_time = session_time - ((24 - hour_offset) * 3600)
-            
-            sessions.append({
-                'id': f"session_{i}",
-                'user_id': user_id,
-                'type': 'speaking',
-                'duration': 25 + (i % 15),  # 25-40分钟
-                'created_at': int(session_time),
-                'completed': True
-            })
-    
+    从真实学习数据源读取最近会话（user_activities + learning_events）。
+    """
+    sessions = get_recent_learning_sessions(user_id, days=14, limit=200)
+    if not sessions:
+        logger.info(f"No recent sessions found for user {user_id}")
     return sessions
-
-
-def _get_last_reminder_time(user_id):
-    """获取用户上次提醒时间
-    
-    Args:
-        user_id: 用户ID
-        
-    Returns:
-        int: 上次提醒时间戳
-    """
-    # 模拟上次提醒时间
-    return int(time.time() - 24 * 3600)  # 24小时前

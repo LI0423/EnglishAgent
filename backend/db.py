@@ -24,6 +24,15 @@ def init_db():
                 if name.endswith('.sql'):
                     with open(os.path.join(mig_dir, name), "r", encoding="utf-8") as f:
                         conn.executescript(f.read())
+            # idempotent schema hardening for legacy DBs
+            try:
+                conn.execute("ALTER TABLE sessions ADD COLUMN user_id TEXT")
+            except sqlite3.OperationalError:
+                pass
+            try:
+                conn.execute("CREATE INDEX IF NOT EXISTS idx_sessions_user_created ON sessions(user_id, created_at)")
+            except sqlite3.OperationalError:
+                pass
         else:
             # Fallback minimal schema
             conn.execute(
@@ -42,6 +51,7 @@ def init_db():
                 """
                 CREATE TABLE IF NOT EXISTS sessions (
                   id TEXT PRIMARY KEY,
+                  user_id TEXT,
                   topic TEXT,
                   type TEXT DEFAULT 'speaking',
                   parts_json TEXT,
@@ -309,13 +319,190 @@ def get_user_by_phone(phone: str) -> Optional[sqlite3.Row]:
         conn.close()
 
 
-# Session DAO
-def create_session(session_id: str, topic: str, parts: list[dict]) -> None:
+def get_user_by_email(email: str) -> Optional[sqlite3.Row]:
+    conn = get_conn()
+    try:
+        cur = conn.execute("SELECT * FROM users WHERE email = ?", (email,))
+        return cur.fetchone()
+    finally:
+        conn.close()
+
+
+def update_user_password_hash(user_id: str, password_hash: str) -> bool:
+    conn = get_conn()
+    try:
+        cur = conn.execute(
+            "UPDATE users SET password_hash = ? WHERE id = ?",
+            (password_hash, user_id),
+        )
+        conn.commit()
+        return cur.rowcount > 0
+    finally:
+        conn.close()
+
+
+def create_password_reset_token(token: str, user_id: str, expires_at: int) -> None:
     conn = get_conn()
     try:
         conn.execute(
-            "INSERT INTO sessions (id, topic, parts_json, transcript_text, created_at) VALUES (?, ?, ?, ?, ?)",
-            (session_id, topic, json.dumps(parts, ensure_ascii=False), "", int(time.time())),
+            """
+            INSERT OR REPLACE INTO password_reset_tokens (token, user_id, expires_at, created_at)
+            VALUES (?, ?, ?, ?)
+            """,
+            (token, user_id, int(expires_at), int(time.time())),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def get_password_reset_token(token: str) -> Optional[sqlite3.Row]:
+    conn = get_conn()
+    try:
+        cur = conn.execute("SELECT * FROM password_reset_tokens WHERE token = ?", (token,))
+        return cur.fetchone()
+    finally:
+        conn.close()
+
+
+def delete_password_reset_token(token: str) -> None:
+    conn = get_conn()
+    try:
+        conn.execute("DELETE FROM password_reset_tokens WHERE token = ?", (token,))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def cleanup_expired_password_reset_tokens(now_ts: Optional[int] = None) -> int:
+    conn = get_conn()
+    try:
+        now_value = int(now_ts or time.time())
+        cur = conn.execute(
+            "DELETE FROM password_reset_tokens WHERE expires_at <= ?",
+            (now_value,),
+        )
+        conn.commit()
+        return int(cur.rowcount or 0)
+    finally:
+        conn.close()
+
+
+def record_password_reset_attempt(account_key: str, requested_at: Optional[int] = None) -> None:
+    conn = get_conn()
+    try:
+        conn.execute(
+            """
+            INSERT INTO password_reset_attempts (account_key, requested_at)
+            VALUES (?, ?)
+            """,
+            (account_key, int(requested_at or time.time())),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def count_recent_password_reset_attempts(account_key: str, window_seconds: int = 3600) -> int:
+    conn = get_conn()
+    try:
+        cutoff = int(time.time()) - max(1, int(window_seconds))
+        cur = conn.execute(
+            """
+            SELECT COUNT(*) AS cnt
+            FROM password_reset_attempts
+            WHERE account_key = ? AND requested_at >= ?
+            """,
+            (account_key, cutoff),
+        )
+        row = cur.fetchone()
+        return int(row["cnt"] or 0) if row else 0
+    finally:
+        conn.close()
+
+
+def create_password_reset_code(
+    account_key: str,
+    user_id: str,
+    channel: str,
+    code: str,
+    expires_at: int,
+) -> None:
+    conn = get_conn()
+    try:
+        conn.execute(
+            """
+            INSERT OR REPLACE INTO password_reset_codes (
+              account_key, user_id, channel, code, attempts, expires_at, created_at
+            ) VALUES (?, ?, ?, ?, 0, ?, ?)
+            """,
+            (account_key, user_id, channel, code, int(expires_at), int(time.time())),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def get_password_reset_code(account_key: str) -> Optional[sqlite3.Row]:
+    conn = get_conn()
+    try:
+        cur = conn.execute(
+            "SELECT * FROM password_reset_codes WHERE account_key = ?",
+            (account_key,),
+        )
+        return cur.fetchone()
+    finally:
+        conn.close()
+
+
+def increment_password_reset_code_attempts(account_key: str) -> int:
+    conn = get_conn()
+    try:
+        conn.execute(
+            "UPDATE password_reset_codes SET attempts = attempts + 1 WHERE account_key = ?",
+            (account_key,),
+        )
+        conn.commit()
+        cur = conn.execute(
+            "SELECT attempts FROM password_reset_codes WHERE account_key = ?",
+            (account_key,),
+        )
+        row = cur.fetchone()
+        return int(row["attempts"] or 0) if row else 0
+    finally:
+        conn.close()
+
+
+def delete_password_reset_code(account_key: str) -> None:
+    conn = get_conn()
+    try:
+        conn.execute("DELETE FROM password_reset_codes WHERE account_key = ?", (account_key,))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def cleanup_expired_password_reset_codes(now_ts: Optional[int] = None) -> int:
+    conn = get_conn()
+    try:
+        now_value = int(now_ts or time.time())
+        cur = conn.execute(
+            "DELETE FROM password_reset_codes WHERE expires_at <= ?",
+            (now_value,),
+        )
+        conn.commit()
+        return int(cur.rowcount or 0)
+    finally:
+        conn.close()
+
+
+# Session DAO
+def create_session(session_id: str, topic: str, parts: list[dict], user_id: Optional[str] = None) -> None:
+    conn = get_conn()
+    try:
+        conn.execute(
+            "INSERT INTO sessions (id, user_id, topic, parts_json, transcript_text, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+            (session_id, user_id, topic, json.dumps(parts, ensure_ascii=False), "", int(time.time())),
         )
         # insert normalized parts
         for p in parts:
@@ -328,24 +515,33 @@ def create_session(session_id: str, topic: str, parts: list[dict]) -> None:
         conn.close()
 
 
-def append_session_transcript(session_id: str, text_partial: str) -> None:
+def append_session_transcript(session_id: str, text_partial: str, user_id: Optional[str] = None) -> None:
     conn = get_conn()
     try:
-        cur = conn.execute("SELECT transcript_text FROM sessions WHERE id = ?", (session_id,))
+        if user_id:
+            cur = conn.execute("SELECT transcript_text FROM sessions WHERE id = ? AND user_id = ?", (session_id, user_id))
+        else:
+            cur = conn.execute("SELECT transcript_text FROM sessions WHERE id = ?", (session_id,))
         row = cur.fetchone()
         if not row:
             raise ValueError("Session not found")
         new_text = ((row["transcript_text"] or "") + text_partial + " ").strip()
-        conn.execute("UPDATE sessions SET transcript_text = ? WHERE id = ?", (new_text, session_id))
+        if user_id:
+            conn.execute("UPDATE sessions SET transcript_text = ? WHERE id = ? AND user_id = ?", (new_text, session_id, user_id))
+        else:
+            conn.execute("UPDATE sessions SET transcript_text = ? WHERE id = ?", (new_text, session_id))
         conn.commit()
     finally:
         conn.close()
 
 
-def finish_session(session_id: str, transcript_id: str) -> None:
+def finish_session(session_id: str, transcript_id: str, user_id: Optional[str] = None) -> None:
     conn = get_conn()
     try:
-        cur = conn.execute("SELECT transcript_text FROM sessions WHERE id = ?", (session_id,))
+        if user_id:
+            cur = conn.execute("SELECT transcript_text FROM sessions WHERE id = ? AND user_id = ?", (session_id, user_id))
+        else:
+            cur = conn.execute("SELECT transcript_text FROM sessions WHERE id = ?", (session_id,))
         row = cur.fetchone()
         if not row:
             raise ValueError("Session not found")
@@ -354,7 +550,10 @@ def finish_session(session_id: str, transcript_id: str) -> None:
             "INSERT INTO transcripts (id, session_id, text, created_at) VALUES (?, ?, ?, ?)",
             (transcript_id, session_id, text, int(time.time())),
         )
-        conn.execute("UPDATE sessions SET transcript_id = ? WHERE id = ?", (transcript_id, session_id))
+        if user_id:
+            conn.execute("UPDATE sessions SET transcript_id = ? WHERE id = ? AND user_id = ?", (transcript_id, session_id, user_id))
+        else:
+            conn.execute("UPDATE sessions SET transcript_id = ? WHERE id = ?", (transcript_id, session_id))
         conn.commit()
     finally:
         conn.close()
@@ -370,10 +569,31 @@ def get_transcript(transcript_id: str) -> Optional[Dict[str, Any]]:
         conn.close()
 
 
-def get_session(session_id: str) -> Optional[Dict[str, Any]]:
+def get_transcript_for_user(transcript_id: str, user_id: str) -> Optional[Dict[str, Any]]:
     conn = get_conn()
     try:
-        cur = conn.execute("SELECT * FROM sessions WHERE id = ?", (session_id,))
+        cur = conn.execute(
+            """
+            SELECT t.*
+            FROM transcripts t
+            JOIN sessions s ON s.id = t.session_id
+            WHERE t.id = ? AND s.user_id = ?
+            """,
+            (transcript_id, user_id),
+        )
+        row = cur.fetchone()
+        return dict(row) if row else None
+    finally:
+        conn.close()
+
+
+def get_session(session_id: str, user_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
+    conn = get_conn()
+    try:
+        if user_id:
+            cur = conn.execute("SELECT * FROM sessions WHERE id = ? AND user_id = ?", (session_id, user_id))
+        else:
+            cur = conn.execute("SELECT * FROM sessions WHERE id = ?", (session_id,))
         row = cur.fetchone()
         if not row:
             return None
@@ -385,10 +605,19 @@ def get_session(session_id: str) -> Optional[Dict[str, Any]]:
         conn.close()
 
 
-def list_sessions(limit: int = 20, offset: int = 0) -> list[Dict[str, Any]]:
+def list_sessions(user_id: Optional[str] = None, limit: int = 20, offset: int = 0) -> list[Dict[str, Any]]:
     conn = get_conn()
     try:
-        cur = conn.execute("SELECT id, topic, created_at, transcript_id FROM sessions ORDER BY created_at DESC LIMIT ? OFFSET ?", (limit, offset))
+        if user_id:
+            cur = conn.execute(
+                "SELECT id, topic, created_at, transcript_id FROM sessions WHERE user_id = ? ORDER BY created_at DESC LIMIT ? OFFSET ?",
+                (user_id, limit, offset),
+            )
+        else:
+            cur = conn.execute(
+                "SELECT id, topic, created_at, transcript_id FROM sessions ORDER BY created_at DESC LIMIT ? OFFSET ?",
+                (limit, offset),
+            )
         return [dict(r) for r in cur.fetchall()]
     finally:
         conn.close()
@@ -500,6 +729,16 @@ def complete_diagnostic_session(session_id: str, end_time: int, total_questions:
         conn.close()
 
 
+def get_diagnostic_session(session_id: str) -> Optional[Dict[str, Any]]:
+    conn = get_conn()
+    try:
+        cur = conn.execute("SELECT * FROM diagnostic_sessions WHERE id = ?", (session_id,))
+        row = cur.fetchone()
+        return dict(row) if row else None
+    finally:
+        conn.close()
+
+
 def create_diagnostic_report(report_id: str, session_id: str, report_data: Dict[str, Any]) -> None:
     conn = get_conn()
     try:
@@ -532,6 +771,39 @@ def get_diagnostic_report(session_id: str) -> Optional[Dict[str, Any]]:
         report['weaknesses'] = json.loads(report['weaknesses']) if report['weaknesses'] else []
         report['recommendations'] = json.loads(report['recommendations']) if report['recommendations'] else []
         return report
+    finally:
+        conn.close()
+
+
+def list_user_diagnostic_reports(user_id: str, limit: int = 20) -> list[Dict[str, Any]]:
+    conn = get_conn()
+    try:
+        cur = conn.execute(
+            """
+            SELECT
+              r.id,
+              r.session_id,
+              r.overall_band,
+              r.module_scores,
+              r.weaknesses,
+              r.recommendations,
+              r.generated_at
+            FROM diagnostic_reports r
+            JOIN diagnostic_sessions s ON r.session_id = s.id
+            WHERE s.user_id = ?
+            ORDER BY r.generated_at DESC
+            LIMIT ?
+            """,
+            (str(user_id), max(1, int(limit))),
+        )
+        rows = []
+        for row in cur.fetchall():
+            item = dict(row)
+            item["module_scores"] = json.loads(item["module_scores"]) if item.get("module_scores") else []
+            item["weaknesses"] = json.loads(item["weaknesses"]) if item.get("weaknesses") else []
+            item["recommendations"] = json.loads(item["recommendations"]) if item.get("recommendations") else []
+            rows.append(item)
+        return rows
     finally:
         conn.close()
 
@@ -756,6 +1028,46 @@ def create_reminder(reminder_id: str, user_id: str, reminder_data: Dict[str, Any
         conn.close()
 
 
+def has_recent_reminder(
+    user_id: str,
+    reminder_type: str,
+    source: str,
+    lookback_seconds: int = 24 * 3600,
+    status_scope: Optional[list[str]] = None,
+) -> bool:
+    conn = get_conn()
+    try:
+        now = int(time.time())
+        since = now - max(0, int(lookback_seconds))
+        statuses = status_scope or ["pending", "sent"]
+        placeholders = ",".join("?" for _ in statuses)
+        cur = conn.execute(
+            f"""
+            SELECT metadata FROM reminders
+            WHERE user_id = ?
+              AND type = ?
+              AND created_at >= ?
+              AND status IN ({placeholders})
+            ORDER BY created_at DESC
+            LIMIT 100
+            """,
+            (str(user_id), reminder_type, since, *statuses),
+        )
+        for row in cur.fetchall():
+            raw = row["metadata"]
+            if not raw:
+                continue
+            try:
+                metadata = json.loads(raw)
+            except Exception:
+                continue
+            if str(metadata.get("source", "")) == str(source):
+                return True
+        return False
+    finally:
+        conn.close()
+
+
 def get_reminder(reminder_id: str) -> Optional[Dict[str, Any]]:
     conn = get_conn()
     try:
@@ -825,6 +1137,56 @@ def update_reminder_status(reminder_id: str, status: str, sent_at: Optional[int]
                 (status, reminder_id)
             )
         conn.commit()
+    finally:
+        conn.close()
+
+
+def update_reminder_metadata(reminder_id: str, metadata: Dict[str, Any]) -> None:
+    conn = get_conn()
+    try:
+        conn.execute(
+            "UPDATE reminders SET metadata = ? WHERE id = ?",
+            (json.dumps(metadata), reminder_id),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def mark_reminder_retry(
+    reminder_id: str,
+    error_message: str,
+    max_retries: int = 3,
+    retry_delay_seconds: int = 300,
+) -> Dict[str, Any]:
+    conn = get_conn()
+    try:
+        cur = conn.execute("SELECT metadata FROM reminders WHERE id = ?", (reminder_id,))
+        row = cur.fetchone()
+        if not row:
+            return {"updated": False, "status": "not_found", "retry_count": 0}
+
+        metadata = json.loads(row["metadata"]) if row["metadata"] else {}
+        retry_count = int(metadata.get("retry_count", 0)) + 1
+        metadata["retry_count"] = retry_count
+        metadata["last_error"] = str(error_message or "unknown_error")
+        metadata["last_attempt_at"] = int(time.time())
+
+        if retry_count > max_retries:
+            conn.execute(
+                "UPDATE reminders SET status = ?, metadata = ? WHERE id = ?",
+                ("failed", json.dumps(metadata), reminder_id),
+            )
+            conn.commit()
+            return {"updated": True, "status": "failed", "retry_count": retry_count}
+
+        next_time = int(time.time()) + max(1, int(retry_delay_seconds))
+        conn.execute(
+            "UPDATE reminders SET status = ?, scheduled_at = ?, metadata = ? WHERE id = ?",
+            ("pending", next_time, json.dumps(metadata), reminder_id),
+        )
+        conn.commit()
+        return {"updated": True, "status": "pending", "retry_count": retry_count, "next_scheduled_at": next_time}
     finally:
         conn.close()
 
@@ -1066,6 +1428,89 @@ def get_activity_stats(user_id: str, time_range: int = 86400) -> Dict[str, Any]:
         conn.close()
 
 
+def get_recent_learning_sessions(user_id: str, days: int = 14, limit: int = 200) -> list[Dict[str, Any]]:
+    """
+    获取最近学习会话（用于智能提醒），优先来自 user_activities，补充 learning_events。
+    """
+    conn = get_conn()
+    try:
+        cutoff_time = int(time.time()) - max(1, int(days)) * 24 * 3600
+        max_limit = max(1, min(int(limit), 1000))
+
+        sessions: list[Dict[str, Any]] = []
+        cur = conn.execute(
+            """
+            SELECT id, activity_type, module, duration, created_at
+            FROM user_activities
+            WHERE user_id = ? AND created_at >= ?
+            ORDER BY created_at DESC
+            LIMIT ?
+            """,
+            (user_id, cutoff_time, max_limit),
+        )
+        for row in cur.fetchall():
+            sessions.append(
+                {
+                    "id": str(row["id"]),
+                    "user_id": user_id,
+                    "type": str(row["module"] or row["activity_type"] or "general"),
+                    "duration": int(row["duration"] or 0),
+                    "created_at": int(row["created_at"] or 0),
+                    "completed": True,
+                }
+            )
+
+        if len(sessions) < max_limit:
+            remain = max_limit - len(sessions)
+            cur2 = conn.execute(
+                """
+                SELECT event_id, event_type, event_name, properties, timestamp
+                FROM learning_events
+                WHERE user_id = ? AND timestamp >= ?
+                ORDER BY timestamp DESC
+                LIMIT ?
+                """,
+                (user_id, cutoff_time, remain),
+            )
+            for row in cur2.fetchall():
+                props = json.loads(row["properties"]) if row["properties"] else {}
+                sessions.append(
+                    {
+                        "id": str(row["event_id"]),
+                        "user_id": user_id,
+                        "type": str(row["event_name"] or row["event_type"] or "general"),
+                        "duration": int(props.get("duration", 0) or 0),
+                        "created_at": int(row["timestamp"] or 0),
+                        "completed": True,
+                    }
+                )
+
+        sessions.sort(key=lambda x: int(x.get("created_at") or 0), reverse=True)
+        return sessions[:max_limit]
+    finally:
+        conn.close()
+
+
+def get_last_reminder_time(user_id: str) -> Optional[int]:
+    conn = get_conn()
+    try:
+        cur = conn.execute(
+            """
+            SELECT MAX(COALESCE(sent_at, created_at)) AS last_ts
+            FROM reminders
+            WHERE user_id = ?
+            """,
+            (user_id,),
+        )
+        row = cur.fetchone()
+        if not row:
+            return None
+        value = row["last_ts"]
+        return int(value) if value is not None else None
+    finally:
+        conn.close()
+
+
 # Mistake DAO
 def save_mistake(mistake_id: str, user_id: str, mistake_data: Dict[str, Any]) -> None:
     conn = get_conn()
@@ -1102,13 +1547,32 @@ def save_mistake(mistake_id: str, user_id: str, mistake_data: Dict[str, Any]) ->
         conn.close()
 
 
-def get_user_mistakes(user_id: str, module: Optional[str] = None, limit: int = 50) -> list[Dict[str, Any]]:
+def get_user_mistakes(
+    user_id: str,
+    module: Optional[str] = None,
+    limit: int = 50,
+    question_type: Optional[str] = None,
+) -> list[Dict[str, Any]]:
     conn = get_conn()
     try:
-        if module:
+        if module and question_type:
+            cur = conn.execute(
+                """
+                SELECT * FROM mistakes
+                WHERE user_id = ? AND module = ? AND question_type = ?
+                ORDER BY created_at DESC LIMIT ?
+                """,
+                (user_id, module, question_type, limit),
+            )
+        elif module:
             cur = conn.execute(
                 "SELECT * FROM mistakes WHERE user_id = ? AND module = ? ORDER BY created_at DESC LIMIT ?",
                 (user_id, module, limit)
+            )
+        elif question_type:
+            cur = conn.execute(
+                "SELECT * FROM mistakes WHERE user_id = ? AND question_type = ? ORDER BY created_at DESC LIMIT ?",
+                (user_id, question_type, limit),
             )
         else:
             cur = conn.execute(
@@ -1121,6 +1585,208 @@ def get_user_mistakes(user_id: str, module: Optional[str] = None, limit: int = 5
             mistake['tags'] = json.loads(mistake['tags']) if mistake['tags'] else []
             mistakes.append(mistake)
         return mistakes
+    finally:
+        conn.close()
+
+
+def get_due_mistakes(
+    user_id: str,
+    module: Optional[str] = None,
+    limit: int = 50,
+    now_ts: Optional[int] = None,
+    question_type: Optional[str] = None,
+) -> list[Dict[str, Any]]:
+    conn = get_conn()
+    try:
+        now = int(now_ts or time.time())
+        if module and question_type:
+            cur = conn.execute(
+                """
+                SELECT * FROM mistakes
+                WHERE user_id = ? AND module = ? AND question_type = ? AND next_review_date <= ?
+                ORDER BY next_review_date ASC, created_at ASC
+                LIMIT ?
+                """,
+                (user_id, module, question_type, now, limit),
+            )
+        elif module:
+            cur = conn.execute(
+                """
+                SELECT * FROM mistakes
+                WHERE user_id = ? AND module = ? AND next_review_date <= ?
+                ORDER BY next_review_date ASC, created_at ASC
+                LIMIT ?
+                """,
+                (user_id, module, now, limit),
+            )
+        elif question_type:
+            cur = conn.execute(
+                """
+                SELECT * FROM mistakes
+                WHERE user_id = ? AND question_type = ? AND next_review_date <= ?
+                ORDER BY next_review_date ASC, created_at ASC
+                LIMIT ?
+                """,
+                (user_id, question_type, now, limit),
+            )
+        else:
+            cur = conn.execute(
+                """
+                SELECT * FROM mistakes
+                WHERE user_id = ? AND next_review_date <= ?
+                ORDER BY next_review_date ASC, created_at ASC
+                LIMIT ?
+                """,
+                (user_id, now, limit),
+            )
+        rows = []
+        for row in cur.fetchall():
+            item = dict(row)
+            item["tags"] = json.loads(item["tags"]) if item["tags"] else []
+            rows.append(item)
+        return rows
+    finally:
+        conn.close()
+
+
+def get_due_mistake_user_counts(now_ts: Optional[int] = None, limit: int = 500) -> list[Dict[str, Any]]:
+    conn = get_conn()
+    try:
+        now = int(now_ts or time.time())
+        cur = conn.execute(
+            """
+            SELECT user_id, COUNT(*) AS due_count, MIN(next_review_date) AS earliest_due
+            FROM mistakes
+            WHERE next_review_date <= ?
+            GROUP BY user_id
+            ORDER BY due_count DESC
+            LIMIT ?
+            """,
+            (now, limit),
+        )
+        return [dict(row) for row in cur.fetchall()]
+    finally:
+        conn.close()
+
+
+def get_mistake_by_id(mistake_id: str) -> Optional[Dict[str, Any]]:
+    conn = get_conn()
+    try:
+        cur = conn.execute("SELECT * FROM mistakes WHERE id = ?", (mistake_id,))
+        row = cur.fetchone()
+        if not row:
+            return None
+        mistake = dict(row)
+        mistake['tags'] = json.loads(mistake['tags']) if mistake['tags'] else []
+        return mistake
+    finally:
+        conn.close()
+
+
+def review_mistake(mistake_id: str, mastery_delta: float = 0.2) -> Optional[Dict[str, Any]]:
+    conn = get_conn()
+    try:
+        cur = conn.execute("SELECT mastery_level FROM mistakes WHERE id = ?", (mistake_id,))
+        row = cur.fetchone()
+        if not row:
+            return None
+        current_mastery = float(row['mastery_level'] or 0.0)
+        new_mastery = max(0.0, min(1.0, current_mastery + mastery_delta))
+        now = int(time.time())
+        # mastery越高，下次复习间隔越长
+        interval_days = 1 if new_mastery < 0.4 else (3 if new_mastery < 0.7 else 7)
+        next_review_date = now + interval_days * 24 * 3600
+        conn.execute(
+            "UPDATE mistakes SET last_reviewed_at = ?, next_review_date = ?, mastery_level = ? WHERE id = ?",
+            (now, next_review_date, new_mastery, mistake_id)
+        )
+        conn.commit()
+        return {
+            "last_reviewed_at": now,
+            "next_review_date": next_review_date,
+            "mastery_level": new_mastery,
+        }
+    finally:
+        conn.close()
+
+
+def get_mistake_stats(user_id: str) -> Dict[str, Any]:
+    conn = get_conn()
+    try:
+        cur = conn.execute(
+            "SELECT module, COUNT(*) as cnt FROM mistakes WHERE user_id = ? GROUP BY module",
+            (user_id,)
+        )
+        by_module = {row['module'] or "unknown": row['cnt'] for row in cur.fetchall()}
+        cur2 = conn.execute("SELECT COUNT(*) as total FROM mistakes WHERE user_id = ?", (user_id,))
+        total = cur2.fetchone()['total']
+        return {"total": total, "by_module": by_module}
+    finally:
+        conn.close()
+
+
+def get_mistake_analysis(user_id: str) -> Dict[str, Any]:
+    conn = get_conn()
+    try:
+        now = int(time.time())
+        total = conn.execute(
+            "SELECT COUNT(*) AS total FROM mistakes WHERE user_id = ?",
+            (user_id,),
+        ).fetchone()["total"]
+        due = conn.execute(
+            "SELECT COUNT(*) AS cnt FROM mistakes WHERE user_id = ? AND next_review_date <= ?",
+            (user_id, now),
+        ).fetchone()["cnt"]
+        avg_mastery = conn.execute(
+            "SELECT AVG(mastery_level) AS avg_mastery FROM mistakes WHERE user_id = ?",
+            (user_id,),
+        ).fetchone()["avg_mastery"] or 0.0
+        by_error_type = {
+            row["error_type"] or "general": row["cnt"]
+            for row in conn.execute(
+                "SELECT error_type, COUNT(*) AS cnt FROM mistakes WHERE user_id = ? GROUP BY error_type",
+                (user_id,),
+            ).fetchall()
+        }
+        by_difficulty = {
+            row["difficulty"] or "unknown": row["cnt"]
+            for row in conn.execute(
+                "SELECT difficulty, COUNT(*) AS cnt FROM mistakes WHERE user_id = ? GROUP BY difficulty",
+                (user_id,),
+            ).fetchall()
+        }
+        by_question_type = {
+            row["question_type"] or "general": row["cnt"]
+            for row in conn.execute(
+                "SELECT question_type, COUNT(*) AS cnt FROM mistakes WHERE user_id = ? GROUP BY question_type",
+                (user_id,),
+            ).fetchall()
+        }
+        by_error_and_question_type = {
+            f"{(row['error_type'] or 'general')}|{(row['question_type'] or 'general')}": row["cnt"]
+            for row in conn.execute(
+                """
+                SELECT error_type, question_type, COUNT(*) AS cnt
+                FROM mistakes
+                WHERE user_id = ?
+                GROUP BY error_type, question_type
+                """,
+                (user_id,),
+            ).fetchall()
+        }
+        vocab_test_wrong_count = int(by_error_and_question_type.get("vocabulary_test_wrong|vocabulary_test", 0))
+        vocab_test_wrong_ratio = round((vocab_test_wrong_count / total), 4) if total > 0 else 0.0
+        return {
+            "total": total,
+            "due_count": due,
+            "avg_mastery": round(float(avg_mastery), 4),
+            "by_error_type": by_error_type,
+            "by_difficulty": by_difficulty,
+            "by_question_type": by_question_type,
+            "by_error_and_question_type": by_error_and_question_type,
+            "vocabulary_test_wrong_count": vocab_test_wrong_count,
+            "vocabulary_test_wrong_ratio": vocab_test_wrong_ratio,
+        }
     finally:
         conn.close()
 
@@ -1176,3 +1842,119 @@ def get_user_vocabulary(user_id: str, limit: int = 100) -> list[Dict[str, Any]]:
         conn.close()
 
 
+def get_due_vocabulary(user_id: str, limit: int = 100, now_ts: Optional[int] = None) -> list[Dict[str, Any]]:
+    conn = get_conn()
+    try:
+        now = int(now_ts or time.time())
+        cur = conn.execute(
+            """
+            SELECT * FROM vocabulary
+            WHERE user_id = ? AND next_review_date <= ?
+            ORDER BY next_review_date ASC, created_at ASC
+            LIMIT ?
+            """,
+            (user_id, now, limit),
+        )
+        rows = []
+        for row in cur.fetchall():
+            item = dict(row)
+            item["examples"] = json.loads(item["examples"]) if item["examples"] else []
+            item["tags"] = json.loads(item["tags"]) if item["tags"] else []
+            rows.append(item)
+        return rows
+    finally:
+        conn.close()
+
+
+def get_due_vocabulary_user_counts(now_ts: Optional[int] = None, limit: int = 500) -> list[Dict[str, Any]]:
+    conn = get_conn()
+    try:
+        now = int(now_ts or time.time())
+        cur = conn.execute(
+            """
+            SELECT user_id, COUNT(*) AS due_count, MIN(next_review_date) AS earliest_due
+            FROM vocabulary
+            WHERE next_review_date <= ?
+            GROUP BY user_id
+            ORDER BY due_count DESC
+            LIMIT ?
+            """,
+            (now, limit),
+        )
+        return [dict(row) for row in cur.fetchall()]
+    finally:
+        conn.close()
+
+
+def get_vocabulary_by_id(vocab_id: str) -> Optional[Dict[str, Any]]:
+    conn = get_conn()
+    try:
+        cur = conn.execute("SELECT * FROM vocabulary WHERE id = ?", (vocab_id,))
+        row = cur.fetchone()
+        if not row:
+            return None
+        item = dict(row)
+        item["examples"] = json.loads(item["examples"]) if item["examples"] else []
+        item["tags"] = json.loads(item["tags"]) if item["tags"] else []
+        return item
+    finally:
+        conn.close()
+
+
+def review_vocabulary(vocab_id: str, mastery_delta: float = 0.15) -> Optional[Dict[str, Any]]:
+    conn = get_conn()
+    try:
+        cur = conn.execute("SELECT mastery_level FROM vocabulary WHERE id = ?", (vocab_id,))
+        row = cur.fetchone()
+        if not row:
+            return None
+        current_mastery = float(row["mastery_level"] or 0.0)
+        new_mastery = max(0.0, min(1.0, current_mastery + mastery_delta))
+        now = int(time.time())
+        interval_days = 1 if new_mastery < 0.35 else (3 if new_mastery < 0.6 else (7 if new_mastery < 0.85 else 14))
+        next_review_date = now + interval_days * 24 * 3600
+        conn.execute(
+            "UPDATE vocabulary SET last_reviewed_at = ?, next_review_date = ?, mastery_level = ? WHERE id = ?",
+            (now, next_review_date, new_mastery, vocab_id),
+        )
+        conn.commit()
+        return {
+            "last_reviewed_at": now,
+            "next_review_date": next_review_date,
+            "mastery_level": new_mastery,
+        }
+    finally:
+        conn.close()
+
+
+def get_vocabulary_stats(user_id: str) -> Dict[str, Any]:
+    conn = get_conn()
+    try:
+        now = int(time.time())
+        total = conn.execute(
+            "SELECT COUNT(*) AS total FROM vocabulary WHERE user_id = ?",
+            (user_id,),
+        ).fetchone()["total"]
+        due = conn.execute(
+            "SELECT COUNT(*) AS due FROM vocabulary WHERE user_id = ? AND next_review_date <= ?",
+            (user_id, now),
+        ).fetchone()["due"]
+        avg_mastery = conn.execute(
+            "SELECT AVG(mastery_level) AS avg_mastery FROM vocabulary WHERE user_id = ?",
+            (user_id,),
+        ).fetchone()["avg_mastery"] or 0.0
+        by_source = {
+            row["source_module"] or "unknown": row["cnt"]
+            for row in conn.execute(
+                "SELECT source_module, COUNT(*) AS cnt FROM vocabulary WHERE user_id = ? GROUP BY source_module",
+                (user_id,),
+            ).fetchall()
+        }
+        return {
+            "total": total,
+            "due_count": due,
+            "avg_mastery": round(float(avg_mastery), 4),
+            "by_source_module": by_source,
+        }
+    finally:
+        conn.close()

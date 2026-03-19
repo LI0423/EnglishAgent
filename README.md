@@ -112,6 +112,15 @@ RERANKER_MODEL=your_reranker_model
 
 # API密钥
 DASHSCOPE_API_KEY=your_dashscope_api_key
+
+# 对话模型（推荐 DeepSeek）
+LLM_PROVIDER=deepseek
+DEEPSEEK_BASE_URL=https://api.deepseek.com
+DEEPSEEK_MODEL=deepseek-chat
+DEEPSEEK_API_KEY=your_deepseek_api_key
+
+# 聊天历史（Milvus Lite）
+CHAT_MILVUS_DB_PATH=./chat_history.db
 ```
 
 5. **启动服务**

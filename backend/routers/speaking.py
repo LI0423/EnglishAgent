@@ -12,6 +12,9 @@ from backend.utils.tracking import get_learning_tracker
 
 router = APIRouter()
 
+def _model_dump(payload: BaseModel) -> dict:
+    return payload.model_dump() if hasattr(payload, "model_dump") else payload.dict()
+
 class Part(BaseModel):
     index: int
     type: str  # part1|part2|part3
@@ -24,29 +27,29 @@ class CreateSessionResponse(BaseModel):
     parts: List[Part]
 class SessionSummary(BaseModel):
     id: str
-    topic: str | None = None
-    created_at: int | None = None
-    transcript_id: str | None = None
+    topic: Optional[str] = None
+    created_at: Optional[int] = None
+    transcript_id: Optional[str] = None
 
 
 @router.get("/sessions", response_model=List[SessionSummary])
 async def list_sessions(limit: int = 20, offset: int = 0, current_user: dict = Depends(get_current_user)):
-    rows = db_list_sessions(limit=limit, offset=offset)
+    rows = db_list_sessions(user_id=str(current_user["id"]), limit=limit, offset=offset)
     return [SessionSummary(id=r.get("id"), topic=r.get("topic"), created_at=r.get("created_at"), transcript_id=r.get("transcript_id")) for r in rows]
 
 
 class SessionDetail(BaseModel):
     id: str
-    topic: str | None = None
+    topic: Optional[str] = None
     parts: List[Part] = []
-    transcript_text: str | None = None
-    transcript_id: str | None = None
-    created_at: int | None = None
+    transcript_text: Optional[str] = None
+    transcript_id: Optional[str] = None
+    created_at: Optional[int] = None
 
 
 @router.get("/session/{session_id}", response_model=SessionDetail)
 async def get_session_detail(session_id: str, current_user: dict = Depends(get_current_user)):
-    row = db_get_session(session_id)
+    row = db_get_session(session_id, user_id=str(current_user["id"]))
     if not row:
         raise HTTPException(status_code=404, detail="Session not found")
     parts = [Part(index=p.get("idx"), type=str(p.get("type")), prompt=str(p.get("prompt"))) for p in row.get("parts", [])]
@@ -65,7 +68,7 @@ async def create_session(current_user: dict = Depends(get_current_user)):
         Part(index=3, type="part3", prompt="How do books influence society?")
     ]
     # persist to DB
-    db_create_session(session_id, "General", [p.dict() for p in parts])
+    db_create_session(session_id, "General", [_model_dump(p) for p in parts], user_id=str(current_user["id"]))
     
     # 采集学习数据
     learning_tracker = get_learning_tracker()
@@ -102,7 +105,7 @@ class StartPartResponse(BaseModel):
 
 @router.post("/session/{session_id}/part/{part_index}/start", response_model=StartPartResponse)
 async def start_part(session_id: str, part_index: int, current_user: dict = Depends(get_current_user)):
-    if not db_get_session(session_id):
+    if not db_get_session(session_id, user_id=str(current_user["id"])):
         raise HTTPException(status_code=404, detail="Session not found")
     
     # 采集学习数据
@@ -130,10 +133,10 @@ class AudioIngestResponse(BaseModel):
 
 @router.post("/session/{session_id}/audio", response_model=AudioIngestResponse)
 async def ingest_audio(session_id: str, chunk: AudioChunk, current_user: dict = Depends(get_current_user)):
-    if not db_get_session(session_id):
+    if not db_get_session(session_id, user_id=str(current_user["id"])):
         raise HTTPException(status_code=404, detail="Session not found")
     if chunk.textPartial:
-        append_session_transcript(session_id, chunk.textPartial)
+        append_session_transcript(session_id, chunk.textPartial, user_id=str(current_user["id"]))
     
     # 采集学习数据
     learning_tracker = get_learning_tracker()
@@ -154,10 +157,10 @@ class FinishResponse(BaseModel):
 
 @router.post("/session/{session_id}/finish", response_model=FinishResponse)
 async def finish_session(session_id: str, current_user: dict = Depends(get_current_user)):
-    if not db_get_session(session_id):
+    if not db_get_session(session_id, user_id=str(current_user["id"])):
         raise HTTPException(status_code=404, detail="Session not found")
     transcript_id = str(uuid4())
-    db_finish_session(session_id, transcript_id)
+    db_finish_session(session_id, transcript_id, user_id=str(current_user["id"]))
     
     # 采集学习数据
     learning_tracker = get_learning_tracker()
@@ -184,5 +187,3 @@ async def finish_session(session_id: str, current_user: dict = Depends(get_curre
     )
     
     return FinishResponse(transcriptId=transcript_id)
-
-

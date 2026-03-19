@@ -10,7 +10,13 @@ celery_app = Celery(
     'english_agent_tasks',
     broker=os.getenv('CELERY_BROKER_URL', 'redis://localhost:6379/0'),
     backend=os.getenv('CELERY_RESULT_BACKEND', 'redis://localhost:6379/0'),
-    include=['backend.tasks.reminder_tasks', 'backend.tasks.learning_tasks', 'backend.tasks.intelligent_reminder_tasks', 'backend.tasks.vocabulary_tasks']
+    include=[
+        'backend.tasks.reminder_tasks',
+        'backend.tasks.learning_tasks',
+        'backend.tasks.intelligent_reminder_tasks',
+        'backend.tasks.vocabulary_tasks',
+        'backend.tasks.review_tasks',
+    ]
 )
 
 # 配置
@@ -32,6 +38,10 @@ celery_app.conf.update(
         'send-daily-vocabulary-email': {
             'task': 'backend.tasks.vocabulary_tasks.check_and_send_vocabulary_email',
             'schedule': 60.0,  # 每分钟检查一次
+        },
+        'schedule-due-review-reminders': {
+            'task': 'backend.tasks.review_tasks.schedule_due_review_reminders',
+            'schedule': 1800.0,  # 每30分钟检查一次
         },
     },
 )

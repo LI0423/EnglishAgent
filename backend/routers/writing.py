@@ -3,7 +3,9 @@ from pydantic import BaseModel, Field
 from typing import List, Dict, Any, Optional, Literal
 import re
 import time
+from uuid import uuid4
 from ..deps import get_current_user
+from ..db import save_mistake
 from backend.utils.tracking import get_learning_tracker
 
 router = APIRouter()
@@ -225,14 +227,62 @@ async def analyze_task1_writing(req: Task1WritingRequest, current_user: dict = D
             "sentence_count": len(sentences)
         }
     }
-    learning_tracker.track_exercise(current_user.id, exercise_data)
+    learning_tracker.track_exercise(current_user["id"], exercise_data)
     
     # 跟踪功能使用
     learning_tracker.track_feature_usage(
-        current_user.id, 
+        current_user["id"], 
         "writing_task1_analysis",
         {"chart_type": req.chart_type, "topic": req.topic}
     )
+
+    # 写作弱项自动沉淀到错题本，统一进入复习链路
+    # 仅记录中高严重度反馈，避免噪声过多
+    for item in feedback:
+        if item.severity not in {"medium", "high"}:
+            continue
+        save_mistake(
+            str(uuid4()),
+            str(current_user["id"]),
+            {
+                "module": "writing",
+                "question_id": f"task1_{req.chart_type}_{int(time.time())}",
+                "question_type": "writing_task1",
+                "error_type": f"writing_{item.category}",
+                "content": item.message,
+                "user_answer": "",
+                "correct_answer": "",
+                "explanation": item.suggestion,
+                "difficulty": "intermediate",
+                "tags": ["writing_task1", item.category],
+            },
+        )
+
+    # 分维度低分也做聚合沉淀
+    dim_scores = {
+        "structure": structure_score,
+        "content": content_score,
+        "vocabulary": vocabulary_score,
+        "grammar": grammar_score,
+    }
+    for dim, score in dim_scores.items():
+        if int(score) < 6:
+            save_mistake(
+                str(uuid4()),
+                str(current_user["id"]),
+                {
+                    "module": "writing",
+                    "question_id": f"task1_dim_{dim}_{int(time.time())}",
+                    "question_type": "writing_task1",
+                    "error_type": f"low_{dim}",
+                    "content": f"Task 1 {dim} score below target.",
+                    "user_answer": str(score),
+                    "correct_answer": ">=6",
+                    "explanation": f"Current {dim} score is {score}. Follow feedback suggestions for improvement.",
+                    "difficulty": "intermediate",
+                    "tags": ["writing_task1", f"low_{dim}"],
+                },
+            )
 
     return Task1Analysis(
         structure_score=structure_score,
@@ -269,11 +319,11 @@ async def save_task1_practice(req: Task1WritingRequest, current_user: dict = Dep
             "text_length": len(req.text)
         }
     }
-    learning_tracker.track_exercise(current_user.id, exercise_data)
+    learning_tracker.track_exercise(current_user["id"], exercise_data)
     
     # 跟踪功能使用
     learning_tracker.track_feature_usage(
-        current_user.id, 
+        current_user["id"], 
         "writing_task1_save",
         {"chart_type": req.chart_type, "topic": req.topic}
     )
@@ -296,7 +346,7 @@ async def get_task1_practices(page: int = 1, limit: int = 10, current_user: dict
     
     # 跟踪功能使用
     learning_tracker.track_feature_usage(
-        current_user.id, 
+        current_user["id"], 
         "writing_task1_practices",
         {"page": page, "limit": limit}
     )
@@ -317,7 +367,7 @@ async def get_common_task1_structures(chart_type: Optional[str] = None, current_
     
     # 跟踪功能使用
     learning_tracker.track_feature_usage(
-        current_user.id, 
+        current_user["id"], 
         "writing_task1_structures",
         {"chart_type": chart_type}
     )
@@ -338,7 +388,7 @@ async def get_common_task1_vocabulary(category: Optional[str] = None, current_us
     
     # 跟踪功能使用
     learning_tracker.track_feature_usage(
-        current_user.id, 
+        current_user["id"], 
         "writing_task1_vocabulary",
         {"category": category}
     )

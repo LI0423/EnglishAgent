@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 from ..db import get_conn
 from ..deps import get_current_user
 
-router = APIRouter(prefix="/history", tags=["history"])
+router = APIRouter(tags=["history"])
 
 class Session(BaseModel):
     id: str
@@ -19,15 +19,19 @@ class Session(BaseModel):
 
 @router.get("/sessions", response_model=List[Session])
 def get_recent_sessions(limit: int = 10, current_user: dict = Depends(get_current_user)):
+    user_id = current_user.get("id")
+    if not user_id:
+        return []
     conn = get_conn()
     try:
         cur = conn.execute("""
             SELECT s.id, s.topic, s.type, s.status, s.duration, s.accuracy, s.created_at, sc.overall as score
             FROM sessions s
             LEFT JOIN scores sc ON s.id = sc.session_id
+            WHERE s.user_id = ?
             ORDER BY s.created_at DESC
             LIMIT ?
-        """, (limit,))
+        """, (str(user_id), limit))
         rows = cur.fetchall()
         
         sessions = []

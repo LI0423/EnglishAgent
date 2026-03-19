@@ -15,3 +15,8 @@ INFO:root:使用云服务器generator模型
 INFO:     Started server process [7029]
 INFO:     Waiting for application startup.
 INFO:     Application startup complete.
+INFO:     Shutting down
+INFO:     Waiting for application shutdown.
+INFO:     Application shutdown complete.
+INFO:     Finished server process [7029]
+INFO:     Stopping reloader process [7025]

@@ -157,8 +157,23 @@ def _adjust_strategy_weight_by_intent(strategy: str, intent: Dict[str, Any], bas
 
 class Retriever:
     def __init__(self):
-        self.milvus_client = MilvusDBClient()
-        self.embedding_model = EmbeddingModel()
+        self.milvus_client = None
+        self.embedding_model = None
+        self._milvus_available = False
+        self._embedding_available = False
+
+        try:
+            self.milvus_client = MilvusDBClient()
+            self._milvus_available = True
+        except Exception:
+            self._milvus_available = False
+
+        try:
+            self.embedding_model = EmbeddingModel()
+            self._embedding_available = True
+        except Exception:
+            self._embedding_available = False
+
         # 更细粒度的召回策略配置
         self.retrieval_strategies = {
             "semantic": {"weight": 0.4, "top_k": 8},
@@ -167,6 +182,8 @@ class Retriever:
         }
 
     def auto_retrieve(self, query: str, intent: Dict[str, Any]):
+        if not self._milvus_available or self.milvus_client is None:
+            return
         target_word = intent["target_word"]
         chunk_type = intent["type"]
         if target_word:
@@ -180,10 +197,19 @@ class Retriever:
                            strategies: Optional[List[str]] = None, module: str = "general") -> List[Dict[str, Any]]:
 
         if strategies is None:
-            strategies = list(self.retrieval_strategies.keys())
-        
-        # 根据模块类型调整检索策略
-        adjusted_strategies = self._adjust_strategies_by_module(strategies, module)
+            # 未指定时，使用模块默认策略
+            adjusted_strategies = self._adjust_strategies_by_module(
+                list(self.retrieval_strategies.keys()),
+                module,
+            )
+        else:
+            # 指定策略时（如调度器下发），按传入顺序执行，只过滤未知策略
+            adjusted_strategies = [s for s in strategies if s in self.retrieval_strategies]
+            if not adjusted_strategies:
+                adjusted_strategies = self._adjust_strategies_by_module(
+                    list(self.retrieval_strategies.keys()),
+                    module,
+                )
         
         # 步骤1: 多路执行（根据意图调整策略）
         all_results = self._execute_intention_aware_retrieval(query, adjusted_strategies, intent, module)
@@ -224,14 +250,20 @@ class Retriever:
 
     def _semantic_retrieval(self, query: str, intent: Dict[str, Any], top_k: int) -> List[Dict]:
         """语义向量召回"""
+        if not self._milvus_available or not self._embedding_available:
+            return []
+
         # 根据意图调整查询
         enhanced_query = _enhance_query_for_intent(query, intent)
 
-        query_vector = self.embedding_model.encode(enhanced_query)
-        search_results = self.milvus_client.semantic_search(query_vector, top_k)
+        try:
+            query_vector = self.embedding_model.encode(enhanced_query)
+            search_results = self.milvus_client.semantic_search(query_vector, top_k)
+        except Exception:
+            return []
 
         formatted_results = []
-        for hit in search_results[0]:  # 假设返回格式为 [hits]
+        for hit in (search_results[0] if search_results else []):  # 假设返回格式为 [hits]
             doc = {
                 "id": hit.entity.get('id'),
                 "content": hit.entity.get('content'),
@@ -279,12 +311,17 @@ class Retriever:
 
     def _search_by_keyword(self, keyword: str, intent_type: str, limit: int):
         """基于意图的关键词搜索"""
+        if not self._milvus_available or self.milvus_client is None:
+            return []
         filter_condition = f'chunk_type == "{intent_type}" and word == "{keyword}"'
-        results = self.milvus_client.query(
-            filter=filter_condition,
-            output_fields=["id", "content", "word", "chunk_type"],
-            limit=limit
-        )
+        try:
+            results = self.milvus_client.query(
+                filter=filter_condition,
+                output_fields=["id", "content", "word", "chunk_type"],
+                limit=limit
+            )
+        except Exception:
+            return []
         return results
 
     def _search_by_keyword_intent(self, keyword: str, intent: Dict[str, Any], limit: int) -> List[Dict]:

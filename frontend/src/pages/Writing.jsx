@@ -1,8 +1,23 @@
 import { useEffect, useState, useRef } from 'react';
+import { NavLink } from 'react-router-dom';
 import { getCurrentUser } from '../utils/api';
 import { analyzeTask1Writing, saveTask1Practice } from '../utils/api';
 
 const Writing = () => {
+  const navItems = [
+    { to: '/', label: '🏠 首页' },
+    { to: '/chat', label: '🤖 智能对话' },
+    { to: '/listening', label: '🎧 听力练习' },
+    { to: '/reading', label: '📚 阅读练习' },
+    { to: '/writing', label: '📝 写作练习' },
+    { to: '/speaking', label: '💬 口语练习' },
+    { to: '/vocabulary', label: '📋 词汇学习' },
+    { to: '/mistakes', label: '🔖 错题本' },
+    { to: '/mock-exam', label: '🎯 模拟考试' },
+    { to: '/reports', label: '📊 学习报告' },
+    { to: '/profile', label: '👤 个人中心' },
+  ];
+
   const [userData, setUserData] = useState({ username: '李同学' });
   const [writingContent, setWritingContent] = useState('');
   const [wordCount, setWordCount] = useState(0);
@@ -178,16 +193,17 @@ const Writing = () => {
           </div>
           <nav className="sidebar-nav">
             <ul>
-              <li>🏠 首页</li>
-              <li>🎧 听力练习</li>
-              <li>📚 阅读练习</li>
-              <li className="active">📝 写作练习</li>
-              <li>💬 口语练习</li>
-              <li>📋 词汇学习</li>
-              <li>🔖 错题本</li>
-              <li>🎯 模拟考试</li>
-              <li>📊 学习报告</li>
-              <li>👤 个人中心</li>
+              {navItems.map((item) => (
+                <li key={item.to}>
+                  <NavLink
+                    to={item.to}
+                    end={item.to === '/'}
+                    className={({ isActive }) => `sidebar-nav-link${isActive ? ' active' : ''}`}
+                  >
+                    {item.label}
+                  </NavLink>
+                </li>
+              ))}
             </ul>
           </nav>
         </div>

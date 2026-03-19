@@ -1,4 +1,4 @@
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
 from agent_core.agents.base_agent import BaseAgent
@@ -20,7 +20,7 @@ class PlanningAgent(BaseAgent):
         availability = user_profile.get("availability", {"days_per_week": 7})
         days_per_week = availability.get("days_per_week", 7)
 
-        weeks_left = self._week_until_exam(user_profile.get("exam_date"))
+        weeks_left = self._weeks_until_exam(user_profile.get("exam_date"))
         duration_weeks = self._determine_duration_weeks(weeks_left)
 
         aggregated_weaknesses = self._aggregate_weaknesses(user_profile.get("weaknesses", []), assessment_results)
@@ -44,7 +44,7 @@ class PlanningAgent(BaseAgent):
             "在每次 checkpoint 后写下 3 条改进要点"
         ]
 
-        plan_id = f"plan_{user_id}_{datetime.now(datetime.UTC).strftime("%Y%m%dT%H%M%SZ")}"
+        plan_id = f"plan_{user_id}_{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}"
         plan = {
             "plan_id": plan_id,
             "user_id": user_id,

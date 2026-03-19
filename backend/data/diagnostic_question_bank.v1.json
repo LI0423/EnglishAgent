@@ -1,0 +1,182 @@
+{
+  "version": "v1.0.0",
+  "updated_at": "2026-02-11",
+  "modules": {
+    "listening": {
+      "basic": [
+        {
+          "id": "lst_b_1",
+          "question": "In the conversation, where will the student meet the tutor?",
+          "answer": "library",
+          "options": ["library", "cafeteria", "lab", "hall"]
+        },
+        {
+          "id": "lst_b_2",
+          "question": "What time does the lecture start?",
+          "answer": "9",
+          "options": ["8", "9", "10", "11"]
+        }
+      ],
+      "intermediate": [
+        {
+          "id": "lst_i_1",
+          "question": "Which problem does the speaker mention first?",
+          "answer": "budget",
+          "options": ["schedule", "budget", "staff", "venue"]
+        },
+        {
+          "id": "lst_i_2",
+          "question": "How many participants are expected?",
+          "answer": "120",
+          "options": ["80", "100", "120", "150"]
+        }
+      ],
+      "advanced": [
+        {
+          "id": "lst_a_1",
+          "question": "What is implied about the final proposal?",
+          "answer": "needs revision",
+          "options": ["approved", "rejected", "needs revision", "delayed"]
+        },
+        {
+          "id": "lst_a_2",
+          "question": "The speaker's tone can best be described as:",
+          "answer": "cautiously optimistic",
+          "options": ["frustrated", "neutral", "cautiously optimistic", "sarcastic"]
+        }
+      ]
+    },
+    "reading": {
+      "basic": [
+        {
+          "id": "rd_b_1",
+          "question": "T/F/NG: The passage says all cities reduced pollution by 2020.",
+          "answer": "false",
+          "options": ["true", "false", "not given"]
+        },
+        {
+          "id": "rd_b_2",
+          "question": "What is the main topic of paragraph 2?",
+          "answer": "transport policy",
+          "options": ["housing", "transport policy", "education", "tourism"]
+        }
+      ],
+      "intermediate": [
+        {
+          "id": "rd_i_1",
+          "question": "Which heading best matches paragraph 4?",
+          "answer": "technology adoption",
+          "options": ["economic decline", "technology adoption", "policy failure", "population ageing"]
+        },
+        {
+          "id": "rd_i_2",
+          "question": "The author's attitude to the study is mostly:",
+          "answer": "supportive",
+          "options": ["critical", "supportive", "uncertain", "dismissive"]
+        }
+      ],
+      "advanced": [
+        {
+          "id": "rd_a_1",
+          "question": "T/F/NG: The text proves causation rather than correlation.",
+          "answer": "not given",
+          "options": ["true", "false", "not given"]
+        },
+        {
+          "id": "rd_a_2",
+          "question": "Which inference is best supported by the final paragraph?",
+          "answer": "long-term monitoring is required",
+          "options": ["current data is sufficient", "policy is unnecessary", "long-term monitoring is required", "technology solved all issues"]
+        }
+      ]
+    },
+    "writing": {
+      "basic": [
+        {
+          "id": "wt_b_1",
+          "question": "Task 1: Which sentence is a valid overview?",
+          "answer": "overall, there was an upward trend",
+          "options": ["i think the chart is interesting", "overall, there was an upward trend", "in conclusion i like this topic", "the graph has many numbers"]
+        },
+        {
+          "id": "wt_b_2",
+          "question": "Choose the best connector for contrast.",
+          "answer": "however",
+          "options": ["therefore", "however", "for example", "meanwhile"]
+        }
+      ],
+      "intermediate": [
+        {
+          "id": "wt_i_1",
+          "question": "Task 2: Which thesis is clearer?",
+          "answer": "while both views have merit, i largely agree that public transport should be prioritized",
+          "options": ["this topic is very hard", "while both views have merit, i largely agree that public transport should be prioritized", "there are many opinions", "transport is important"]
+        },
+        {
+          "id": "wt_i_2",
+          "question": "Which paragraph order is most coherent?",
+          "answer": "thesis -> body1 -> body2 -> conclusion",
+          "options": ["examples -> thesis -> intro -> conclusion", "thesis -> body1 -> body2 -> conclusion", "conclusion -> body -> intro", "body2 -> body1 -> thesis -> intro"]
+        }
+      ],
+      "advanced": [
+        {
+          "id": "wt_a_1",
+          "question": "Best improvement for lexical resource:",
+          "answer": "replace repeated common words with precise topic vocabulary",
+          "options": ["use shorter essay", "replace repeated common words with precise topic vocabulary", "avoid any examples", "remove topic sentence"]
+        },
+        {
+          "id": "wt_a_2",
+          "question": "Most effective concession structure:",
+          "answer": "although opponents argue x, this view overlooks y",
+          "options": ["x is true and false", "although opponents argue x, this view overlooks y", "i do not know", "many people think many things"]
+        }
+      ]
+    },
+    "speaking": {
+      "basic": [
+        {
+          "id": "sp_b_1",
+          "question": "Part 1: Which answer is more natural?",
+          "answer": "i usually read before bed because it helps me relax",
+          "options": ["book good", "i usually read before bed because it helps me relax", "yes", "reading"]
+        },
+        {
+          "id": "sp_b_2",
+          "question": "Which phrase buys thinking time politely?",
+          "answer": "that's an interesting question",
+          "options": ["i don't know", "that's an interesting question", "next", "no comment"]
+        }
+      ],
+      "intermediate": [
+        {
+          "id": "sp_i_1",
+          "question": "Part 2: Best structure for a 2-minute talk:",
+          "answer": "context -> details -> reflection",
+          "options": ["reflection only", "context -> details -> reflection", "random ideas", "memorized list"]
+        },
+        {
+          "id": "sp_i_2",
+          "question": "Which response shows better coherence?",
+          "answer": "firstly... in addition... as a result...",
+          "options": ["firstly... in addition... as a result...", "and... and... and...", "i forgot", "none"]
+        }
+      ],
+      "advanced": [
+        {
+          "id": "sp_a_1",
+          "question": "Part 3: Which move adds analytical depth?",
+          "answer": "compare short-term and long-term impacts",
+          "options": ["repeat the question", "compare short-term and long-term impacts", "change topic", "answer with one word"]
+        },
+        {
+          "id": "sp_a_2",
+          "question": "Best way to improve grammatical range in speaking:",
+          "answer": "mix simple, compound and complex sentences naturally",
+          "options": ["speak very fast", "use only simple sentences", "mix simple, compound and complex sentences naturally", "memorize one template"]
+        }
+      ]
+    }
+  }
+}

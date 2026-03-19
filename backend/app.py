@@ -1,15 +1,32 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+import os
 
-from .routers import auth, speaking, scoring, report, profile, plan, reading, writing, listening, history, chat, diagnostic, reminder, stats
+from .routers import auth, speaking, scoring, report, profile, plan, reading, writing, listening, history, chat, diagnostic, reminder, stats, mistakes, vocabulary
 from .db import init_db
 
 
 app = FastAPI(title="IELTS-Agent API", version="0.1.0")
 
+
+def _load_cors_origins() -> list[str]:
+    raw = os.environ.get("CORS_ALLOW_ORIGINS", "").strip()
+    if raw:
+        origins = [x.strip() for x in raw.split(",") if x.strip()]
+    else:
+        origins = [
+            "http://localhost:5173",
+            "http://127.0.0.1:5173",
+            "http://localhost:3000",
+            "http://127.0.0.1:3000",
+        ]
+    # allow_credentials=True 时避免 wildcard 导致浏览器拒绝
+    origins = [o for o in origins if o != "*"]
+    return origins or ["http://localhost:5173"]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=_load_cors_origins(),
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -29,6 +46,8 @@ app.include_router(chat.router, prefix="/chat", tags=["chat"])  # 智能体对�
 app.include_router(diagnostic.router, prefix="/diagnostic", tags=["diagnostic"])  # 诊断测评
 app.include_router(reminder.router, prefix="/reminder", tags=["reminder"])  # 提醒管理
 app.include_router(stats.router)  # 学习统计
+app.include_router(mistakes.router, prefix="/mistakes", tags=["mistakes"])  # 错题管理
+app.include_router(vocabulary.router, prefix="/vocabulary", tags=["vocabulary"])  # 词汇学习
 
 
 @app.get("/")
@@ -39,5 +58,3 @@ async def root():
 @app.on_event("startup")
 async def on_startup():
     init_db()
-
-

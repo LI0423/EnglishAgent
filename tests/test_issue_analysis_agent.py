@@ -35,6 +35,13 @@ fake_agent_mod.translation_agent = types.SimpleNamespace(
 	generate_translation_question=lambda difficulty="medium": {"chinese_sentence": "测试句子", "difficulty": difficulty},
 	check_translation=lambda ch, ut: {"overall": 8.0},
 )
+fake_agent_mod.ielts_agent = types.SimpleNamespace(
+	route_and_execute=lambda query, session_id: {
+		"agent": "common_agent",
+		"response": "stub-response",
+		"routing": {"reason": "stub"},
+	}
+)
 sys.modules["agent_core.agent"] = fake_agent_mod
 
 res = issue_analysis_agent.analyze_and_route(q, user_context=ctx)

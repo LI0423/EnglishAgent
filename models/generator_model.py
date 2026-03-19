@@ -8,12 +8,34 @@ from openai import OpenAI
 load_dotenv()
 
 # 本地模型路径
-LOCAL_MODEL = os.getenv('QWEN_MODEL')
+LOCAL_MODEL = os.getenv("QWEN_MODEL")
 
-# 云服务器模型参数
-CLOUD_URL = os.getenv("QWEN_URL")
-CLOUD_KEY = os.getenv("QWEN_KEY")
-CLOUD_MODEL = os.getenv("QWEN_MODEL")
+
+def _build_cloud_config() -> dict:
+    """
+    构建云模型配置，优先使用 DeepSeek；
+    未配置 DeepSeek 时回退到历史 Qwen 兼容配置。
+    """
+    provider = os.getenv("LLM_PROVIDER", "").strip().lower()
+    if not provider:
+        provider = "deepseek" if os.getenv("DEEPSEEK_API_KEY") else "qwen"
+
+    if provider == "deepseek" and os.getenv("DEEPSEEK_API_KEY"):
+        return {
+            "provider": "deepseek",
+            "url": os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com").strip(),
+            "key": os.getenv("DEEPSEEK_API_KEY", "").strip(),
+            "model": os.getenv("DEEPSEEK_MODEL", "deepseek-chat").strip(),
+        }
+
+    # 历史兼容：Qwen/通义
+    model = os.getenv("TONGYI_MODEL", "").strip() or os.getenv("QWEN_MODEL", "").strip()
+    return {
+        "provider": "qwen",
+        "url": os.getenv("QWEN_URL", "").strip(),
+        "key": os.getenv("QWEN_KEY", "").strip(),
+        "model": model,
+    }
 
 # 配置日志
 logging.basicConfig(level=logging.INFO)
@@ -26,7 +48,14 @@ class GeneratorModel:
 
     def __new__(cls, model_path: str = LOCAL_MODEL, use_cloud: bool = True):
         # 使用配置作为key，支持不同配置的实例
-        instance_key = (model_path, use_cloud)
+        cloud_config = _build_cloud_config()
+        instance_key = (
+            model_path,
+            use_cloud,
+            cloud_config.get("provider"),
+            cloud_config.get("url"),
+            cloud_config.get("model"),
+        )
         
         with cls._lock:
             if instance_key not in cls._instances:
@@ -34,18 +63,18 @@ class GeneratorModel:
                 instance.model = None
                 instance.tokenizer = None
                 instance.use_cloud = use_cloud
-                instance.cloud_config = {
-                    'url': CLOUD_URL,
-                    'key': CLOUD_KEY,
-                    'model': CLOUD_MODEL
-                }
+                instance.cloud_config = cloud_config
                 instance.local_model_path = model_path
                 
                 if not use_cloud and model_path:
                     instance.load_model(model_path)
                 elif use_cloud and all(instance.cloud_config.values()):
                     instance.load_cloud_model()
-                    logging.info("使用云服务器generator模型")
+                    logging.info(
+                        "使用云服务器generator模型 provider=%s model=%s",
+                        instance.cloud_config.get("provider"),
+                        instance.cloud_config.get("model"),
+                    )
                 else:
                     logging.warning("模型配置不完整，需要手动加载")
                 
@@ -76,8 +105,8 @@ class GeneratorModel:
             
             try:
                 self.model = OpenAI(
-                    base_url=self.cloud_config['url'],
-                    api_key=self.cloud_config['key'],
+                    base_url=self.cloud_config["url"],
+                    api_key=self.cloud_config["key"],
                 )
                 logging.info("云服务器generator model 加载完成")
             except Exception as e:
@@ -100,11 +129,11 @@ class GeneratorModel:
                 ]
                 
                 response = self.model.chat.completions.create(
-                    model=self.cloud_config['model'],
+                    model=self.cloud_config["model"],
                     messages=messages,
-                    temperature=kwargs.get('temperature', 0.7),
-                    max_tokens=kwargs.get('max_tokens', 4000),
-                    stream=False
+                    temperature=kwargs.get("temperature", 0.7),
+                    max_tokens=kwargs.get("max_tokens", 4000),
+                    stream=False,
                 )
                 
                 # 云模型没有thinking content，返回空字符串

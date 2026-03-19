@@ -32,7 +32,10 @@ class TranslationAgent(BaseAgent):
         - topic: str
         """
         
-        _, response = self.qwen_llm.communicate(prompt)
+        try:
+            _, response = self.qwen_llm.communicate(prompt)
+        except Exception:
+            return self._fallback_question(difficulty)
         return self._parse_translation_question(response, default={
             "chinese_sentence": "",
             "difficulty": difficulty,
@@ -67,7 +70,7 @@ class TranslationAgent(BaseAgent):
         try:
             _, response = self.qwen_llm.communicate(prompt)
         except Exception:
-            return {"error": "翻译检查失败，请稍后重试"}
+            return self._fallback_evaluation(chinese_sentence, user_translation)
 
         return self._parse_json_response(response, default={
             "accuracy": 0.0,
@@ -79,6 +82,56 @@ class TranslationAgent(BaseAgent):
             "suggestions": [],
             "correct_translation": ""
         })    
+
+    def _parse_translation_question(self, response: str, default: Dict[str, Any]) -> Dict[str, Any]:
+        parsed = self._parse_json_response(response, default=default)
+        if not parsed.get("chinese_sentence"):
+            return default
+        parsed["difficulty"] = parsed.get("difficulty") or default.get("difficulty", "medium")
+        parsed["topic"] = parsed.get("topic") or "General"
+        return parsed
+
+    @staticmethod
+    def _fallback_question(difficulty: str) -> Dict[str, Any]:
+        questions = {
+            "easy": {
+                "chinese_sentence": "我每天早上都会读一篇英语短文。",
+                "difficulty": "easy",
+                "topic": "Daily Routine",
+            },
+            "hard": {
+                "chinese_sentence": "在数字化时代，批判性思维比单纯记忆知识更能决定一个人的长期竞争力。",
+                "difficulty": "hard",
+                "topic": "Education",
+            },
+        }
+        return questions.get(
+            difficulty,
+            {
+                "chinese_sentence": "随着科技的发展，人们的生活方式发生了显著变化。",
+                "difficulty": "medium",
+                "topic": "Technology",
+            },
+        )
+
+    @staticmethod
+    def _fallback_evaluation(chinese_sentence: str, user_translation: str) -> Dict[str, Any]:
+        has_content = bool((user_translation or "").strip())
+        score = 6.0 if has_content else 0.0
+        return {
+            "accuracy": score,
+            "fluency": score,
+            "grammar": score,
+            "vocabulary": score,
+            "overall": score,
+            "evaluation": "当前为离线评估结果，建议联网后获取更准确反馈。",
+            "suggestions": [
+                "先确保句子主干完整，再优化从句与修饰成分。",
+                "对照原句检查时态、一致性和关键词是否遗漏。",
+            ],
+            "correct_translation": "With the development of technology, people's lifestyles have changed significantly.",
+            "source_sentence": chinese_sentence,
+        }
     
     def _parse_json_response(self, response: str, default: Dict[str, Any]) -> Dict[str, Any]:
         """

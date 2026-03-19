@@ -1,8 +1,22 @@
 import { useEffect, useState } from 'react';
+import { NavLink } from 'react-router-dom';
 import { CartesianGrid, Cell, Line, LineChart, Pie, PieChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import { getCurrentUser, getPlans, getPlanTasks, getProfile, getStatsOverview } from '../utils/api';
 
 const Home = () => {
+  const navItems = [
+    { to: '/', label: '🏠 首页' },
+    { to: '/chat', label: '🤖 智能对话' },
+    { to: '/listening', label: '🎧 听力练习' },
+    { to: '/reading', label: '📚 阅读练习' },
+    { to: '/writing', label: '✍️ 写作练习' },
+    { to: '/speaking', label: '💬 口语练习' },
+    { to: '/vocabulary', label: '📝 词汇学习' },
+    { to: '/reports', label: '📊 学习报告' },
+    { to: '/plans', label: '🎯 个性化计划' },
+    { to: '/achievements', label: '🏆 成就中心' },
+  ];
+
   const [userData, setUserData] = useState({
     username: '李同学',
     learningDays: 15,
@@ -133,15 +147,17 @@ const Home = () => {
           </div>
           <nav className="sidebar-nav">
             <ul>
-              <li className="active">🏠 首页</li>
-              <li>🎧 听力练习</li>
-              <li>📚 阅读练习</li>
-              <li>✍️ 写作练习</li>
-              <li>💬 口语练习</li>
-              <li>📝 词汇学习</li>
-              <li>📊 学习报告</li>
-              <li>🎯 个性化计划</li>
-              <li>🏆 成就中心</li>
+              {navItems.map((item) => (
+                <li key={item.to}>
+                  <NavLink
+                    to={item.to}
+                    end={item.to === '/'}
+                    className={({ isActive }) => `sidebar-nav-link${isActive ? ' active' : ''}`}
+                  >
+                    {item.label}
+                  </NavLink>
+                </li>
+              ))}
             </ul>
           </nav>
         </div>

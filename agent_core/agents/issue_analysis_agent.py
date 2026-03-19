@@ -123,7 +123,7 @@ class IssueAnalysisAgent:
         logger.info(f"处理口语请求，是否有transcript: {transcript is not None}")
         
         try:
-            from .agent import speaking_agent
+            from agent_core.agent import speaking_agent
             logger.info("speaking_agent 导入成功")
         except Exception as e:
             logger.error(f"speaking_agent 导入失败: {e}")
@@ -144,7 +144,7 @@ class IssueAnalysisAgent:
         
         if essay:
             try:
-                from .agent import writing_agent
+                from agent_core.agent import writing_agent
                 logger.info("writing_agent 导入成功")
             except Exception as e:
                 logger.error(f"writing_agent 导入失败: {e}")
@@ -164,7 +164,7 @@ class IssueAnalysisAgent:
         
         if passage:
             try:
-                from .agent import reading_agent
+                from agent_core.agent import reading_agent
                 logger.info("reading_agent 导入成功")
             except Exception as e:
                 logger.error(f"reading_agent 导入失败: {e}")
@@ -185,7 +185,7 @@ class IssueAnalysisAgent:
         logger.info(f"处理听力请求，transcript长度: {len(transcript)}, 答案数量: {len(answers)}")
         
         try:
-            from .agent import listening_agent
+            from agent_core.agent import listening_agent
             logger.info("listening_agent 导入成功")
         except Exception as e:
             logger.error(f"listening_agent 导入失败: {e}")
@@ -204,7 +204,7 @@ class IssueAnalysisAgent:
         logger.info(f"处理学习计划请求，用户档案: {profile.get('name', '未知')}, 评估结果: {assessment is not None}")
         
         try:
-            from .agent import planning_agent
+            from agent_core.agent import planning_agent
             logger.info("planning_agent 导入成功")
         except Exception as e:
             logger.error(f"planning_agent 导入失败: {e}")
@@ -221,7 +221,7 @@ class IssueAnalysisAgent:
         logger.info(f"处理翻译请求，用户翻译: {ctx.get('user_translation') is not None}, 中文句子: {ctx.get('chinese_sentence') is not None}")
         
         try:
-            from .agent import translation_agent
+            from agent_core.agent import translation_agent
             logger.info("translation_agent 导入成功")
         except Exception as e:
             logger.error(f"translation_agent 导入失败: {e}")
@@ -240,7 +240,7 @@ class IssueAnalysisAgent:
         logger.info(f"处理深度搜索请求: {query[:100]}...")
         
         try:
-            from .agent import deep_search_agent
+            from agent_core.agent import deep_search_agent
             logger.info("deep_search_agent 导入成功")
         except Exception as e:
             logger.error(f"deep_search_agent 导入失败: {e}")

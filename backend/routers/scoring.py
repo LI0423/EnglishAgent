@@ -1,8 +1,9 @@
 from fastapi import APIRouter, HTTPException, Depends
 from pydantic import BaseModel
 from typing import List, Optional
+from uuid import uuid4
 from ..deps import get_current_user
-from ..db import get_transcript, save_score
+from ..db import get_transcript_for_user, save_mistake, save_score
 from agent_core import speaking_agent
 
 
@@ -47,7 +48,7 @@ class ScoringResponse(BaseModel):
 @router.post("/speaking", response_model=ScoringResponse)
 async def score_speaking(req: ScoringRequest, current_user: dict = Depends(get_current_user)):
     # Validate transcript exists
-    tr = get_transcript(req.transcriptId)
+    tr = get_transcript_for_user(req.transcriptId, str(current_user["id"]))
     if not tr:
         raise HTTPException(status_code=404, detail="Transcript not found")
     
@@ -89,7 +90,28 @@ async def score_speaking(req: ScoringRequest, current_user: dict = Depends(get_c
     # Persist score by session
     session_id = tr.get("session_id")
     save_score(str(session_id), scores.FC, scores.LR, scores.GR, scores.PR, evaluation["overall"])
-    
+
+    # 低分维度自动沉淀到错题本，进入复习链路
+    score_map = {"FC": scores.FC, "LR": scores.LR, "GR": scores.GR, "PR": scores.PR}
+    for dim, value in score_map.items():
+        if float(value) < 6.5:
+            save_mistake(
+                str(uuid4()),
+                str(current_user["id"]),
+                {
+                    "module": "speaking",
+                    "question_id": str(session_id),
+                    "question_type": "speaking_assessment",
+                    "error_type": f"low_{dim.lower()}",
+                    "content": f"Speaking assessment dimension {dim} below target.",
+                    "user_answer": str(value),
+                    "correct_answer": ">=6.5",
+                    "explanation": f"{dim} score is {value}. Review action items and practice drills.",
+                    "difficulty": "intermediate",
+                    "tags": ["speaking_assessment", dim],
+                },
+            )
+
     return ScoringResponse(
         scores=scores,
         overall=evaluation["overall"],
@@ -97,5 +119,4 @@ async def score_speaking(req: ScoringRequest, current_user: dict = Depends(get_c
         actionItems=action_items,
         highlights=highlights
     )
-
 

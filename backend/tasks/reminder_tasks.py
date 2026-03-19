@@ -1,11 +1,19 @@
 from ..tasks import celery_app
-from ..db import get_pending_reminders, update_reminder_status, get_reminder_preferences
+from ..db import (
+    get_pending_reminders,
+    get_reminder_preferences,
+    mark_reminder_retry,
+    update_reminder_metadata,
+    update_reminder_status,
+)
 import time
 import logging
 
 # 配置日志
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+MAX_RETRY_COUNT = 3
+RETRY_DELAY_SECONDS = 5 * 60
 
 
 @celery_app.task
@@ -64,18 +72,31 @@ def send_reminder(reminder_id):
         
         # 更新提醒状态
         if success:
+            metadata = dict(reminder.get("metadata") or {})
+            metadata["delivered_at"] = int(time.time())
+            metadata["last_error"] = ""
+            update_reminder_metadata(reminder_id, metadata)
             update_reminder_status(reminder_id, 'sent', int(time.time()))
             logger.info(f"Reminder {reminder_id} sent successfully")
         else:
-            update_reminder_status(reminder_id, 'failed')
-            logger.error(f"Failed to send reminder {reminder_id}")
+            retry_state = mark_reminder_retry(
+                reminder_id,
+                "delivery_failed",
+                max_retries=MAX_RETRY_COUNT,
+                retry_delay_seconds=RETRY_DELAY_SECONDS,
+            )
+            logger.error(f"Failed to send reminder {reminder_id}, state={retry_state}")
         
         return success
         
     except Exception as e:
         logger.error(f"Error sending reminder {reminder_id}: {e}")
-        # 更新提醒状态为失败
-        update_reminder_status(reminder_id, 'failed')
+        mark_reminder_retry(
+            reminder_id,
+            str(e),
+            max_retries=MAX_RETRY_COUNT,
+            retry_delay_seconds=RETRY_DELAY_SECONDS,
+        )
         return False
 
 

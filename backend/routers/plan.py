@@ -1,8 +1,9 @@
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Union
 import time
 import uuid
+from datetime import datetime
 from ..deps import get_current_user
 from ..db import (
     create_learning_plan,
@@ -20,6 +21,10 @@ from ..db import (
 
 
 router = APIRouter()
+
+
+def _model_dump(payload: BaseModel) -> dict:
+    return payload.model_dump() if hasattr(payload, "model_dump") else payload.dict()
 
 
 class Exercise(BaseModel):
@@ -67,17 +72,18 @@ class LearningPlan(BaseModel):
 
 
 class TaskItem(BaseModel):
-    id: str
+    id: Optional[str] = None
     title: str
-    description: str
-    time_required: int
+    description: str = ""
+    time_required: Optional[int] = None
+    duration_minutes: Optional[int] = None
     completed: bool = False
     progress: int = 0
     time_spent: int = 0
 
 
 class DailyTaskCreate(BaseModel):
-    date: int
+    date: Union[int, str]
     tasks: List[TaskItem]
 
 
@@ -109,6 +115,33 @@ class PlanCreateResponse(BaseModel):
     plan_id: str
     plan: LearningPlan
     message: str
+
+
+class PlanStatusUpdate(BaseModel):
+    status: str
+
+
+def _parse_date_to_ts(raw_date: Union[int, str]) -> int:
+    if isinstance(raw_date, int):
+        return raw_date
+    try:
+        return int(datetime.strptime(raw_date, "%Y-%m-%d").timestamp())
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="Invalid date format, expected YYYY-MM-DD") from exc
+
+
+def _normalize_task_item(task: TaskItem) -> Dict[str, Any]:
+    task_id = task.id or str(uuid.uuid4())
+    time_required = task.time_required if task.time_required is not None else (task.duration_minutes or 30)
+    return {
+        "id": task_id,
+        "title": task.title,
+        "description": task.description or "",
+        "time_required": time_required,
+        "completed": task.completed,
+        "progress": task.progress,
+        "time_spent": task.time_spent,
+    }
 
 
 
@@ -362,7 +395,7 @@ async def get_user_plans(
 @router.put("/{plan_id}/status")
 async def update_status(
     plan_id: str,
-    status: str,
+    payload: PlanStatusUpdate,
     current_user: dict = Depends(get_current_user)
 ):
     """更新学习计划状态"""
@@ -377,8 +410,8 @@ async def update_status(
     if plan["user_id"] != user_id:
         raise HTTPException(status_code=403, detail="Access denied")
     
-    update_plan_status(plan_id, status)
-    return {"message": "Plan status updated successfully", "status": status}
+    update_plan_status(plan_id, payload.status)
+    return {"message": "Plan status updated successfully", "status": payload.status}
 
 
 @router.post("/{plan_id}/tasks", response_model=DailyTask)
@@ -399,8 +432,10 @@ async def create_task(
     if plan["user_id"] != user_id:
         raise HTTPException(status_code=403, detail="Access denied")
     
+    target_date = _parse_date_to_ts(task_data.date)
+
     # 检查是否已存在该日期的任务
-    existing_task = get_daily_task_by_date(plan_id, task_data.date)
+    existing_task = get_daily_task_by_date(plan_id, target_date)
     if existing_task:
         raise HTTPException(status_code=400, detail="Task for this date already exists")
     
@@ -408,9 +443,9 @@ async def create_task(
     task_id = str(uuid.uuid4())
     
     # 转换任务数据
-    tasks = [task.dict() for task in task_data.tasks]
+    tasks = [_normalize_task_item(task) for task in task_data.tasks]
     
-    create_daily_task(task_id, plan_id, task_data.date, tasks)
+    create_daily_task(task_id, plan_id, target_date, tasks)
     
     # 获取创建的任务
     created_task = get_daily_task(task_id)
@@ -466,7 +501,7 @@ async def get_plan_tasks(
 @router.get("/{plan_id}/tasks/{date}", response_model=DailyTask)
 async def get_task_by_date(
     plan_id: str,
-    date: int,
+    date: Union[int, str],
     current_user: dict = Depends(get_current_user)
 ):
     """获取指定日期的每日任务"""
@@ -481,7 +516,8 @@ async def get_task_by_date(
     if plan["user_id"] != user_id:
         raise HTTPException(status_code=403, detail="Access denied")
     
-    task = get_daily_task_by_date(plan_id, date)
+    target_date = _parse_date_to_ts(date)
+    task = get_daily_task_by_date(plan_id, target_date)
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
     
@@ -540,7 +576,7 @@ async def update_progress(
     if not plan or plan["user_id"] != user_id:
         raise HTTPException(status_code=403, detail="Access denied")
     
-    update_task_progress(task_id, progress.dict())
+    update_task_progress(task_id, _model_dump(progress))
     return {"message": "Task progress updated successfully"}
 
 
@@ -583,5 +619,3 @@ async def get_progress(
         completion_rate=progress["completion_rate"],
         tasks=daily_tasks
     )
-
-

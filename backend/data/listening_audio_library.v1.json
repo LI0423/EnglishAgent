@@ -1,0 +1,29 @@
+{
+  "version": "listening-audio-v1",
+  "files": [
+    {
+      "id": "audio_001",
+      "title": "IELTS Listening Practice Test 1 - Section 1",
+      "duration": 600.0,
+      "url": "http://example.com/audio001.mp3",
+      "transcript": "This is a sample transcript...",
+      "difficulty": "easy"
+    },
+    {
+      "id": "audio_002",
+      "title": "IELTS Listening Practice Test 1 - Section 2",
+      "duration": 720.0,
+      "url": "http://example.com/audio002.mp3",
+      "transcript": "Another sample transcript...",
+      "difficulty": "intermediate"
+    },
+    {
+      "id": "audio_003",
+      "title": "IELTS Listening Practice Test 2 - Section 3",
+      "duration": 840.0,
+      "url": "http://example.com/audio003.mp3",
+      "transcript": "Advanced sample transcript...",
+      "difficulty": "advanced"
+    }
+  ]
+}

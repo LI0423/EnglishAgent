@@ -110,5 +110,4 @@ async def get_detailed_stats(
         
         return detailed_stats
     except Exception as e:
-        print(f"获取详细统计数据失败: {str(e)}")
-        # raise HTTPException(status_code=500, detail=f"获取详细统计数据失败: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"获取详细统计数据失败: {str(e)}")

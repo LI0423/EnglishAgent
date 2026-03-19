@@ -1,0 +1,41 @@
+{
+  "version": "reading-quiz-v1",
+  "questions": [
+    {
+      "id": "rd_q_001",
+      "prompt": "T/F/NG: The passage says all cities reduced pollution by 2020.",
+      "answer": "false",
+      "options": ["true", "false", "not given"],
+      "question_type": "tfng",
+      "difficulty": "basic",
+      "explanation": "The text does not claim all cities reduced pollution."
+    },
+    {
+      "id": "rd_q_002",
+      "prompt": "Which heading best matches paragraph 4?",
+      "answer": "technology adoption",
+      "options": ["economic decline", "technology adoption", "policy failure", "population ageing"],
+      "question_type": "heading_matching",
+      "difficulty": "intermediate",
+      "explanation": "Paragraph 4 mainly discusses technology adoption."
+    },
+    {
+      "id": "rd_q_003",
+      "prompt": "The author's attitude to the study is mostly:",
+      "answer": "supportive",
+      "options": ["critical", "supportive", "uncertain", "dismissive"],
+      "question_type": "attitude",
+      "difficulty": "intermediate",
+      "explanation": "The author presents the study in a supportive tone."
+    },
+    {
+      "id": "rd_q_004",
+      "prompt": "Which inference is best supported by the final paragraph?",
+      "answer": "long-term monitoring is required",
+      "options": ["current data is sufficient", "policy is unnecessary", "long-term monitoring is required", "technology solved all issues"],
+      "question_type": "inference",
+      "difficulty": "advanced",
+      "explanation": "The final paragraph stresses long-term monitoring."
+    }
+  ]
+}

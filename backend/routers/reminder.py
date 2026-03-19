@@ -18,6 +18,10 @@ from ..db import (
 router = APIRouter()
 
 
+def _model_dump(payload: BaseModel) -> dict:
+    return payload.model_dump() if hasattr(payload, "model_dump") else payload.dict()
+
+
 class ReminderCreate(BaseModel):
     type: str = "task"
     title: str
@@ -272,7 +276,7 @@ async def update_preferences(
         "enabled": 1 if preferences.enabled else 0,
         "channels": preferences.channels,
         "preferred_times": preferences.preferred_times,
-        "quiet_hours": preferences.quiet_hours.dict() if preferences.quiet_hours else {}
+        "quiet_hours": _model_dump(preferences.quiet_hours) if preferences.quiet_hours else {}
     }
     
     set_reminder_preferences(user_id, preferences_data)

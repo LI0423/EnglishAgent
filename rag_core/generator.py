@@ -156,4 +156,25 @@ class Generator:
 
     def generate(self, query: str, res: List[Dict[str, Any]], module: str = "general"):
         merge_result = merge_communication(query, res, module=module)
-        return self.generate_model.communicate(merge_result)
+        try:
+            _, content = self.generate_model.communicate(merge_result)
+            return content
+        except Exception:
+            return self._fallback_generate(query=query, docs=res, module=module)
+
+    @staticmethod
+    def _fallback_generate(query: str, docs: List[Dict[str, Any]], module: str = "general") -> str:
+        snippets: List[str] = []
+        for doc in (docs or [])[:3]:
+            content = str(doc.get("content", "")).strip()
+            if content:
+                snippets.append(content[:180])
+        if snippets:
+            joined = "\n".join(f"- {s}" for s in snippets)
+            return (
+                f"离线模式回答（{module}）：\n"
+                f"问题：{query}\n"
+                "基于可用资料的要点：\n"
+                f"{joined}"
+            )
+        return f"离线模式回答（{module}）：当前没有可用检索资料，建议补充上下文后重试。问题：{query}"
