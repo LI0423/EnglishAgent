@@ -75,6 +75,8 @@ from backend.routers import auth as auth_router
 from backend.routers import diagnostic as diagnostic_router
 from backend.routers import listening as listening_router
 from backend.routers import mistakes as mistakes_router
+from backend.routers import plan as plan_router
+from backend.routers import report as report_router
 from backend.routers import reading as reading_router
 from backend.routers import history as history_router
 from backend.routers import scoring as scoring_router
@@ -253,6 +255,16 @@ def test_listening_quiz_generate_submit_and_mistake_sink(isolated_db):
 
     mistakes = db_module.get_user_mistakes("u1", module="listening", limit=20, question_type="listening_quiz")
     assert len(mistakes) >= len(quiz.questions)
+    allowed_listening_error_types = {
+        "listening_option_misjudge",
+        "listening_spelling_or_form_error",
+        "listening_keyword_capture_miss",
+        "listening_location_mapping_error",
+        "listening_matching_mismatch",
+        "listening_content_miss",
+    }
+    assert all((m.get("error_type") in allowed_listening_error_types) for m in mistakes[: len(quiz.questions)])
+    assert all("taxonomy:v1" in (m.get("tags") or []) for m in mistakes[: len(quiz.questions)])
 
 
 def test_listening_question_bank_fallback_when_file_missing(isolated_db, monkeypatch):
@@ -295,6 +307,17 @@ def test_reading_quiz_generate_submit_and_mistake_sink(isolated_db):
 
     mistakes = db_module.get_user_mistakes("u1", module="reading", limit=20, question_type="reading_quiz")
     assert len(mistakes) >= len(quiz.questions)
+    allowed_reading_error_types = {
+        "reading_tfng_misjudge",
+        "reading_heading_mismatch",
+        "reading_attitude_misjudge",
+        "reading_inference_error",
+        "reading_matching_mismatch",
+        "reading_summary_fill_error",
+        "reading_content_miss",
+    }
+    assert all((m.get("error_type") in allowed_reading_error_types) for m in mistakes[: len(quiz.questions)])
+    assert all("taxonomy:v1" in (m.get("tags") or []) for m in mistakes[: len(quiz.questions)])
 
 
 def test_reading_question_bank_fallback_when_file_missing(isolated_db, monkeypatch):
@@ -393,6 +416,15 @@ def test_scoring_transcript_user_isolation_and_mistake_sink(isolated_db, monkeyp
         "u1", module="speaking", limit=20, question_type="speaking_assessment"
     )
     assert len(speaking_mistakes) >= 1
+    allowed_speaking_error_types = {
+        "speaking_fluency_coherence_low",
+        "speaking_lexical_resource_low",
+        "speaking_grammar_range_accuracy_low",
+        "speaking_pronunciation_low",
+        "speaking_general_low_band",
+    }
+    assert all((m.get("error_type") in allowed_speaking_error_types) for m in speaking_mistakes)
+    assert all("taxonomy:v1" in (m.get("tags") or []) for m in speaking_mistakes)
 
     with pytest.raises(Exception) as e:
         asyncio.run(
@@ -422,6 +454,20 @@ def test_writing_analysis_sinks_medium_high_feedback_to_mistakes(isolated_db):
 
     mistakes = db_module.get_user_mistakes("u1", module="writing", limit=50, question_type="writing_task1")
     assert len(mistakes) >= 1
+    allowed_writing_error_types = {
+        "writing_structure_issue",
+        "writing_content_issue",
+        "writing_vocabulary_issue",
+        "writing_grammar_issue",
+        "writing_structure_low_band",
+        "writing_content_low_band",
+        "writing_vocabulary_low_band",
+        "writing_grammar_low_band",
+        "writing_general_issue",
+        "writing_general_low_band",
+    }
+    assert all((m.get("error_type") in allowed_writing_error_types) for m in mistakes)
+    assert all("taxonomy:v1" in (m.get("tags") or []) for m in mistakes)
 
 
 def test_reminder_retry_backoff_and_failover(isolated_db, monkeypatch):
@@ -585,12 +631,138 @@ def test_mistakes_due_analysis_export_import(isolated_db):
     )
     assert any(x.id == created.id for x in due)
 
+    by_day = asyncio.run(
+        mistakes_router.list_mistakes(
+            module=None,
+            question_type=None,
+            created_from=0,
+            created_to=int(created.created_at),
+            limit=50,
+            current_user={"id": "u1", "username": "u1"},
+        )
+    )
+    assert any(x.id == created.id for x in by_day)
+
     analysis = asyncio.run(mistakes_router.analysis(current_user={"id": "u1", "username": "u1"}))
     assert analysis.total >= 1
     assert isinstance(analysis.by_error_type, dict)
     assert isinstance(analysis.by_error_and_question_type, dict)
     assert analysis.vocabulary_test_wrong_count >= 0
     assert analysis.vocabulary_test_wrong_ratio >= 0
+
+    review_queue = asyncio.run(
+        mistakes_router.prioritized_review_queue(
+            module=None,
+            question_type=None,
+            next_review_from=0,
+            next_review_to=10,
+            limit=20,
+            current_user={"id": "u1", "username": "u1"},
+        )
+    )
+    assert len(review_queue) >= 1
+    assert hasattr(review_queue[0], "priority_score")
+    assert hasattr(review_queue[0], "priority_reason")
+    assert hasattr(review_queue[0], "expected_mastery_gain")
+    assert hasattr(review_queue[0], "projected_mastery_after_review")
+    batch = asyncio.run(
+        mistakes_router.batch_review(
+            mistakes_router.BatchReviewRequest(
+                mistake_ids=[x.id for x in review_queue[:2]],
+                mastery_delta=0.2,
+            ),
+            current_user={"id": "u1", "username": "u1"},
+        )
+    )
+    assert batch.reviewed >= 1
+    assert batch.requested >= batch.reviewed
+
+    clusters = asyncio.run(
+        mistakes_router.clusters(
+            module=None,
+            question_type=None,
+            limit=10,
+            current_user={"id": "u1", "username": "u1"},
+        )
+    )
+    assert len(clusters) >= 1
+    assert hasattr(clusters[0], "count")
+    assert hasattr(clusters[0], "risk_score")
+
+    trends = asyncio.run(
+        mistakes_router.trends(
+            days=7,
+            module=None,
+            question_type=None,
+            current_user={"id": "u1", "username": "u1"},
+        )
+    )
+    assert len(trends) == 7
+    assert hasattr(trends[0], "created_count")
+    assert hasattr(trends[0], "reviewed_count")
+    assert hasattr(trends[0], "due_snapshot")
+    assert sum(getattr(x, "reviewed_count", 0) for x in trends) >= 1
+
+    hotspot_rows = asyncio.run(
+        mistakes_router.hotspots(
+            days=14,
+            module=None,
+            limit=20,
+            current_user={"id": "u1", "username": "u1"},
+        )
+    )
+    assert len(hotspot_rows) >= 1
+    assert hasattr(hotspot_rows[0], "module")
+    assert hasattr(hotspot_rows[0], "error_type")
+    assert hasattr(hotspot_rows[0], "risk_score")
+
+    rec_rows = asyncio.run(
+        mistakes_router.recommendations(
+            days=14,
+            module=None,
+            limit=5,
+            current_user={"id": "u1", "username": "u1"},
+        )
+    )
+    assert len(rec_rows) >= 1
+    assert hasattr(rec_rows[0], "rank")
+    assert hasattr(rec_rows[0], "action")
+    assert hasattr(rec_rows[0], "error_type")
+
+    module_rows = asyncio.run(
+        mistakes_router.module_comparison(
+            days=14,
+            current_user={"id": "u1", "username": "u1"},
+        )
+    )
+    assert len(module_rows) >= 1
+    assert hasattr(module_rows[0], "module")
+    assert hasattr(module_rows[0], "unique_error_types")
+    assert hasattr(module_rows[0], "risk_index")
+
+    weekly_focus = asyncio.run(
+        mistakes_router.weekly_focus(
+            days=14,
+            total_daily_minutes=90,
+            current_user={"id": "u1", "username": "u1"},
+        )
+    )
+    assert isinstance(weekly_focus.focus_module, str)
+    assert weekly_focus.total_daily_minutes >= 30
+    assert isinstance(weekly_focus.module_allocations, list)
+
+    review_effectiveness = asyncio.run(
+        mistakes_router.review_effectiveness(
+            days=7,
+            module=None,
+            question_type=None,
+            current_user={"id": "u1", "username": "u1"},
+        )
+    )
+    assert len(review_effectiveness) == 7
+    assert hasattr(review_effectiveness[0], "review_count")
+    assert hasattr(review_effectiveness[0], "avg_mastery_gain")
+    assert sum(getattr(x, "review_count", 0) for x in review_effectiveness) >= 1
 
     exported_json = asyncio.run(
         mistakes_router.export_mistakes(
@@ -711,6 +883,8 @@ def test_vocabulary_strategy_scheduler_behaviour(isolated_db):
     )
     assert len(root_session.words) == 1
     assert root_session.words[0].word == "transportation"
+    assert root_session.words[0].scheduler_score >= 0
+    assert root_session.words[0].scheduler_reason
 
     # context strategy: 优先带例句
     context_session = asyncio.run(
@@ -721,6 +895,7 @@ def test_vocabulary_strategy_scheduler_behaviour(isolated_db):
     )
     assert len(context_session.words) == 1
     assert len(context_session.words[0].examples) >= 1
+    assert context_session.words[0].scheduler_score >= 0
 
     # spaced strategy: 优先到期项
     conn = db_module.get_conn()
@@ -739,6 +914,28 @@ def test_vocabulary_strategy_scheduler_behaviour(isolated_db):
     )
     assert len(spaced_session.words) == 1
     assert spaced_session.words[0].word == "book"
+    assert spaced_session.words[0].scheduler_score >= 0
+
+    mixed_session = asyncio.run(
+        vocabulary_router.start_learning_session(
+            vocabulary_router.LearnSessionRequest(strategy="mixed", count=1),
+            current_user={"id": "u1", "username": "u1"},
+        )
+    )
+    assert len(mixed_session.words) == 1
+    assert mixed_session.strategy == "mixed"
+
+    insights = asyncio.run(
+        vocabulary_router.vocabulary_strategy_insights(
+            days=30,
+            current_user={"id": "u1", "username": "u1"},
+        )
+    )
+    assert len(insights) >= 1
+    assert any(getattr(x, "strategy", "") == "spaced" for x in insights)
+    assert all(getattr(x, "session_count", 0) >= 1 for x in insights)
+    assert all(hasattr(x, "avg_mastery_gain_7d") for x in insights)
+    assert all(hasattr(x, "wrong_rate_7d") for x in insights)
 
 
 def test_due_review_reminder_task_is_deduplicated(isolated_db):
@@ -861,7 +1058,12 @@ def test_vocabulary_test_wrong_answer_creates_mistake(isolated_db):
     assert submitted.correct == 0
 
     mistakes = db_module.get_user_mistakes("u1", module="vocabulary", limit=20)
-    assert any(m.get("question_id") == qid and m.get("question_type") == "vocabulary_test" for m in mistakes)
+    matched = [
+        m for m in mistakes
+        if m.get("question_id") == qid and m.get("question_type") == "vocabulary_test"
+    ]
+    assert len(matched) >= 1
+    assert any(any(str(t).startswith("word_id:") for t in (m.get("tags") or [])) for m in matched)
 
 
 def test_diagnostic_history_summary_trend(isolated_db):
@@ -991,3 +1193,205 @@ def test_mistakes_question_type_filter(isolated_db):
     )
     assert len(only_vocab_test) >= 1
     assert all(item.question_type == "vocabulary_test" for item in only_vocab_test)
+
+
+def test_plan_generate_weekly_tasks_skip_existing_day(isolated_db):
+    created = asyncio.run(
+        plan_router.create_plan(
+            plan_router.LearningPlanCreate(
+                target_band=7.0,
+                daily_minutes=90,
+                focus_modules=["listening", "reading"],
+                duration_weeks=2,
+            ),
+            current_user={"id": "u1", "username": "u1"},
+        )
+    )
+    plan_id = created.plan_id
+
+    first = asyncio.run(
+        plan_router.generate_weekly_tasks(
+            plan_id,
+            plan_router.WeeklyTaskGenerateRequest(days=3),
+            current_user={"id": "u1", "username": "u1"},
+        )
+    )
+    assert first.generated_days == 3
+    assert first.skipped_days == 0
+
+    second = asyncio.run(
+        plan_router.generate_weekly_tasks(
+            plan_id,
+            plan_router.WeeklyTaskGenerateRequest(days=3),
+            current_user={"id": "u1", "username": "u1"},
+        )
+    )
+    assert second.generated_days == 0
+    assert second.skipped_days == 3
+
+    tasks = db_module.get_daily_tasks_by_plan(plan_id)
+    assert len(tasks) == 3
+    assert all(len(item.get("tasks", [])) >= 2 for item in tasks)
+
+
+def test_plan_update_settings_daily_minutes_and_focus_modules(isolated_db):
+    created = asyncio.run(
+        plan_router.create_plan(
+            plan_router.LearningPlanCreate(
+                target_band=7.0,
+                daily_minutes=90,
+                focus_modules=["listening", "reading"],
+                duration_weeks=2,
+            ),
+            current_user={"id": "u1", "username": "u1"},
+        )
+    )
+    plan_id = created.plan_id
+
+    updated = asyncio.run(
+        plan_router.update_plan_settings(
+            plan_id,
+            plan_router.PlanSettingsUpdate(
+                daily_minutes=120,
+                focus_modules=["writing", "speaking"],
+                status="active",
+            ),
+            current_user={"id": "u1", "username": "u1"},
+        )
+    )
+    assert updated.daily_minutes == 120
+    assert updated.focus_modules == ["writing", "speaking"]
+    assert updated.status == "active"
+
+
+def test_plan_calibration_log_and_report_health(isolated_db):
+    created = asyncio.run(
+        plan_router.create_plan(
+            plan_router.LearningPlanCreate(
+                target_band=7.0,
+                daily_minutes=100,
+                focus_modules=["listening", "reading"],
+                duration_weeks=2,
+            ),
+            current_user={"id": "u1", "username": "u1"},
+        )
+    )
+    plan_id = created.plan_id
+
+    asyncio.run(
+        plan_router.generate_weekly_tasks(
+            plan_id,
+            plan_router.WeeklyTaskGenerateRequest(days=2),
+            current_user={"id": "u1", "username": "u1"},
+        )
+    )
+    tasks = db_module.get_daily_tasks_by_plan(plan_id)
+    first_daily = tasks[0]
+    first_task_id = first_daily["tasks"][0]["id"]
+    asyncio.run(
+        plan_router.update_progress(
+            first_daily["id"],
+            plan_router.TaskProgressUpdate(task_id=first_task_id, completed=True, progress=100, time_spent=30),
+            current_user={"id": "u1", "username": "u1"},
+        )
+    )
+
+    updated = asyncio.run(
+        plan_router.update_plan_settings(
+            plan_id,
+            plan_router.PlanSettingsUpdate(
+                daily_minutes=85,
+                focus_modules=["reading", "writing"],
+                source="auto_calibration",
+                note="test-calibration",
+            ),
+            current_user={"id": "u1", "username": "u1"},
+        )
+    )
+    assert updated.daily_minutes == 85
+
+    logs = db_module.get_plan_calibration_logs(plan_id, limit=10)
+    assert len(logs) >= 1
+    latest = logs[0]
+    assert latest["source"] == "auto_calibration"
+    assert latest["before_daily_minutes"] == 100
+    assert latest["after_daily_minutes"] == 85
+
+    health = asyncio.run(
+        report_router.get_current_plan_health(
+            plan_id=plan_id,
+            days=14,
+            current_user={"id": "u1", "username": "u1"},
+        )
+    )
+    assert health.plan_id == plan_id
+    assert health.task_total >= 1
+    assert health.task_done >= 1
+    assert health.health_level in {"healthy", "watch", "at_risk", "unknown"}
+
+    calibration_rows = asyncio.run(
+        report_router.get_current_plan_calibrations(
+            plan_id=plan_id,
+            limit=10,
+            current_user={"id": "u1", "username": "u1"},
+        )
+    )
+    assert len(calibration_rows) >= 1
+    assert calibration_rows[0].source == "auto_calibration"
+
+
+def test_plan_intervention_preview_and_apply(isolated_db):
+    created = asyncio.run(
+        plan_router.create_plan(
+            plan_router.LearningPlanCreate(
+                target_band=6.5,
+                daily_minutes=80,
+                focus_modules=["reading", "writing"],
+                duration_weeks=2,
+            ),
+            current_user={"id": "u1", "username": "u1"},
+        )
+    )
+    plan_id = created.plan_id
+
+    preview = asyncio.run(
+        plan_router.get_intervention_preview(
+            plan_id=plan_id,
+            days=14,
+            remedial_days=3,
+            current_user={"id": "u1", "username": "u1"},
+        )
+    )
+    assert preview.plan_id == plan_id
+    assert preview.remedial_days == 3
+    assert len(preview.intervention_daily_tasks) >= 1
+
+    before_tasks = db_module.get_daily_tasks_by_plan(plan_id)
+    apply_result = asyncio.run(
+        plan_router.apply_intervention_plan(
+            plan_id=plan_id,
+            payload=plan_router.InterventionApplyRequest(days=14, remedial_days=3),
+            current_user={"id": "u1", "username": "u1"},
+        )
+    )
+    assert apply_result.intervention_batch_id
+    assert apply_result.task_count_added == 3
+    after_tasks = db_module.get_daily_tasks_by_plan(plan_id)
+    assert len(after_tasks) >= len(before_tasks)
+    added = 0
+    for day in after_tasks:
+        for t in day.get("tasks", []):
+            if str(t.get("title", "")).startswith("干预 ·"):
+                added += 1
+    assert added >= 3
+
+    intervention_status = asyncio.run(
+        report_router.get_current_plan_intervention_status(
+            plan_id=plan_id,
+            days=14,
+            current_user={"id": "u1", "username": "u1"},
+        )
+    )
+    assert intervention_status.plan_id == plan_id
+    assert intervention_status.intervention_total >= 3
+    assert intervention_status.batch_count >= 1

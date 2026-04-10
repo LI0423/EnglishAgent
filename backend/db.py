@@ -2,6 +2,7 @@ import os
 import sqlite3
 import time
 import json
+from uuid import uuid4
 from typing import Optional, Tuple, Any, Dict
 
 
@@ -12,6 +13,41 @@ def get_conn():
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     return conn
+
+
+def _normalize_vocab_word(word: Any) -> str:
+    return str(word or "").strip().lower()
+
+
+def _dedupe_vocabulary_rows(conn: sqlite3.Connection) -> int:
+    cur = conn.execute(
+        """
+        SELECT id, user_id, word, mastery_level, last_reviewed_at, created_at
+        FROM vocabulary
+        ORDER BY
+          user_id ASC,
+          lower(trim(word)) ASC,
+          mastery_level DESC,
+          last_reviewed_at DESC,
+          created_at DESC,
+          id ASC
+        """
+    )
+    seen_keys: set[tuple[str, str]] = set()
+    to_delete: list[str] = []
+    for row in cur.fetchall():
+        user_id = str(row["user_id"] or "").strip()
+        word_key = _normalize_vocab_word(row["word"])
+        if not user_id or not word_key:
+            continue
+        key = (user_id, word_key)
+        if key in seen_keys:
+            to_delete.append(str(row["id"]))
+        else:
+            seen_keys.add(key)
+    if to_delete:
+        conn.executemany("DELETE FROM vocabulary WHERE id = ?", [(x,) for x in to_delete])
+    return len(to_delete)
 
 
 def init_db():
@@ -261,8 +297,8 @@ def init_db():
             """
         )
             conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS user_activities (
+                """
+                CREATE TABLE IF NOT EXISTS user_activities (
               id TEXT PRIMARY KEY,
               user_id TEXT,
               activity_type TEXT,
@@ -272,7 +308,16 @@ def init_db():
               metadata TEXT,
               created_at INTEGER,
               updated_at INTEGER
-            );
+                );
+                """
+        )
+        # vocabulary hardening: clean duplicated words first, then enforce uniqueness
+        _dedupe_vocabulary_rows(conn)
+        conn.execute(
+            """
+            CREATE UNIQUE INDEX IF NOT EXISTS ux_vocabulary_user_word_norm
+            ON vocabulary(user_id, lower(trim(word)))
+            WHERE word IS NOT NULL AND trim(word) <> ''
             """
         )
         conn.commit()
@@ -864,6 +909,16 @@ def list_user_plans(user_id: str) -> list[Dict[str, Any]]:
         conn.close()
 
 
+def get_latest_user_plan(user_id: str) -> Optional[Dict[str, Any]]:
+    plans = list_user_plans(user_id)
+    if not plans:
+        return None
+    for plan in plans:
+        if str(plan.get("status", "")).lower() == "active":
+            return plan
+    return plans[0]
+
+
 def update_plan_status(plan_id: str, status: str) -> None:
     conn = get_conn()
     try:
@@ -874,6 +929,297 @@ def update_plan_status(plan_id: str, status: str) -> None:
         conn.commit()
     finally:
         conn.close()
+
+
+def update_learning_plan_settings(
+    plan_id: str,
+    *,
+    daily_minutes: Optional[int] = None,
+    focus_modules: Optional[list[str]] = None,
+    status: Optional[str] = None,
+) -> None:
+    updates: list[str] = []
+    params: list[Any] = []
+    if daily_minutes is not None:
+        updates.append("daily_minutes = ?")
+        params.append(int(daily_minutes))
+    if focus_modules is not None:
+        updates.append("focus_modules = ?")
+        params.append(json.dumps([str(x) for x in focus_modules if str(x).strip()]))
+    if status is not None:
+        updates.append("status = ?")
+        params.append(str(status))
+    if not updates:
+        return
+
+    params.append(str(plan_id))
+    conn = get_conn()
+    try:
+        conn.execute(
+            f"UPDATE learning_plans SET {', '.join(updates)} WHERE id = ?",
+            params,
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def create_plan_calibration_log(
+    log_id: str,
+    *,
+    plan_id: str,
+    user_id: str,
+    before_daily_minutes: Optional[int],
+    after_daily_minutes: Optional[int],
+    before_focus_modules: Optional[list[str]],
+    after_focus_modules: Optional[list[str]],
+    source: str = "manual",
+    note: str = "",
+) -> None:
+    conn = get_conn()
+    try:
+        conn.execute(
+            """
+            INSERT INTO plan_calibration_logs (
+              id, plan_id, user_id, before_daily_minutes, after_daily_minutes,
+              before_focus_modules, after_focus_modules, source, note, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                str(log_id),
+                str(plan_id),
+                str(user_id),
+                before_daily_minutes if before_daily_minutes is not None else None,
+                after_daily_minutes if after_daily_minutes is not None else None,
+                json.dumps(before_focus_modules or []),
+                json.dumps(after_focus_modules or []),
+                str(source or "manual"),
+                str(note or ""),
+                int(time.time()),
+            ),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def get_plan_calibration_logs(plan_id: str, limit: int = 20) -> list[Dict[str, Any]]:
+    conn = get_conn()
+    try:
+        cur = conn.execute(
+            """
+            SELECT *
+            FROM plan_calibration_logs
+            WHERE plan_id = ?
+            ORDER BY created_at DESC
+            LIMIT ?
+            """,
+            (str(plan_id), max(1, int(limit))),
+        )
+        rows: list[Dict[str, Any]] = []
+        for row in cur.fetchall():
+            item = dict(row)
+            item["before_focus_modules"] = json.loads(item["before_focus_modules"]) if item.get("before_focus_modules") else []
+            item["after_focus_modules"] = json.loads(item["after_focus_modules"]) if item.get("after_focus_modules") else []
+            rows.append(item)
+        return rows
+    finally:
+        conn.close()
+
+
+def _infer_task_module(task: Dict[str, Any]) -> str:
+    raw_module = str(task.get("module") or "").strip().lower()
+    if raw_module:
+        return raw_module
+    raw_text = f"{task.get('title', '')} {task.get('description', '')}".lower()
+    if "听力" in raw_text or "listening" in raw_text:
+        return "listening"
+    if "阅读" in raw_text or "reading" in raw_text:
+        return "reading"
+    if "写作" in raw_text or "writing" in raw_text:
+        return "writing"
+    if "口语" in raw_text or "speaking" in raw_text:
+        return "speaking"
+    if "词汇" in raw_text or "vocabulary" in raw_text:
+        return "vocabulary"
+    return "unknown"
+
+
+def get_plan_execution_health(plan_id: str, days: int = 14, now_ts: Optional[int] = None) -> Dict[str, Any]:
+    now = int(now_ts or time.time())
+    days = max(1, min(90, int(days)))
+    start_ts = now - days * 24 * 3600
+    tasks = get_daily_tasks_by_plan(plan_id)
+    window_rows = [x for x in tasks if int(x.get("date") or 0) >= start_ts]
+
+    task_total = 0
+    task_done = 0
+    scheduled_days = len(window_rows)
+    completed_days = 0
+    daily_trend: list[Dict[str, Any]] = []
+    module_stats: Dict[str, Dict[str, Any]] = {}
+
+    for row in sorted(window_rows, key=lambda x: int(x.get("date") or 0)):
+        date_ts = int(row.get("date") or 0)
+        date_text = time.strftime("%Y-%m-%d", time.localtime(date_ts)) if date_ts else ""
+        items = row.get("tasks") or []
+        total = len(items)
+        done = sum(1 for t in items if bool(t.get("completed")))
+        rate = (done / total) * 100 if total > 0 else 0.0
+        if total > 0 and done == total:
+            completed_days += 1
+        task_total += total
+        task_done += done
+        daily_trend.append(
+            {
+                "date": date_text,
+                "date_ts": date_ts,
+                "done": done,
+                "total": total,
+                "completion_rate": round(rate, 2),
+            }
+        )
+
+        for t in items:
+            module = _infer_task_module(t)
+            if module not in module_stats:
+                module_stats[module] = {"module": module, "done": 0, "total": 0}
+            module_stats[module]["total"] += 1
+            if bool(t.get("completed")):
+                module_stats[module]["done"] += 1
+
+    avg_completion = (task_done / task_total) * 100 if task_total > 0 else 0.0
+    day_completion_rate = (completed_days / scheduled_days) * 100 if scheduled_days > 0 else 0.0
+
+    streak = 0
+    by_date = {x["date"]: x for x in daily_trend}
+    for idx in range(days):
+        cur_ts = now - idx * 24 * 3600
+        cur_day = time.strftime("%Y-%m-%d", time.localtime(cur_ts))
+        row = by_date.get(cur_day)
+        if not row or row["total"] <= 0 or row["done"] < row["total"]:
+            break
+        streak += 1
+
+    module_rows: list[Dict[str, Any]] = []
+    for m in module_stats.values():
+        rate = (m["done"] / m["total"]) * 100 if m["total"] > 0 else 0.0
+        module_rows.append(
+            {
+                "module": m["module"],
+                "done": m["done"],
+                "total": m["total"],
+                "completion_rate": round(rate, 2),
+            }
+        )
+    module_rows.sort(key=lambda x: x["total"], reverse=True)
+
+    health_level = "healthy"
+    if avg_completion < 50 or day_completion_rate < 40:
+        health_level = "at_risk"
+    elif avg_completion < 75:
+        health_level = "watch"
+
+    return {
+        "plan_id": str(plan_id),
+        "days": days,
+        "scheduled_days": scheduled_days,
+        "completed_days": completed_days,
+        "day_completion_rate": round(day_completion_rate, 2),
+        "task_total": task_total,
+        "task_done": task_done,
+        "task_completion_rate": round(avg_completion, 2),
+        "streak_days": streak,
+        "health_level": health_level,
+        "daily_trend": daily_trend,
+        "module_stats": module_rows,
+    }
+
+
+def get_plan_intervention_status(plan_id: str, days: int = 14, now_ts: Optional[int] = None) -> Dict[str, Any]:
+    now = int(now_ts or time.time())
+    days = max(1, min(90, int(days)))
+    start_ts = now - days * 24 * 3600
+    rows = get_daily_tasks_by_plan(plan_id)
+
+    total = 0
+    done = 0
+    module_map: Dict[str, Dict[str, Any]] = {}
+    daily_map: Dict[int, Dict[str, Any]] = {}
+    latest_batch_id = ""
+    latest_batch_created_at = 0
+    batch_counts: Dict[str, int] = {}
+
+    for row in rows:
+        date_ts = int(row.get("date") or 0)
+        if date_ts < start_ts:
+            continue
+        day_key = int(date_ts // 86400) * 86400
+        if day_key not in daily_map:
+            daily_map[day_key] = {"day_start": day_key, "done": 0, "total": 0}
+        for item in (row.get("tasks") or []):
+            if str(item.get("kind") or "") != "intervention":
+                continue
+            total += 1
+            daily_map[day_key]["total"] += 1
+            module = _infer_task_module(item)
+            if module not in module_map:
+                module_map[module] = {"module": module, "done": 0, "total": 0}
+            module_map[module]["total"] += 1
+            if bool(item.get("completed")):
+                done += 1
+                daily_map[day_key]["done"] += 1
+                module_map[module]["done"] += 1
+
+            batch_id = str(item.get("intervention_batch_id") or "")
+            if batch_id:
+                batch_counts[batch_id] = batch_counts.get(batch_id, 0) + 1
+                created_at = int(item.get("intervention_created_at") or 0)
+                if created_at >= latest_batch_created_at:
+                    latest_batch_created_at = created_at
+                    latest_batch_id = batch_id
+
+    daily_trend: list[Dict[str, Any]] = []
+    for i in range(days):
+        day_start = int((start_ts // 86400) * 86400 + i * 86400)
+        row = daily_map.get(day_start, {"done": 0, "total": 0})
+        rate = (row["done"] / row["total"] * 100) if row["total"] > 0 else 0.0
+        daily_trend.append(
+            {
+                "day_start": day_start,
+                "date": time.strftime("%m-%d", time.localtime(day_start)),
+                "done": int(row["done"]),
+                "total": int(row["total"]),
+                "completion_rate": round(rate, 2),
+            }
+        )
+
+    module_rows: list[Dict[str, Any]] = []
+    for x in module_map.values():
+        rate = (x["done"] / x["total"] * 100) if x["total"] > 0 else 0.0
+        module_rows.append(
+            {
+                "module": x["module"],
+                "done": int(x["done"]),
+                "total": int(x["total"]),
+                "completion_rate": round(rate, 2),
+            }
+        )
+    module_rows.sort(key=lambda x: x["total"], reverse=True)
+
+    overall_rate = (done / total * 100) if total > 0 else 0.0
+    return {
+        "plan_id": str(plan_id),
+        "days": days,
+        "intervention_total": int(total),
+        "intervention_done": int(done),
+        "intervention_completion_rate": round(overall_rate, 2),
+        "latest_batch_id": latest_batch_id,
+        "latest_batch_created_at": int(latest_batch_created_at),
+        "batch_count": len(batch_counts),
+        "daily_trend": daily_trend,
+        "module_stats": module_rows,
+    }
 
 
 def create_daily_task(task_id: str, plan_id: str, date: int, tasks: list) -> None:
@@ -967,6 +1313,31 @@ def update_task_progress(task_id: str, progress: dict) -> None:
             (json.dumps(tasks), 1 if all_completed else 0, int(time.time()), task_id)
         )
         conn.commit()
+    finally:
+        conn.close()
+
+
+def append_daily_task_items(task_id: str, items: list[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    conn = get_conn()
+    try:
+        cur = conn.execute("SELECT * FROM daily_tasks WHERE id = ?", (task_id,))
+        row = cur.fetchone()
+        if not row:
+            return None
+        task = dict(row)
+        existing_tasks = json.loads(task["tasks"]) if task.get("tasks") else []
+        merged_tasks = existing_tasks + list(items or [])
+        all_completed = all(bool(x.get("completed")) for x in merged_tasks) if merged_tasks else False
+        now = int(time.time())
+        conn.execute(
+            "UPDATE daily_tasks SET tasks = ?, completed = ?, updated_at = ? WHERE id = ?",
+            (json.dumps(merged_tasks), 1 if all_completed else 0, now, task_id),
+        )
+        conn.commit()
+        task["tasks"] = merged_tasks
+        task["completed"] = 1 if all_completed else 0
+        task["updated_at"] = now
+        return task
     finally:
         conn.close()
 
@@ -1552,33 +1923,42 @@ def get_user_mistakes(
     module: Optional[str] = None,
     limit: int = 50,
     question_type: Optional[str] = None,
+    error_type: Optional[str] = None,
+    created_from: Optional[int] = None,
+    created_to: Optional[int] = None,
+    next_review_from: Optional[int] = None,
+    next_review_to: Optional[int] = None,
 ) -> list[Dict[str, Any]]:
     conn = get_conn()
     try:
-        if module and question_type:
-            cur = conn.execute(
-                """
-                SELECT * FROM mistakes
-                WHERE user_id = ? AND module = ? AND question_type = ?
-                ORDER BY created_at DESC LIMIT ?
-                """,
-                (user_id, module, question_type, limit),
-            )
-        elif module:
-            cur = conn.execute(
-                "SELECT * FROM mistakes WHERE user_id = ? AND module = ? ORDER BY created_at DESC LIMIT ?",
-                (user_id, module, limit)
-            )
-        elif question_type:
-            cur = conn.execute(
-                "SELECT * FROM mistakes WHERE user_id = ? AND question_type = ? ORDER BY created_at DESC LIMIT ?",
-                (user_id, question_type, limit),
-            )
-        else:
-            cur = conn.execute(
-                "SELECT * FROM mistakes WHERE user_id = ? ORDER BY created_at DESC LIMIT ?",
-                (user_id, limit)
-            )
+        conditions = ["user_id = ?"]
+        params: list[Any] = [user_id]
+        if module:
+            conditions.append("module = ?")
+            params.append(module)
+        if question_type:
+            conditions.append("question_type = ?")
+            params.append(question_type)
+        if error_type:
+            conditions.append("error_type = ?")
+            params.append(error_type)
+        if created_from is not None:
+            conditions.append("created_at >= ?")
+            params.append(int(created_from))
+        if created_to is not None:
+            conditions.append("created_at <= ?")
+            params.append(int(created_to))
+        if next_review_from is not None:
+            conditions.append("next_review_date >= ?")
+            params.append(int(next_review_from))
+        if next_review_to is not None:
+            conditions.append("next_review_date <= ?")
+            params.append(int(next_review_to))
+        where_clause = " AND ".join(conditions)
+        cur = conn.execute(
+            f"SELECT * FROM mistakes WHERE {where_clause} ORDER BY created_at DESC LIMIT ?",
+            (*params, limit),
+        )
         mistakes = []
         for row in cur.fetchall():
             mistake = dict(row)
@@ -1686,7 +2066,14 @@ def get_mistake_by_id(mistake_id: str) -> Optional[Dict[str, Any]]:
 def review_mistake(mistake_id: str, mastery_delta: float = 0.2) -> Optional[Dict[str, Any]]:
     conn = get_conn()
     try:
-        cur = conn.execute("SELECT mastery_level FROM mistakes WHERE id = ?", (mistake_id,))
+        cur = conn.execute(
+            """
+            SELECT id, user_id, module, question_type, error_type, mastery_level
+            FROM mistakes
+            WHERE id = ?
+            """,
+            (mistake_id,),
+        )
         row = cur.fetchone()
         if not row:
             return None
@@ -1699,6 +2086,28 @@ def review_mistake(mistake_id: str, mastery_delta: float = 0.2) -> Optional[Dict
         conn.execute(
             "UPDATE mistakes SET last_reviewed_at = ?, next_review_date = ?, mastery_level = ? WHERE id = ?",
             (now, next_review_date, new_mastery, mistake_id)
+        )
+        conn.execute(
+            """
+            INSERT INTO mistake_reviews (
+              id, mistake_id, user_id, module, question_type, error_type, reviewed_at,
+              mastery_before, mastery_after, mastery_delta, next_review_date, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                str(uuid4()),
+                mistake_id,
+                str(row["user_id"] or ""),
+                str(row["module"] or ""),
+                str(row["question_type"] or ""),
+                str(row["error_type"] or ""),
+                now,
+                round(current_mastery, 4),
+                round(new_mastery, 4),
+                round(new_mastery - current_mastery, 4),
+                next_review_date,
+                now,
+            ),
         )
         conn.commit()
         return {
@@ -1791,34 +2200,610 @@ def get_mistake_analysis(user_id: str) -> Dict[str, Any]:
         conn.close()
 
 
+def get_prioritized_mistake_review_queue(
+    user_id: str,
+    module: Optional[str] = None,
+    question_type: Optional[str] = None,
+    next_review_from: Optional[int] = None,
+    next_review_to: Optional[int] = None,
+    limit: int = 30,
+    now_ts: Optional[int] = None,
+) -> list[Dict[str, Any]]:
+    conn = get_conn()
+    try:
+        now = int(now_ts or time.time())
+        conditions = ["user_id = ?"]
+        params: list[Any] = [user_id]
+        if module:
+            conditions.append("module = ?")
+            params.append(module)
+        if question_type:
+            conditions.append("question_type = ?")
+            params.append(question_type)
+        if next_review_from is not None:
+            conditions.append("next_review_date >= ?")
+            params.append(int(next_review_from))
+        if next_review_to is not None:
+            conditions.append("next_review_date <= ?")
+            params.append(int(next_review_to))
+        where_clause = " AND ".join(conditions)
+        sql = f"""
+            SELECT
+              m.*,
+              COALESCE(agg.bucket_count, 1) AS bucket_count,
+              CAST(MAX(0, ? - COALESCE(m.next_review_date, 0)) AS REAL) / 86400.0 AS overdue_days
+            FROM mistakes m
+            LEFT JOIN (
+              SELECT module, question_type, error_type, COUNT(*) AS bucket_count
+              FROM mistakes
+              WHERE user_id = ?
+              GROUP BY module, question_type, error_type
+            ) agg
+              ON agg.module = m.module
+             AND agg.question_type = m.question_type
+             AND agg.error_type = m.error_type
+            WHERE {where_clause}
+            ORDER BY m.created_at DESC
+        """
+        rows = conn.execute(sql, (now, user_id, *params)).fetchall()
+
+        items: list[Dict[str, Any]] = []
+        for row in rows:
+            item = dict(row)
+            item["tags"] = json.loads(item["tags"]) if item.get("tags") else []
+            mastery = float(item.get("mastery_level") or 0.0)
+            overdue_days = max(0.0, float(item.get("overdue_days") or 0.0))
+            created_days = max(0.0, (now - int(item.get("created_at") or now)) / 86400.0)
+            due_boost = min(1.5, overdue_days / 3.0)
+            bucket_count = int(item.get("bucket_count") or 1)
+            bucket_boost = min(1.2, bucket_count / 5.0)
+            weakness = 1.0 - mastery
+            recency_boost = min(0.6, created_days / 5.0)
+            priority_score = round(
+                weakness * 0.50
+                + due_boost * 0.28
+                + bucket_boost * 0.14
+                + recency_boost * 0.08,
+                4,
+            )
+            base_gain = 0.12 + weakness * 0.18
+            due_gain = min(0.08, overdue_days * 0.02)
+            cluster_gain = min(0.05, bucket_count / 20.0)
+            expected_gain = max(0.01, min(1.0 - mastery, base_gain + due_gain + cluster_gain))
+            projected_mastery = max(0.0, min(1.0, mastery + expected_gain))
+            if overdue_days >= 1:
+                reason = f"已逾期 {overdue_days:.1f} 天"
+            elif mastery < 0.4:
+                reason = "掌握度偏低"
+            elif bucket_count >= 3:
+                reason = "同类错因聚集"
+            else:
+                reason = "近期新增需巩固"
+            item["priority_score"] = priority_score
+            item["priority_reason"] = reason
+            item["expected_mastery_gain"] = round(expected_gain, 4)
+            item["projected_mastery_after_review"] = round(projected_mastery, 4)
+            items.append(item)
+        items.sort(key=lambda x: float(x.get("priority_score") or 0.0), reverse=True)
+        return items[: max(1, min(int(limit or 30), 300))]
+    finally:
+        conn.close()
+
+
+def get_mistake_clusters(
+    user_id: str,
+    module: Optional[str] = None,
+    question_type: Optional[str] = None,
+    limit: int = 20,
+    now_ts: Optional[int] = None,
+) -> list[Dict[str, Any]]:
+    conn = get_conn()
+    try:
+        now = int(now_ts or time.time())
+        conditions = ["user_id = ?"]
+        params: list[Any] = [user_id]
+        if module:
+            conditions.append("module = ?")
+            params.append(module)
+        if question_type:
+            conditions.append("question_type = ?")
+            params.append(question_type)
+        where_clause = " AND ".join(conditions)
+        sql = f"""
+            SELECT
+              module,
+              question_type,
+              error_type,
+              difficulty,
+              COUNT(*) AS count,
+              AVG(mastery_level) AS avg_mastery,
+              SUM(CASE WHEN next_review_date <= ? THEN 1 ELSE 0 END) AS due_count,
+              MAX(created_at) AS latest_created_at
+            FROM mistakes
+            WHERE {where_clause}
+            GROUP BY module, question_type, error_type, difficulty
+            ORDER BY count DESC, due_count DESC, avg_mastery ASC
+            LIMIT ?
+        """
+        rows = conn.execute(sql, (now, *params, max(1, min(limit, 200)))).fetchall()
+        clusters: list[Dict[str, Any]] = []
+        for row in rows:
+            item = dict(row)
+            avg_mastery = float(item.get("avg_mastery") or 0.0)
+            count = int(item.get("count") or 0)
+            due_count = int(item.get("due_count") or 0)
+            risk = round((1 - avg_mastery) * 0.6 + min(1.0, due_count / max(count, 1)) * 0.4, 4)
+            item["avg_mastery"] = round(avg_mastery, 4)
+            item["risk_score"] = risk
+            clusters.append(item)
+        return clusters
+    finally:
+        conn.close()
+
+
+def get_mistake_trends(
+    user_id: str,
+    days: int = 7,
+    module: Optional[str] = None,
+    question_type: Optional[str] = None,
+    now_ts: Optional[int] = None,
+) -> list[Dict[str, Any]]:
+    conn = get_conn()
+    try:
+        now = int(now_ts or time.time())
+        days = max(1, min(int(days or 7), 60))
+        start_ts = now - (days - 1) * 24 * 3600
+        day_start = start_ts - (start_ts % 86400)
+
+        conditions = ["user_id = ?"]
+        params: list[Any] = [user_id]
+        if module:
+            conditions.append("module = ?")
+            params.append(module)
+        if question_type:
+            conditions.append("question_type = ?")
+            params.append(question_type)
+        where_clause = " AND ".join(conditions)
+
+        rows = conn.execute(
+            f"""
+            SELECT created_at, next_review_date
+            FROM mistakes
+            WHERE {where_clause}
+            """,
+            params,
+        ).fetchall()
+        review_conditions = ["user_id = ?"]
+        review_params: list[Any] = [user_id]
+        if module:
+            review_conditions.append("module = ?")
+            review_params.append(module)
+        if question_type:
+            review_conditions.append("question_type = ?")
+            review_params.append(question_type)
+        review_where_clause = " AND ".join(review_conditions)
+        review_rows = conn.execute(
+            f"""
+            SELECT reviewed_at
+            FROM mistake_reviews
+            WHERE {review_where_clause}
+            """,
+            review_params,
+        ).fetchall()
+
+        buckets: list[Dict[str, Any]] = []
+        for i in range(days):
+            s = day_start + i * 86400
+            e = s + 86400 - 1
+            created_count = 0
+            reviewed_count = 0
+            due_snapshot = 0
+            for row in rows:
+                created_at = int(row["created_at"] or 0)
+                next_review_date = int(row["next_review_date"] or 0)
+                if s <= created_at <= e:
+                    created_count += 1
+                if next_review_date and next_review_date <= e:
+                    due_snapshot += 1
+            for review_row in review_rows:
+                reviewed_at = int(review_row["reviewed_at"] or 0)
+                if reviewed_at and s <= reviewed_at <= e:
+                    reviewed_count += 1
+            label = time.strftime("%m-%d", time.localtime(s))
+            buckets.append(
+                {
+                    "date": label,
+                    "day_start": s,
+                    "created_count": created_count,
+                    "reviewed_count": reviewed_count,
+                    "due_snapshot": due_snapshot,
+                }
+            )
+        return buckets
+    finally:
+        conn.close()
+
+
+def get_mistake_review_effectiveness(
+    user_id: str,
+    days: int = 7,
+    module: Optional[str] = None,
+    question_type: Optional[str] = None,
+    now_ts: Optional[int] = None,
+) -> list[Dict[str, Any]]:
+    conn = get_conn()
+    try:
+        now = int(now_ts or time.time())
+        days = max(1, min(int(days or 7), 60))
+        start_ts = now - (days - 1) * 24 * 3600
+        day_start = start_ts - (start_ts % 86400)
+        day_end = day_start + days * 86400 - 1
+
+        conditions = ["user_id = ?", "reviewed_at >= ?", "reviewed_at <= ?"]
+        params: list[Any] = [user_id, day_start, day_end]
+        if module:
+            conditions.append("module = ?")
+            params.append(module)
+        if question_type:
+            conditions.append("question_type = ?")
+            params.append(question_type)
+        where_clause = " AND ".join(conditions)
+
+        rows = conn.execute(
+            f"""
+            SELECT
+              CAST(reviewed_at / 86400 AS INTEGER) * 86400 AS day_start,
+              COUNT(*) AS review_count,
+              AVG(mastery_before) AS avg_mastery_before,
+              AVG(mastery_after) AS avg_mastery_after,
+              AVG(mastery_delta) AS avg_mastery_gain
+            FROM mistake_reviews
+            WHERE {where_clause}
+            GROUP BY CAST(reviewed_at / 86400 AS INTEGER)
+            ORDER BY day_start ASC
+            """,
+            params,
+        ).fetchall()
+
+        daily_map: Dict[int, Dict[str, Any]] = {}
+        for row in rows:
+            key = int(row["day_start"] or 0)
+            daily_map[key] = {
+                "review_count": int(row["review_count"] or 0),
+                "avg_mastery_before": round(float(row["avg_mastery_before"] or 0.0), 4),
+                "avg_mastery_after": round(float(row["avg_mastery_after"] or 0.0), 4),
+                "avg_mastery_gain": round(float(row["avg_mastery_gain"] or 0.0), 4),
+            }
+
+        buckets: list[Dict[str, Any]] = []
+        for i in range(days):
+            s = day_start + i * 86400
+            item = daily_map.get(
+                s,
+                {
+                    "review_count": 0,
+                    "avg_mastery_before": 0.0,
+                    "avg_mastery_after": 0.0,
+                    "avg_mastery_gain": 0.0,
+                },
+            )
+            item["date"] = time.strftime("%m-%d", time.localtime(s))
+            item["day_start"] = s
+            buckets.append(item)
+        return buckets
+    finally:
+        conn.close()
+
+
+def get_mistake_hotspots(
+    user_id: str,
+    days: int = 14,
+    module: Optional[str] = None,
+    now_ts: Optional[int] = None,
+    limit: int = 30,
+) -> list[Dict[str, Any]]:
+    conn = get_conn()
+    try:
+        now = int(now_ts or time.time())
+        days = max(1, min(int(days or 14), 90))
+        start_ts = now - days * 24 * 3600
+        conditions = ["user_id = ?", "created_at >= ?"]
+        params: list[Any] = [user_id, start_ts]
+        if module:
+            conditions.append("module = ?")
+            params.append(module)
+        where_clause = " AND ".join(conditions)
+        rows = conn.execute(
+            f"""
+            SELECT
+              module,
+              error_type,
+              COUNT(*) AS count,
+              SUM(CASE WHEN next_review_date <= ? THEN 1 ELSE 0 END) AS due_count,
+              AVG(mastery_level) AS avg_mastery
+            FROM mistakes
+            WHERE {where_clause}
+            GROUP BY module, error_type
+            ORDER BY count DESC, due_count DESC
+            LIMIT ?
+            """,
+            (now, *params, max(1, min(int(limit or 30), 200))),
+        ).fetchall()
+        result: list[Dict[str, Any]] = []
+        for row in rows:
+            count = int(row["count"] or 0)
+            due_count = int(row["due_count"] or 0)
+            avg_mastery = float(row["avg_mastery"] or 0.0)
+            due_ratio = (due_count / max(1, count))
+            risk_score = round((1.0 - avg_mastery) * 0.55 + due_ratio * 0.45, 4)
+            result.append(
+                {
+                    "module": str(row["module"] or "unknown"),
+                    "error_type": str(row["error_type"] or "general"),
+                    "count": count,
+                    "due_count": due_count,
+                    "avg_mastery": round(avg_mastery, 4),
+                    "risk_score": risk_score,
+                }
+            )
+        result.sort(key=lambda x: (float(x["risk_score"]), int(x["count"])), reverse=True)
+        return result
+    finally:
+        conn.close()
+
+
+def get_mistake_recommendations(
+    user_id: str,
+    days: int = 14,
+    module: Optional[str] = None,
+    now_ts: Optional[int] = None,
+    limit: int = 5,
+) -> list[Dict[str, Any]]:
+    hotspots = get_mistake_hotspots(
+        user_id=user_id,
+        days=days,
+        module=module,
+        now_ts=now_ts,
+        limit=max(10, limit * 4),
+    )
+    if not hotspots:
+        return []
+    sorted_rows = sorted(
+        hotspots,
+        key=lambda x: (float(x.get("risk_score") or 0.0), int(x.get("count") or 0)),
+        reverse=True,
+    )
+    recs: list[Dict[str, Any]] = []
+    for idx, row in enumerate(sorted_rows[: max(1, min(limit, 20))]):
+        risk_score = float(row.get("risk_score") or 0.0)
+        count = int(row.get("count") or 0)
+        due_count = int(row.get("due_count") or 0)
+        avg_mastery = float(row.get("avg_mastery") or 0.0)
+        if risk_score >= 0.7:
+            action = "立即进行专项重练，优先处理高风险错因"
+        elif risk_score >= 0.5:
+            action = "纳入本周主训练项，并增加复习频次"
+        else:
+            action = "保持常规复习，观察后续变化"
+        recs.append(
+            {
+                "rank": idx + 1,
+                "module": str(row.get("module") or "unknown"),
+                "error_type": str(row.get("error_type") or "general"),
+                "risk_score": round(risk_score, 4),
+                "mistake_count": count,
+                "due_count": due_count,
+                "avg_mastery": round(avg_mastery, 4),
+                "action": action,
+            }
+        )
+    return recs
+
+
+def get_mistake_module_comparison(
+    user_id: str,
+    days: int = 14,
+    now_ts: Optional[int] = None,
+) -> list[Dict[str, Any]]:
+    conn = get_conn()
+    try:
+        now = int(now_ts or time.time())
+        days = max(1, min(int(days or 14), 90))
+        start_ts = now - days * 24 * 3600
+        rows = conn.execute(
+            """
+            SELECT
+              module,
+              COUNT(*) AS count,
+              SUM(CASE WHEN next_review_date <= ? THEN 1 ELSE 0 END) AS due_count,
+              AVG(mastery_level) AS avg_mastery,
+              COUNT(DISTINCT error_type) AS unique_error_types
+            FROM mistakes
+            WHERE user_id = ? AND created_at >= ?
+            GROUP BY module
+            ORDER BY count DESC
+            """,
+            (now, user_id, start_ts),
+        ).fetchall()
+        result: list[Dict[str, Any]] = []
+        for row in rows:
+            count = int(row["count"] or 0)
+            due_count = int(row["due_count"] or 0)
+            avg_mastery = float(row["avg_mastery"] or 0.0)
+            unique_error_types = int(row["unique_error_types"] or 0)
+            due_ratio = due_count / max(1, count)
+            risk_index = round((1.0 - avg_mastery) * 0.5 + due_ratio * 0.35 + min(1.0, unique_error_types / 8.0) * 0.15, 4)
+            result.append(
+                {
+                    "module": str(row["module"] or "unknown"),
+                    "count": count,
+                    "due_count": due_count,
+                    "avg_mastery": round(avg_mastery, 4),
+                    "unique_error_types": unique_error_types,
+                    "risk_index": risk_index,
+                }
+            )
+        result.sort(key=lambda x: (float(x["risk_index"]), int(x["count"])), reverse=True)
+        return result
+    finally:
+        conn.close()
+
+
+def get_mistake_weekly_focus_plan(
+    user_id: str,
+    days: int = 14,
+    total_daily_minutes: int = 90,
+    now_ts: Optional[int] = None,
+) -> Dict[str, Any]:
+    modules = get_mistake_module_comparison(user_id=user_id, days=days, now_ts=now_ts)
+    if not modules:
+        return {
+            "focus_module": "",
+            "total_daily_minutes": total_daily_minutes,
+            "module_allocations": [],
+            "daily_blocks": [],
+            "summary": "暂无足够数据生成主攻计划。",
+        }
+
+    scored: list[Dict[str, Any]] = []
+    for row in modules:
+        count = float(row.get("count") or 0)
+        due = float(row.get("due_count") or 0)
+        risk = float(row.get("risk_index") or 0.0)
+        due_ratio = due / max(1.0, count)
+        volume_signal = min(1.0, count / 20.0)
+        urgency = risk * 0.7 + due_ratio * 0.2 + volume_signal * 0.1
+        scored.append({**row, "_urgency": urgency})
+
+    scored.sort(key=lambda x: float(x.get("_urgency") or 0.0), reverse=True)
+    total_urgency = sum(float(x.get("_urgency") or 0.0) for x in scored) or 1.0
+
+    allocations: list[Dict[str, Any]] = []
+    remaining_percent = 100
+    for idx, row in enumerate(scored[:4]):
+        if idx == len(scored[:4]) - 1:
+            percent = max(5, remaining_percent)
+        else:
+            raw = int(round(float(row.get("_urgency") or 0.0) / total_urgency * 100))
+            percent = max(10, min(70, raw))
+            remaining_percent -= percent
+        remaining_percent = max(0, remaining_percent)
+        minutes = max(10, int(round(total_daily_minutes * percent / 100.0)))
+        reason = (
+            f"风险{float(row.get('risk_index') or 0):.3f}"
+            f"，到期{int(row.get('due_count') or 0)}"
+            f"，错因覆盖{int(row.get('unique_error_types') or 0)}"
+        )
+        allocations.append(
+            {
+                "module": str(row.get("module") or "unknown"),
+                "percent": percent,
+                "minutes": minutes,
+                "reason": reason,
+            }
+        )
+
+    allocations.sort(key=lambda x: int(x.get("percent") or 0), reverse=True)
+    focus_module = str(allocations[0]["module"]) if allocations else ""
+    daily_blocks = [
+        {
+            "block": idx + 1,
+            "module": x["module"],
+            "minutes": x["minutes"],
+        }
+        for idx, x in enumerate(allocations)
+    ]
+    summary = (
+        f"建议本周优先主攻 {focus_module}，"
+        f"每日学习总时长约 {total_daily_minutes} 分钟，按风险分配到各模块。"
+    )
+    return {
+        "focus_module": focus_module,
+        "total_daily_minutes": total_daily_minutes,
+        "module_allocations": allocations,
+        "daily_blocks": daily_blocks,
+        "summary": summary,
+    }
+
+
 # Vocabulary DAO
 def save_vocabulary(vocab_id: str, user_id: str, vocab_data: Dict[str, Any]) -> None:
     conn = get_conn()
     try:
-        conn.execute(
-            """
-            INSERT OR REPLACE INTO vocabulary (
-              id, user_id, word, definition, examples, pronunciation, 
-              part_of_speech, tags, source_module, mastery_level, 
-              last_reviewed_at, next_review_date, created_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                vocab_id,
-                user_id,
-                vocab_data.get('word', ''),
-                vocab_data.get('definition', ''),
-                json.dumps(vocab_data.get('examples', [])),
-                vocab_data.get('pronunciation', ''),
-                vocab_data.get('part_of_speech', ''),
-                json.dumps(vocab_data.get('tags', [])),
-                vocab_data.get('source_module', ''),
-                vocab_data.get('mastery_level', 0.0),
-                int(time.time()),
-                int(time.time()) + 24 * 3600,  # 1 day later
-                int(time.time())
+        now = int(time.time())
+        word = str(vocab_data.get("word", "") or "").strip()
+        normalized_word = _normalize_vocab_word(word)
+        existing_id = None
+        if normalized_word:
+            cur = conn.execute(
+                """
+                SELECT id
+                FROM vocabulary
+                WHERE user_id = ? AND lower(trim(word)) = ?
+                LIMIT 1
+                """,
+                (user_id, normalized_word),
             )
-        )
+            row = cur.fetchone()
+            if row:
+                existing_id = str(row["id"])
+
+        target_id = existing_id or vocab_id
+        if existing_id:
+            conn.execute(
+                """
+                UPDATE vocabulary
+                SET word = ?,
+                    definition = ?,
+                    examples = ?,
+                    pronunciation = ?,
+                    part_of_speech = ?,
+                    tags = ?,
+                    source_module = ?,
+                    mastery_level = ?,
+                    last_reviewed_at = ?,
+                    next_review_date = ?
+                WHERE id = ?
+                """,
+                (
+                    word,
+                    vocab_data.get("definition", ""),
+                    json.dumps(vocab_data.get("examples", [])),
+                    vocab_data.get("pronunciation", ""),
+                    vocab_data.get("part_of_speech", ""),
+                    json.dumps(vocab_data.get("tags", [])),
+                    vocab_data.get("source_module", ""),
+                    vocab_data.get("mastery_level", 0.0),
+                    now,
+                    now + 24 * 3600,
+                    target_id,
+                ),
+            )
+        else:
+            conn.execute(
+                """
+                INSERT INTO vocabulary (
+                  id, user_id, word, definition, examples, pronunciation,
+                  part_of_speech, tags, source_module, mastery_level,
+                  last_reviewed_at, next_review_date, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    target_id,
+                    user_id,
+                    word,
+                    vocab_data.get("definition", ""),
+                    json.dumps(vocab_data.get("examples", [])),
+                    vocab_data.get("pronunciation", ""),
+                    vocab_data.get("part_of_speech", ""),
+                    json.dumps(vocab_data.get("tags", [])),
+                    vocab_data.get("source_module", ""),
+                    vocab_data.get("mastery_level", 0.0),
+                    now,
+                    now + 24 * 3600,
+                    now,
+                ),
+            )
         conn.commit()
     finally:
         conn.close()
@@ -1904,10 +2889,11 @@ def get_vocabulary_by_id(vocab_id: str) -> Optional[Dict[str, Any]]:
 def review_vocabulary(vocab_id: str, mastery_delta: float = 0.15) -> Optional[Dict[str, Any]]:
     conn = get_conn()
     try:
-        cur = conn.execute("SELECT mastery_level FROM vocabulary WHERE id = ?", (vocab_id,))
+        cur = conn.execute("SELECT user_id, mastery_level FROM vocabulary WHERE id = ?", (vocab_id,))
         row = cur.fetchone()
         if not row:
             return None
+        user_id = str(row["user_id"] or "")
         current_mastery = float(row["mastery_level"] or 0.0)
         new_mastery = max(0.0, min(1.0, current_mastery + mastery_delta))
         now = int(time.time())
@@ -1916,6 +2902,26 @@ def review_vocabulary(vocab_id: str, mastery_delta: float = 0.15) -> Optional[Di
         conn.execute(
             "UPDATE vocabulary SET last_reviewed_at = ?, next_review_date = ?, mastery_level = ? WHERE id = ?",
             (now, next_review_date, new_mastery, vocab_id),
+        )
+        conn.execute(
+            """
+            INSERT INTO vocabulary_reviews (
+              id, vocab_id, user_id, reviewed_at,
+              mastery_before, mastery_after, mastery_delta,
+              next_review_date, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                str(uuid4()),
+                vocab_id,
+                user_id,
+                now,
+                round(current_mastery, 4),
+                round(new_mastery, 4),
+                round(new_mastery - current_mastery, 4),
+                next_review_date,
+                now,
+            ),
         )
         conn.commit()
         return {
@@ -1956,5 +2962,216 @@ def get_vocabulary_stats(user_id: str) -> Dict[str, Any]:
             "avg_mastery": round(float(avg_mastery), 4),
             "by_source_module": by_source,
         }
+    finally:
+        conn.close()
+
+
+def save_vocabulary_strategy_session(
+    user_id: str,
+    strategy: str,
+    words: list[Dict[str, Any]],
+    now_ts: Optional[int] = None,
+) -> str:
+    if not words:
+        return ""
+    conn = get_conn()
+    try:
+        now = int(now_ts or time.time())
+        session_id = str(uuid4())
+        safe_strategy = str(strategy or "spaced").strip().lower() or "spaced"
+        word_count = len(words)
+        due_count = 0
+        scheduler_scores: list[float] = []
+        masteries: list[float] = []
+        for row in words:
+            next_review = int(row.get("next_review_date") or 0)
+            if next_review and next_review <= now:
+                due_count += 1
+            scheduler_scores.append(float(row.get("scheduler_score") or 0.0))
+            masteries.append(float(row.get("mastery_level") or 0.0))
+        avg_scheduler_score = round(sum(scheduler_scores) / max(1, len(scheduler_scores)), 6)
+        avg_mastery = round(sum(masteries) / max(1, len(masteries)), 6)
+        conn.execute(
+            """
+            INSERT INTO vocabulary_strategy_sessions (
+              id, user_id, strategy, word_count, due_count,
+              avg_scheduler_score, avg_mastery, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                session_id,
+                user_id,
+                safe_strategy,
+                word_count,
+                due_count,
+                avg_scheduler_score,
+                avg_mastery,
+                now,
+            ),
+        )
+        conn.executemany(
+            """
+            INSERT INTO vocabulary_strategy_session_words (
+              id, session_id, user_id, strategy, word_id,
+              mastery_at_session, scheduler_score, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            [
+                (
+                    str(uuid4()),
+                    session_id,
+                    user_id,
+                    safe_strategy,
+                    str(row.get("id") or ""),
+                    round(float(row.get("mastery_level") or 0.0), 4),
+                    round(float(row.get("scheduler_score") or 0.0), 6),
+                    now,
+                )
+                for row in words
+                if str(row.get("id") or "").strip()
+            ],
+        )
+        conn.commit()
+        return session_id
+    finally:
+        conn.close()
+
+
+def get_vocabulary_strategy_insights(
+    user_id: str,
+    days: int = 14,
+    now_ts: Optional[int] = None,
+) -> list[Dict[str, Any]]:
+    conn = get_conn()
+    try:
+        now = int(now_ts or time.time())
+        days = max(1, min(int(days or 14), 90))
+        start_ts = now - days * 24 * 3600
+        base_rows = conn.execute(
+            """
+            SELECT
+              strategy,
+              COUNT(*) AS session_count,
+              SUM(word_count) AS total_words,
+              SUM(due_count) AS total_due_words,
+              AVG(avg_scheduler_score) AS avg_scheduler_score,
+              AVG(avg_mastery) AS avg_mastery
+            FROM vocabulary_strategy_sessions
+            WHERE user_id = ? AND created_at >= ?
+            GROUP BY strategy
+            ORDER BY session_count DESC, strategy ASC
+            """,
+            (user_id, start_ts),
+        ).fetchall()
+        if not base_rows:
+            return []
+
+        strategy_word_rows = conn.execute(
+            """
+            SELECT strategy, word_id, created_at
+            FROM vocabulary_strategy_session_words
+            WHERE user_id = ? AND created_at >= ?
+            """,
+            (user_id, start_ts),
+        ).fetchall()
+        word_ids = sorted(
+            {
+                str(r["word_id"] or "").strip()
+                for r in strategy_word_rows
+                if str(r["word_id"] or "").strip()
+            }
+        )
+        horizon_ts = now + 7 * 24 * 3600
+
+        review_stats_by_word: Dict[str, Dict[str, float]] = {}
+        if word_ids:
+            placeholders = ",".join(["?"] * len(word_ids))
+            review_rows = conn.execute(
+                f"""
+                SELECT vocab_id, COUNT(*) AS review_count, AVG(mastery_delta) AS avg_gain
+                FROM vocabulary_reviews
+                WHERE user_id = ? AND reviewed_at >= ? AND reviewed_at <= ? AND vocab_id IN ({placeholders})
+                GROUP BY vocab_id
+                """,
+                (user_id, start_ts, horizon_ts, *word_ids),
+            ).fetchall()
+            for row in review_rows:
+                vid = str(row["vocab_id"] or "").strip()
+                if not vid:
+                    continue
+                review_stats_by_word[vid] = {
+                    "review_count": float(row["review_count"] or 0),
+                    "avg_gain": float(row["avg_gain"] or 0.0),
+                }
+
+        wrong_count_by_word: Dict[str, int] = {}
+        mistake_rows = conn.execute(
+            """
+            SELECT tags
+            FROM mistakes
+            WHERE user_id = ? AND module = 'vocabulary' AND created_at >= ? AND created_at <= ?
+            """,
+            (user_id, start_ts, horizon_ts),
+        ).fetchall()
+        for row in mistake_rows:
+            tags_raw = str(row["tags"] or "").strip()
+            if not tags_raw:
+                continue
+            try:
+                tags = json.loads(tags_raw)
+            except Exception:
+                tags = []
+            if not isinstance(tags, list):
+                continue
+            for tag in tags:
+                text = str(tag or "").strip()
+                if text.startswith("word_id:"):
+                    wid = text.split("word_id:", 1)[1].strip()
+                    if wid:
+                        wrong_count_by_word[wid] = wrong_count_by_word.get(wid, 0) + 1
+                    break
+
+        strategy_to_words: Dict[str, set[str]] = {}
+        for row in strategy_word_rows:
+            strategy_key = str(row["strategy"] or "spaced")
+            wid = str(row["word_id"] or "").strip()
+            if not wid:
+                continue
+            strategy_to_words.setdefault(strategy_key, set()).add(wid)
+
+        result: list[Dict[str, Any]] = []
+        for row in base_rows:
+            strategy_key = str(row["strategy"] or "spaced")
+            words_for_strategy = strategy_to_words.get(strategy_key, set())
+            reviewed_words = 0
+            total_review_count = 0.0
+            gains: list[float] = []
+            wrong_count = 0
+            for wid in words_for_strategy:
+                review_stat = review_stats_by_word.get(wid)
+                if review_stat:
+                    reviewed_words += 1
+                    total_review_count += float(review_stat.get("review_count") or 0.0)
+                    gains.append(float(review_stat.get("avg_gain") or 0.0))
+                wrong_count += int(wrong_count_by_word.get(wid, 0))
+            total_words = int(row["total_words"] or 0)
+            wrong_rate = round((wrong_count / max(1, total_words)), 4)
+            avg_gain = round((sum(gains) / max(1, len(gains))), 4) if gains else 0.0
+            result.append(
+                {
+                    "strategy": strategy_key,
+                    "session_count": int(row["session_count"] or 0),
+                    "total_words": total_words,
+                    "total_due_words": int(row["total_due_words"] or 0),
+                    "avg_scheduler_score": round(float(row["avg_scheduler_score"] or 0.0), 4),
+                    "avg_mastery": round(float(row["avg_mastery"] or 0.0), 4),
+                    "reviewed_words_7d": int(reviewed_words),
+                    "review_events_7d": int(round(total_review_count)),
+                    "avg_mastery_gain_7d": avg_gain,
+                    "wrong_count_7d": int(wrong_count),
+                    "wrong_rate_7d": wrong_rate,
+                }
+            )
+        return result
     finally:
         conn.close()

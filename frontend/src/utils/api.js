@@ -1,6 +1,72 @@
 import axios from 'axios';
 
-const API_URL = 'http://localhost:8000';
+const normalizeApiUrl = (url) => String(url || '').trim().replace(/\/+$/, '');
+const API_URL = normalizeApiUrl(import.meta.env.VITE_API_URL || 'http://127.0.0.1:8000');
+
+const ERROR_MESSAGE_MAP = {
+  'Invalid credentials': '账号或密码错误',
+  'Missing token': '缺少登录凭证，请重新登录',
+  'Invalid token': '登录凭证无效，请重新登录',
+  'Invalid token subject': '登录凭证异常，请重新登录',
+  'User not found': '用户不存在或已失效，请重新登录',
+  'Username already exists': '用户名已存在',
+  'Either username or phone is required': '请输入用户名或手机号',
+  'Invalid or expired reset token': '重置凭证无效或已过期',
+  'Unsupported reset channel': '不支持的重置方式',
+  'Network Error': '网络异常，请检查后端服务是否已启动',
+  'Failed to fetch': '网络连接失败，请稍后重试',
+  'Request failed with status code 500': '服务异常（500），请稍后重试',
+  'Request failed with status code 502': '网关异常（502），请稍后重试',
+  'Request failed with status code 503': '服务不可用（503），请稍后重试',
+  'timeout of 10000ms exceeded': '请求超时，请重试',
+};
+
+const translateErrorDetail = (message) => {
+  const text = String(message || '').trim();
+  if (!text) return '';
+  return ERROR_MESSAGE_MAP[text] || text;
+};
+
+const normalizeFallback = (fallback) => {
+  const translated = translateErrorDetail(fallback);
+  return translated || '请求失败，请稍后重试';
+};
+
+export const normalizeUiError = (error, fallback = '请求失败，请稍后重试') => {
+  const fallbackText = normalizeFallback(fallback);
+  const raw = typeof error === 'string'
+    ? error
+    : (error?.userMessage || error?.response?.data?.detail || error?.message || fallbackText);
+  const translated = translateErrorDetail(raw);
+  if (translated && translated !== raw) return translated;
+  const lower = String(raw || '').toLowerCase();
+  if (!lower) return fallbackText;
+  if (lower.includes('network error') || lower.includes('failed to fetch') || lower.includes('net::')) {
+    return '网络异常，请检查后端服务是否已启动';
+  }
+  if (lower.includes('timeout')) {
+    return '请求超时，请稍后重试';
+  }
+  if (lower.includes('invalid token') || lower.includes('missing token') || lower.includes('token subject')) {
+    return '登录状态已失效，请重新登录';
+  }
+  return translated || fallbackText;
+};
+
+const getErrorDetail = (error, fallback = '请求失败，请稍后重试') => {
+  return normalizeUiError(error, fallback);
+};
+
+const normalizeToken = (rawToken) => {
+  const token = String(rawToken || '').trim();
+  if (!token || token.toLowerCase() === 'undefined' || token.toLowerCase() === 'null') {
+    return '';
+  }
+  if (token.startsWith('Bearer ')) {
+    return token.slice(7).trim();
+  }
+  return token;
+};
 
 const api = axios.create({
   baseURL: API_URL,
@@ -9,10 +75,27 @@ const api = axios.create({
   },
 });
 
+api.interceptors.response.use(
+  (response) => response,
+  (error) => {
+    const status = error?.response?.status;
+    const detail = String(error?.response?.data?.detail || '');
+    if (status === 401 && /invalid token|missing token|token subject|user not found/i.test(detail)) {
+      localStorage.removeItem('user');
+      const message = '登录状态已失效，请重新登录';
+      error.userMessage = message;
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(new CustomEvent('auth:expired', { detail: { message } }));
+      }
+    }
+    return Promise.reject(error);
+  },
+);
+
 const getStoredToken = () => {
   try {
     const user = JSON.parse(localStorage.getItem('user') || '{}');
-    return user?.access_token || user?.token || user?.data?.access_token || '';
+    return normalizeToken(user?.access_token || user?.token || user?.data?.access_token || '');
   } catch {
     return '';
   }
@@ -32,7 +115,7 @@ export const login = async (usernameOrPhone, password) => {
     }
     return response.data;
   } catch (error) {
-    throw error.response?.data?.detail || 'Login failed';
+    throw getErrorDetail(error, '登录失败，请检查账号或密码');
   }
 };
 
@@ -45,7 +128,7 @@ export const register = async (username, email, password) => {
     }
     return response.data;
   } catch (error) {
-    throw error.response?.data?.detail || 'Registration failed';
+    throw getErrorDetail(error, '注册失败');
   }
 };
 
@@ -58,7 +141,7 @@ export const registerPhone = async (phone, password) => {
     }
     return response.data;
   } catch (error) {
-    throw error.response?.data?.detail || 'Phone registration failed';
+    throw getErrorDetail(error, '手机号注册失败');
   }
 };
 
@@ -67,7 +150,7 @@ export const requestPasswordReset = async (account) => {
     const response = await api.post('/auth/password/reset/request', { account });
     return response.data;
   } catch (error) {
-    throw error.response?.data?.detail || 'Password reset request failed';
+    throw getErrorDetail(error, '重置请求失败');
   }
 };
 
@@ -79,7 +162,7 @@ export const confirmPasswordReset = async (resetToken, newPassword) => {
     });
     return response.data;
   } catch (error) {
-    throw error.response?.data?.detail || 'Password reset failed';
+    throw getErrorDetail(error, '密码重置失败');
   }
 };
 
@@ -88,7 +171,7 @@ export const requestPasswordResetCode = async (account, channel = 'email') => {
     const response = await api.post('/auth/password/reset/code/request', { account, channel });
     return response.data;
   } catch (error) {
-    throw error.response?.data?.detail || 'Verification code request failed';
+    throw getErrorDetail(error, '验证码请求失败');
   }
 };
 
@@ -101,7 +184,7 @@ export const confirmPasswordResetByCode = async (account, code, newPassword) => 
     });
     return response.data;
   } catch (error) {
-    throw error.response?.data?.detail || 'Password reset by code failed';
+    throw getErrorDetail(error, '验证码重置失败');
   }
 };
 
@@ -189,7 +272,7 @@ export const analyzeTask1Writing = async (text, chartType, topic, keywords = [])
     return response.data;
   } catch (error) {
     console.error('Failed to analyze task 1 writing:', error);
-    throw error.response?.data?.detail || 'Analysis failed';
+    throw getErrorDetail(error, '分析失败');
   }
 };
 
@@ -213,7 +296,7 @@ export const saveTask1Practice = async (text, chartType, topic, score = null) =>
     return response.data;
   } catch (error) {
     console.error('Failed to save task 1 practice:', error);
-    throw error.response?.data?.detail || 'Save failed';
+    throw getErrorDetail(error, '保存失败');
   }
 };
 
@@ -325,10 +408,28 @@ const getAuthHeader = () => {
   return { Authorization: `Bearer ${token}` };
 };
 
-export const getMistakes = async (module = null, limit = 50, questionType = null) => {
+export const getMistakes = async (
+  module = null,
+  limit = 50,
+  questionType = null,
+  errorType = null,
+  createdFrom = null,
+  createdTo = null,
+  nextReviewFrom = null,
+  nextReviewTo = null,
+) => {
   try {
     const response = await api.get('/mistakes', {
-      params: { module, limit, question_type: questionType },
+      params: {
+        module,
+        limit,
+        question_type: questionType,
+        error_type: errorType,
+        created_from: createdFrom,
+        created_to: createdTo,
+        next_review_from: nextReviewFrom,
+        next_review_to: nextReviewTo,
+      },
       headers: getAuthHeader(),
     });
     return response.data;
@@ -348,6 +449,16 @@ export const createMistake = async (payload) => {
 export const reviewMistake = async (mistakeId, masteryDelta = 0.2) => {
   const response = await api.post(`/mistakes/${mistakeId}/review`, null, {
     params: { mastery_delta: masteryDelta },
+    headers: getAuthHeader(),
+  });
+  return response.data;
+};
+
+export const batchReviewMistakes = async (mistakeIds = [], masteryDelta = 0.2) => {
+  const response = await api.post('/mistakes/review/batch', {
+    mistake_ids: mistakeIds,
+    mastery_delta: masteryDelta,
+  }, {
     headers: getAuthHeader(),
   });
   return response.data;
@@ -400,9 +511,125 @@ export const getMistakeAnalysis = async () => {
   }
 };
 
-export const exportMistakes = async (format = 'json', module = null, limit = 1000, questionType = null) => {
+export const getMistakeReviewQueue = async (
+  module = null,
+  limit = 30,
+  questionType = null,
+  nextReviewFrom = null,
+  nextReviewTo = null,
+) => {
+  try {
+    const response = await api.get('/mistakes/review-queue', {
+      params: {
+        module,
+        limit,
+        question_type: questionType,
+        next_review_from: nextReviewFrom,
+        next_review_to: nextReviewTo,
+      },
+      headers: getAuthHeader(),
+    });
+    return response.data || [];
+  } catch (error) {
+    console.error('Failed to get mistake review queue:', error);
+    return [];
+  }
+};
+
+export const getMistakeClusters = async (module = null, limit = 20, questionType = null) => {
+  try {
+    const response = await api.get('/mistakes/clusters', {
+      params: { module, limit, question_type: questionType },
+      headers: getAuthHeader(),
+    });
+    return response.data || [];
+  } catch (error) {
+    console.error('Failed to get mistake clusters:', error);
+    return [];
+  }
+};
+
+export const getMistakeTrends = async (days = 7, module = null, questionType = null) => {
+  try {
+    const response = await api.get('/mistakes/trends', {
+      params: { days, module, question_type: questionType },
+      headers: getAuthHeader(),
+    });
+    return response.data || [];
+  } catch (error) {
+    console.error('Failed to get mistake trends:', error);
+    return [];
+  }
+};
+
+export const getMistakeReviewEffectiveness = async (days = 7, module = null, questionType = null) => {
+  try {
+    const response = await api.get('/mistakes/review-effectiveness', {
+      params: { days, module, question_type: questionType },
+      headers: getAuthHeader(),
+    });
+    return response.data || [];
+  } catch (error) {
+    console.error('Failed to get mistake review effectiveness:', error);
+    return [];
+  }
+};
+
+export const getMistakeHotspots = async (days = 14, module = null, limit = 30) => {
+  try {
+    const response = await api.get('/mistakes/hotspots', {
+      params: { days, module, limit },
+      headers: getAuthHeader(),
+    });
+    return response.data || [];
+  } catch (error) {
+    console.error('Failed to get mistake hotspots:', error);
+    return [];
+  }
+};
+
+export const getMistakeRecommendations = async (days = 14, module = null, limit = 5) => {
+  try {
+    const response = await api.get('/mistakes/recommendations', {
+      params: { days, module, limit },
+      headers: getAuthHeader(),
+    });
+    return response.data || [];
+  } catch (error) {
+    console.error('Failed to get mistake recommendations:', error);
+    return [];
+  }
+};
+
+export const getMistakeModuleComparison = async (days = 14) => {
+  try {
+    const response = await api.get('/mistakes/module-comparison', {
+      params: { days },
+      headers: getAuthHeader(),
+    });
+    return response.data || [];
+  } catch (error) {
+    console.error('Failed to get mistake module comparison:', error);
+    return [];
+  }
+};
+
+export const getMistakeWeeklyFocus = async (days = 14, totalDailyMinutes = 90) => {
+  try {
+    const response = await api.get('/mistakes/weekly-focus', {
+      params: { days, total_daily_minutes: totalDailyMinutes },
+      headers: getAuthHeader(),
+    });
+    return response.data || null;
+  } catch (error) {
+    console.error('Failed to get mistake weekly focus:', error);
+    return null;
+  }
+};
+
+export const exportMistakes = async (format = 'json', module = null, limit = 1000, questionType = null, errorType = null) => {
   const response = await api.get('/mistakes/export', {
-    params: { format, module, limit, question_type: questionType },
+    params: { format, module, limit, question_type: questionType, error_type: errorType },
     headers: getAuthHeader(),
     responseType: format === 'csv' ? 'text' : 'json',
   });
@@ -417,10 +644,15 @@ export const importMistakes = async (items = []) => {
 };
 
 // 词汇学习API
-export const getVocabularyList = async (limit = 100) => {
+export const getVocabularyList = async (limit = 100, { sourceModule = null, tag = null, keyword = null } = {}) => {
   try {
     const response = await api.get('/vocabulary', {
-      params: { limit },
+      params: {
+        limit,
+        source_module: sourceModule,
+        tag,
+        keyword,
+      },
       headers: getAuthHeader(),
     });
     return response.data;
@@ -480,6 +712,19 @@ export const getVocabularyStats = async () => {
   }
 };
 
+export const getVocabularyStrategyInsights = async (days = 14) => {
+  try {
+    const response = await api.get('/vocabulary/strategy/insights', {
+      params: { days },
+      headers: getAuthHeader(),
+    });
+    return response.data || [];
+  } catch (error) {
+    console.error('Failed to get vocabulary strategy insights:', error);
+    return [];
+  }
+};
+
 export const generateVocabularyTest = async (mode = 'multiple_choice', count = 5) => {
   const response = await api.post('/vocabulary/test/generate', {
     mode,
@@ -513,6 +758,83 @@ export const getPrioritizedWrongReviewQueue = async (wordIds = [], limit = 30) =
   return response.data || [];
 };
 
+export const getVocabularyScenarios = async (module = null, topic = null) => {
+  try {
+    const response = await api.get('/vocabulary/scenarios', {
+      params: { module, topic },
+      headers: getAuthHeader(),
+    });
+    return response.data || [];
+  } catch (error) {
+    throw getErrorDetail(error, '加载场景词包失败');
+  }
+};
+
+export const importVocabularyScenario = async (module, topic, limit = 20, sourceModule = 'scenario_pack') => {
+  try {
+    const response = await api.post('/vocabulary/scenarios/import', {
+      module,
+      topic,
+      limit,
+      source_module: sourceModule,
+    }, {
+      headers: getAuthHeader(),
+    });
+    return response.data;
+  } catch (error) {
+    throw getErrorDetail(error, '导入场景词包失败');
+  }
+};
+
+export const autoCollectVocabulary = async (text, sourceModule = 'reading', topic = 'general', maxWords = 20) => {
+  const response = await api.post('/vocabulary/collect', {
+    text,
+    source_module: sourceModule,
+    topic,
+    max_words: maxWords,
+  }, {
+    headers: getAuthHeader(),
+  });
+  return response.data;
+};
+
+export const generateContextReplay = async ({
+  count = 5,
+  sourceModule = null,
+  topic = null,
+  mode = 'cloze',
+  wordIds = [],
+} = {}) => {
+  const response = await api.post('/vocabulary/context/replay/generate', {
+    count,
+    source_module: sourceModule,
+    topic,
+    mode,
+    word_ids: wordIds,
+  }, {
+    headers: getAuthHeader(),
+  });
+  return response.data;
+};
+
+export const submitContextReplay = async (sessionId, answers = []) => {
+  const response = await api.post('/vocabulary/context/replay/submit', {
+    session_id: sessionId,
+    answers,
+  }, {
+    headers: getAuthHeader(),
+  });
+  return response.data;
+};
+
+export const getContextReplayRetryQueue = async (limit = 30) => {
+  const response = await api.get('/vocabulary/context/replay/retry-queue', {
+    params: { limit },
+    headers: getAuthHeader(),
+  });
+  return response.data || [];
+};
+
 export const postChatMessage = async (
   query,
   sessionId,
@@ -536,7 +858,7 @@ export const postChatMessage = async (
       localStorage.removeItem('user');
       throw '登录状态已失效，请重新登录。';
     }
-    throw error?.response?.data?.detail || error?.message || '请求失败，请稍后重试。';
+    throw normalizeUiError(error, '请求失败，请稍后重试');
   }
 };
 
@@ -734,6 +1056,30 @@ export const getSessionReport = async (sessionId) => {
   return response.data;
 };
 
+export const getPlanHealthReport = async (planId = null, days = 14) => {
+  const response = await api.get('/report/plan/health', {
+    params: { plan_id: planId, days },
+    headers: getAuthHeader(),
+  });
+  return response.data;
+};
+
+export const getPlanCalibrationLogs = async (planId = null, limit = 20) => {
+  const response = await api.get('/report/plan/calibrations', {
+    params: { plan_id: planId, limit },
+    headers: getAuthHeader(),
+  });
+  return response.data || [];
+};
+
+export const getPlanInterventionStatus = async (planId = null, days = 14) => {
+  const response = await api.get('/report/plan/intervention-status', {
+    params: { plan_id: planId, days },
+    headers: getAuthHeader(),
+  });
+  return response.data || null;
+};
+
 // 计划 API
 export const generatePlan7d = async (weaknesses = [], targetScore = 7.0, dailyTimeAvailable = '1-2 hours') => {
   const response = await api.post('/plan/7d', {
@@ -753,6 +1099,52 @@ export const createLearningPlan = async (payload) => {
 
 export const getLearningPlanDetail = async (planId) => {
   const response = await api.get(`/plan/${planId}`, { headers: getAuthHeader() });
+  return response.data;
+};
+
+export const generateWeeklyPlanTasks = async (planId, days = 7) => {
+  const response = await api.post(
+    `/plan/${planId}/tasks/generate-weekly`,
+    { days },
+    { headers: getAuthHeader() },
+  );
+  return response.data;
+};
+
+export const getLearningPlanTasks = async (planId) => {
+  const response = await api.get(`/plan/${planId}/tasks`, { headers: getAuthHeader() });
+  return response.data || [];
+};
+
+export const getLearningPlanProgress = async (planId) => {
+  const response = await api.get(`/plan/${planId}/progress`, { headers: getAuthHeader() });
+  return response.data || null;
+};
+
+export const updatePlanTaskProgress = async (dailyTaskId, payload) => {
+  const response = await api.put(`/plan/tasks/${dailyTaskId}/progress`, payload, { headers: getAuthHeader() });
+  return response.data;
+};
+
+export const updateLearningPlanSettings = async (planId, payload) => {
+  const response = await api.put(`/plan/${planId}/settings`, payload, { headers: getAuthHeader() });
+  return response.data;
+};
+
+export const getPlanInterventionPreview = async (planId, days = 14, remedialDays = 3) => {
+  const response = await api.get(`/plan/${planId}/intervention/preview`, {
+    params: { days, remedial_days: remedialDays },
+    headers: getAuthHeader(),
+  });
+  return response.data;
+};
+
+export const applyPlanIntervention = async (planId, days = 14, remedialDays = 3) => {
+  const response = await api.post(
+    `/plan/${planId}/intervention/apply`,
+    { days, remedial_days: remedialDays },
+    { headers: getAuthHeader() },
+  );
   return response.data;
 };
 
