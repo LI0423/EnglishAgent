@@ -1882,6 +1882,280 @@ def list_gamification_redemptions(user_id: str, limit: int = 30) -> list[Dict[st
         conn.close()
 
 
+def create_community_post(
+    post_id: str,
+    *,
+    user_id: str,
+    post_type: str,
+    title: str,
+    content: str,
+    tags: Optional[list[str]] = None,
+    status: str = "published",
+    is_anonymous: bool = False,
+) -> None:
+    now = int(time.time())
+    conn = get_conn()
+    try:
+        conn.execute(
+            """
+            INSERT INTO community_posts (
+              id, user_id, post_type, title, content, tags, status, is_anonymous,
+              upvotes, downvotes, comment_count, view_count, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, 0, 0, 0, ?, ?)
+            """,
+            (
+                str(post_id),
+                str(user_id),
+                str(post_type),
+                str(title),
+                str(content),
+                json.dumps([str(x).strip() for x in (tags or []) if str(x).strip()]),
+                str(status),
+                1 if is_anonymous else 0,
+                now,
+                now,
+            ),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def get_community_post(post_id: str) -> Optional[Dict[str, Any]]:
+    conn = get_conn()
+    try:
+        row = conn.execute("SELECT * FROM community_posts WHERE id = ?", (str(post_id),)).fetchone()
+        if not row:
+            return None
+        item = dict(row)
+        item["tags"] = json.loads(item["tags"]) if item.get("tags") else []
+        return item
+    finally:
+        conn.close()
+
+
+def add_community_post_view(post_id: str) -> None:
+    conn = get_conn()
+    try:
+        conn.execute(
+            "UPDATE community_posts SET view_count = view_count + 1, updated_at = ? WHERE id = ?",
+            (int(time.time()), str(post_id)),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def list_community_posts(
+    *,
+    post_type: Optional[str] = None,
+    status: str = "published",
+    keyword: str = "",
+    limit: int = 20,
+    offset: int = 0,
+) -> list[Dict[str, Any]]:
+    where = ["status = ?"]
+    params: list[Any] = [str(status)]
+    if post_type:
+        where.append("post_type = ?")
+        params.append(str(post_type))
+    if keyword.strip():
+        where.append("(title LIKE ? OR content LIKE ?)")
+        like = f"%{keyword.strip()}%"
+        params.extend([like, like])
+    params.extend([max(1, int(limit)), max(0, int(offset))])
+
+    conn = get_conn()
+    try:
+        cur = conn.execute(
+            f"""
+            SELECT *
+            FROM community_posts
+            WHERE {' AND '.join(where)}
+            ORDER BY created_at DESC
+            LIMIT ? OFFSET ?
+            """,
+            params,
+        )
+        items: list[Dict[str, Any]] = []
+        for row in cur.fetchall():
+            item = dict(row)
+            item["tags"] = json.loads(item["tags"]) if item.get("tags") else []
+            items.append(item)
+        return items
+    finally:
+        conn.close()
+
+
+def create_community_comment(
+    comment_id: str,
+    *,
+    post_id: str,
+    user_id: str,
+    content: str,
+    status: str = "published",
+    is_anonymous: bool = False,
+) -> None:
+    now = int(time.time())
+    conn = get_conn()
+    try:
+        conn.execute(
+            """
+            INSERT INTO community_comments (
+              id, post_id, user_id, content, status, is_anonymous,
+              upvotes, downvotes, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, 0, 0, ?, ?)
+            """,
+            (
+                str(comment_id),
+                str(post_id),
+                str(user_id),
+                str(content),
+                str(status),
+                1 if is_anonymous else 0,
+                now,
+                now,
+            ),
+        )
+        conn.execute(
+            "UPDATE community_posts SET comment_count = comment_count + 1, updated_at = ? WHERE id = ?",
+            (now, str(post_id)),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def list_community_comments(post_id: str, status: str = "published", limit: int = 100) -> list[Dict[str, Any]]:
+    conn = get_conn()
+    try:
+        cur = conn.execute(
+            """
+            SELECT *
+            FROM community_comments
+            WHERE post_id = ? AND status = ?
+            ORDER BY created_at ASC
+            LIMIT ?
+            """,
+            (str(post_id), str(status), max(1, int(limit))),
+        )
+        return [dict(x) for x in cur.fetchall()]
+    finally:
+        conn.close()
+
+
+def get_community_comment(comment_id: str) -> Optional[Dict[str, Any]]:
+    conn = get_conn()
+    try:
+        row = conn.execute("SELECT * FROM community_comments WHERE id = ?", (str(comment_id),)).fetchone()
+        return dict(row) if row else None
+    finally:
+        conn.close()
+
+
+def _refresh_vote_totals(conn: sqlite3.Connection, target_type: str, target_id: str) -> None:
+    row = conn.execute(
+        """
+        SELECT
+          COALESCE(SUM(CASE WHEN vote = 1 THEN 1 ELSE 0 END), 0) AS upvotes,
+          COALESCE(SUM(CASE WHEN vote = -1 THEN 1 ELSE 0 END), 0) AS downvotes
+        FROM community_votes
+        WHERE target_type = ? AND target_id = ?
+        """,
+        (str(target_type), str(target_id)),
+    ).fetchone()
+    up = int((row["upvotes"] or 0) if row else 0)
+    down = int((row["downvotes"] or 0) if row else 0)
+
+    table = "community_posts" if str(target_type) == "post" else "community_comments"
+    conn.execute(
+        f"UPDATE {table} SET upvotes = ?, downvotes = ?, updated_at = ? WHERE id = ?",
+        (up, down, int(time.time()), str(target_id)),
+    )
+
+
+def set_community_vote(
+    vote_id: str,
+    *,
+    user_id: str,
+    target_type: str,
+    target_id: str,
+    vote: int,
+) -> Dict[str, int]:
+    if vote not in (-1, 0, 1):
+        raise ValueError("vote must be -1/0/1")
+    now = int(time.time())
+    conn = get_conn()
+    try:
+        existing = conn.execute(
+            """
+            SELECT id FROM community_votes
+            WHERE user_id = ? AND target_type = ? AND target_id = ?
+            """,
+            (str(user_id), str(target_type), str(target_id)),
+        ).fetchone()
+        if vote == 0:
+            if existing:
+                conn.execute("DELETE FROM community_votes WHERE id = ?", (str(existing["id"]),))
+        else:
+            if existing:
+                conn.execute(
+                    "UPDATE community_votes SET vote = ?, updated_at = ? WHERE id = ?",
+                    (int(vote), now, str(existing["id"])),
+                )
+            else:
+                conn.execute(
+                    """
+                    INSERT INTO community_votes (id, user_id, target_type, target_id, vote, created_at, updated_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        str(vote_id),
+                        str(user_id),
+                        str(target_type),
+                        str(target_id),
+                        int(vote),
+                        now,
+                        now,
+                    ),
+                )
+        _refresh_vote_totals(conn, str(target_type), str(target_id))
+        conn.commit()
+
+        row = conn.execute(
+            "SELECT upvotes, downvotes FROM community_posts WHERE id = ?" if str(target_type) == "post"
+            else "SELECT upvotes, downvotes FROM community_comments WHERE id = ?",
+            (str(target_id),),
+        ).fetchone()
+        return {"upvotes": int((row["upvotes"] or 0) if row else 0), "downvotes": int((row["downvotes"] or 0) if row else 0)}
+    finally:
+        conn.close()
+
+
+def get_user_community_summary(user_id: str) -> Dict[str, int]:
+    conn = get_conn()
+    try:
+        posts = conn.execute(
+            "SELECT COUNT(*) AS cnt FROM community_posts WHERE user_id = ?",
+            (str(user_id),),
+        ).fetchone()
+        comments = conn.execute(
+            "SELECT COUNT(*) AS cnt FROM community_comments WHERE user_id = ?",
+            (str(user_id),),
+        ).fetchone()
+        votes = conn.execute(
+            "SELECT COUNT(*) AS cnt FROM community_votes WHERE user_id = ?",
+            (str(user_id),),
+        ).fetchone()
+        return {
+            "post_count": int((posts["cnt"] or 0) if posts else 0),
+            "comment_count": int((comments["cnt"] or 0) if comments else 0),
+            "vote_count": int((votes["cnt"] or 0) if votes else 0),
+        }
+    finally:
+        conn.close()
+
+
 # Reminder DAO
 def create_reminder(reminder_id: str, user_id: str, reminder_data: Dict[str, Any]) -> None:
     conn = get_conn()

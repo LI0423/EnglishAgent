@@ -12,6 +12,7 @@ const Home = () => {
     { to: '/writing', label: '✍️ 写作练习' },
     { to: '/speaking', label: '💬 口语练习' },
     { to: '/vocabulary', label: '📝 词汇学习' },
+    { to: '/community', label: '👥 学习社区' },
     { to: '/reports', label: '📊 学习报告' },
     { to: '/plans', label: '🎯 个性化计划' },
     { to: '/achievements', label: '🏆 成就中心' },

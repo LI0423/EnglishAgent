@@ -84,6 +84,7 @@ from backend.routers import speaking as speaking_router
 from backend.routers import vocabulary as vocabulary_router
 from backend.routers import writing as writing_router
 from backend.routers import gamification as gamification_router
+from backend.routers import community as community_router
 from backend.services import reminder_service
 from backend.tasks import reminder_tasks
 from backend.tasks import intelligent_reminder_tasks
@@ -730,6 +731,112 @@ def test_gamification_overview_leaderboard_and_redeem(isolated_db):
         )
         assert redeemed.cost_points == 30
         assert redeemed.total_points == overview.total_points - 30
+
+
+def test_learning_community_post_comment_vote_flow(isolated_db):
+    created = asyncio.run(
+        community_router.create_post(
+            community_router.CommunityPostCreateRequest(
+                post_type="question",
+                title="How to improve Task 2 coherence?",
+                content=(
+                    "I can write enough words but my logic feels weak. "
+                    "Any practical structure tips for quick improvement?"
+                ),
+                tags=["writing", "task2"],
+                is_anonymous=False,
+            ),
+            current_user={"id": "u1", "username": "u1"},
+        )
+    )
+    assert created.post_id
+    assert created.status in {"published", "pending_review"}
+    assert created.status == "published"
+
+    posts = asyncio.run(
+        community_router.get_posts(
+            post_type=None,
+            keyword="coherence",
+            limit=20,
+            offset=0,
+            current_user={"id": "u2", "username": "u2"},
+        )
+    )
+    assert any(p.id == created.post_id for p in posts)
+
+    detail = asyncio.run(
+        community_router.get_post_detail(
+            created.post_id,
+            current_user={"id": "u2", "username": "u2"},
+        )
+    )
+    assert detail.id == created.post_id
+
+    comment = asyncio.run(
+        community_router.create_comment(
+            created.post_id,
+            community_router.CommunityCommentCreateRequest(
+                content="Try 4-paragraph structure: intro, two body paragraphs, conclusion.",
+                is_anonymous=False,
+            ),
+            current_user={"id": "u2", "username": "u2"},
+        )
+    )
+    assert comment.post_id == created.post_id
+    assert comment.status == "published"
+
+    comments = asyncio.run(
+        community_router.get_comments(
+            created.post_id,
+            limit=50,
+            current_user={"id": "u1", "username": "u1"},
+        )
+    )
+    assert any(c.id == comment.id for c in comments)
+
+    voted = asyncio.run(
+        community_router.vote_post(
+            created.post_id,
+            community_router.CommunityVoteRequest(vote=1),
+            current_user={"id": "u2", "username": "u2"},
+        )
+    )
+    assert voted.upvotes >= 1
+
+    voted_comment = asyncio.run(
+        community_router.vote_comment(
+            comment.id,
+            community_router.CommunityVoteRequest(vote=1),
+            current_user={"id": "u1", "username": "u1"},
+        )
+    )
+    assert voted_comment.upvotes >= 1
+
+    summary_u1 = asyncio.run(
+        community_router.get_my_community_summary(
+            current_user={"id": "u1", "username": "u1"},
+        )
+    )
+    summary_u2 = asyncio.run(
+        community_router.get_my_community_summary(
+            current_user={"id": "u2", "username": "u2"},
+        )
+    )
+    assert summary_u1.post_count >= 1
+    assert summary_u2.comment_count >= 1
+
+    overview_u1 = asyncio.run(
+        gamification_router.get_overview(
+            current_user={"id": "u1", "username": "u1"},
+        )
+    )
+    overview_u2 = asyncio.run(
+        gamification_router.get_overview(
+            current_user={"id": "u2", "username": "u2"},
+        )
+    )
+    assert overview_u1.total_points >= 3
+    assert overview_u2.total_points >= 1
 
 
 def test_reminder_retry_backoff_and_failover(isolated_db, monkeypatch):

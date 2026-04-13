@@ -416,6 +416,69 @@ export const redeemGamificationItem = async (itemCode) => {
   return response.data;
 };
 
+export const createCommunityPost = async (payload) => {
+  const response = await api.post('/community/posts', payload, {
+    headers: getAuthHeader(),
+  });
+  return response.data;
+};
+
+export const getCommunityPosts = async ({ postType = null, keyword = '', limit = 20, offset = 0 } = {}) => {
+  const response = await api.get('/community/posts', {
+    params: {
+      post_type: postType,
+      keyword,
+      limit,
+      offset,
+    },
+    headers: getAuthHeader(),
+  });
+  return response.data || [];
+};
+
+export const getCommunityPostDetail = async (postId) => {
+  const response = await api.get(`/community/posts/${postId}`, {
+    headers: getAuthHeader(),
+  });
+  return response.data;
+};
+
+export const createCommunityComment = async (postId, payload) => {
+  const response = await api.post(`/community/posts/${postId}/comments`, payload, {
+    headers: getAuthHeader(),
+  });
+  return response.data;
+};
+
+export const getCommunityComments = async (postId, limit = 100) => {
+  const response = await api.get(`/community/posts/${postId}/comments`, {
+    params: { limit },
+    headers: getAuthHeader(),
+  });
+  return response.data || [];
+};
+
+export const voteCommunityPost = async (postId, vote) => {
+  const response = await api.post(`/community/posts/${postId}/vote`, { vote }, {
+    headers: getAuthHeader(),
+  });
+  return response.data;
+};
+
+export const voteCommunityComment = async (commentId, vote) => {
+  const response = await api.post(`/community/comments/${commentId}/vote`, { vote }, {
+    headers: getAuthHeader(),
+  });
+  return response.data;
+};
+
+export const getMyCommunitySummary = async () => {
+  const response = await api.get('/community/me/summary', {
+    headers: getAuthHeader(),
+  });
+  return response.data;
+};
+
 export const getTask1CommonStructures = async () => {
   const user = JSON.parse(localStorage.getItem('user'));
   if (!user || !user.access_token) {
