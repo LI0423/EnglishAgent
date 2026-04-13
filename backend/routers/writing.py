@@ -5,7 +5,17 @@ import re
 import time
 from uuid import uuid4
 from ..deps import get_current_user
-from ..db import save_mistake
+from ..db import (
+    save_mistake,
+    create_writing_submission,
+    list_user_writing_submissions,
+    claim_writing_submission_for_review,
+    get_writing_submission,
+    create_writing_peer_review,
+    list_reviews_for_submission,
+    list_received_writing_reviews,
+)
+from ..services.mistake_taxonomy import normalize_writing_dim_error_type, normalize_writing_feedback_error_type
 from backend.utils.tracking import get_learning_tracker
 
 router = APIRouter()
@@ -88,6 +98,20 @@ task1_vocabulary = {
     "quantity": ["approximately", "around", "about", "just over", "slightly under"],
     "time": ["over the period", "between...and...", "from...to...", "by the end of", "during"]
 }
+
+
+def _calc_overall_band(tr_score: float, cc_score: float, lr_score: float, gra_score: float) -> float:
+    return round((float(tr_score) + float(cc_score) + float(lr_score) + float(gra_score)) / 4.0, 2)
+
+
+def _calc_review_quality_tier(comment_text: str, strengths: str, improvements: str) -> str:
+    text = f"{comment_text} {strengths} {improvements}".strip()
+    words = len(re.findall(r"[A-Za-z\u4e00-\u9fff]+", text))
+    if words >= 60:
+        return "advanced"
+    if words >= 25:
+        return "standard"
+    return "basic"
 
 # 基础语法检查规则
 grammar_rules = {
@@ -241,6 +265,7 @@ async def analyze_task1_writing(req: Task1WritingRequest, current_user: dict = D
     for item in feedback:
         if item.severity not in {"medium", "high"}:
             continue
+        normalized_error_type = normalize_writing_feedback_error_type(item.category)
         save_mistake(
             str(uuid4()),
             str(current_user["id"]),
@@ -248,13 +273,13 @@ async def analyze_task1_writing(req: Task1WritingRequest, current_user: dict = D
                 "module": "writing",
                 "question_id": f"task1_{req.chart_type}_{int(time.time())}",
                 "question_type": "writing_task1",
-                "error_type": f"writing_{item.category}",
+                "error_type": normalized_error_type,
                 "content": item.message,
                 "user_answer": "",
                 "correct_answer": "",
                 "explanation": item.suggestion,
                 "difficulty": "intermediate",
-                "tags": ["writing_task1", item.category],
+                "tags": ["writing_task1", item.category, f"error_type:{normalized_error_type}", "taxonomy:v1"],
             },
         )
 
@@ -267,6 +292,7 @@ async def analyze_task1_writing(req: Task1WritingRequest, current_user: dict = D
     }
     for dim, score in dim_scores.items():
         if int(score) < 6:
+            normalized_error_type = normalize_writing_dim_error_type(dim)
             save_mistake(
                 str(uuid4()),
                 str(current_user["id"]),
@@ -274,13 +300,13 @@ async def analyze_task1_writing(req: Task1WritingRequest, current_user: dict = D
                     "module": "writing",
                     "question_id": f"task1_dim_{dim}_{int(time.time())}",
                     "question_type": "writing_task1",
-                    "error_type": f"low_{dim}",
+                    "error_type": normalized_error_type,
                     "content": f"Task 1 {dim} score below target.",
                     "user_answer": str(score),
                     "correct_answer": ">=6",
                     "explanation": f"Current {dim} score is {score}. Follow feedback suggestions for improvement.",
                     "difficulty": "intermediate",
-                    "tags": ["writing_task1", f"low_{dim}"],
+                    "tags": ["writing_task1", f"low_{dim}", f"error_type:{normalized_error_type}", "taxonomy:v1"],
                 },
             )
 
@@ -399,3 +425,220 @@ async def get_common_task1_vocabulary(category: Optional[str] = None, current_us
     return {
         "vocabulary": filtered_vocab
     }
+
+
+class PeerSubmissionCreateRequest(BaseModel):
+    task_type: Literal["task1", "task2"] = "task1"
+    topic: str
+    content: str = Field(..., min_length=30)
+
+
+class PeerSubmissionItem(BaseModel):
+    id: str
+    task_type: str
+    topic: str
+    content: str
+    status: str
+    review_count: int
+    avg_overall_score: float
+    created_at: int
+    updated_at: int
+
+
+class PeerSubmissionCreateResponse(BaseModel):
+    submission_id: str
+    status: str
+    message: str
+
+
+class PeerReviewClaimResponse(BaseModel):
+    claimed: bool
+    submission: Optional[PeerSubmissionItem] = None
+    message: str = ""
+
+
+class PeerReviewSubmitRequest(BaseModel):
+    submission_id: str
+    tr_score: float = Field(..., ge=0, le=9)
+    cc_score: float = Field(..., ge=0, le=9)
+    lr_score: float = Field(..., ge=0, le=9)
+    gra_score: float = Field(..., ge=0, le=9)
+    strengths: str = ""
+    improvements: str = ""
+    comment_text: str = ""
+
+
+class PeerReviewItem(BaseModel):
+    id: str
+    submission_id: str
+    reviewer_id: str
+    reviewee_id: str
+    tr_score: float
+    cc_score: float
+    lr_score: float
+    gra_score: float
+    overall_score: float
+    strengths: str
+    improvements: str
+    comment_text: str
+    quality_tier: str
+    created_at: int
+    task_type: Optional[str] = None
+    topic: Optional[str] = None
+
+
+class PeerReviewSubmitResponse(BaseModel):
+    review_id: str
+    submission_id: str
+    overall_score: float
+    quality_tier: str
+    message: str
+
+
+@router.post("/peer/submit", response_model=PeerSubmissionCreateResponse)
+async def submit_peer_writing(req: PeerSubmissionCreateRequest, current_user: dict = Depends(get_current_user)):
+    submission_id = str(uuid4())
+    create_writing_submission(
+        submission_id=submission_id,
+        user_id=str(current_user["id"]),
+        task_type=req.task_type,
+        topic=req.topic,
+        content=req.content,
+    )
+    return PeerSubmissionCreateResponse(
+        submission_id=submission_id,
+        status="open",
+        message="已加入互评池，等待他人点评。",
+    )
+
+
+@router.get("/peer/submissions", response_model=List[PeerSubmissionItem])
+async def get_my_peer_submissions(limit: int = 20, current_user: dict = Depends(get_current_user)):
+    rows = list_user_writing_submissions(user_id=str(current_user["id"]), limit=limit)
+    return [
+        PeerSubmissionItem(
+            id=str(x["id"]),
+            task_type=str(x.get("task_type") or "task1"),
+            topic=str(x.get("topic") or ""),
+            content=str(x.get("content") or ""),
+            status=str(x.get("status") or "open"),
+            review_count=int(x.get("review_count") or 0),
+            avg_overall_score=float(x.get("avg_overall_score") or 0.0),
+            created_at=int(x.get("created_at") or 0),
+            updated_at=int(x.get("updated_at") or 0),
+        )
+        for x in rows
+    ]
+
+
+@router.post("/peer/claim", response_model=PeerReviewClaimResponse)
+async def claim_peer_submission(current_user: dict = Depends(get_current_user)):
+    row = claim_writing_submission_for_review(reviewer_id=str(current_user["id"]))
+    if not row:
+        return PeerReviewClaimResponse(claimed=False, submission=None, message="当前没有可领取的互评作文。")
+    item = PeerSubmissionItem(
+        id=str(row["id"]),
+        task_type=str(row.get("task_type") or "task1"),
+        topic=str(row.get("topic") or ""),
+        content=str(row.get("content") or ""),
+        status=str(row.get("status") or "in_review"),
+        review_count=int(row.get("review_count") or 0),
+        avg_overall_score=float(row.get("avg_overall_score") or 0.0),
+        created_at=int(row.get("created_at") or 0),
+        updated_at=int(row.get("updated_at") or 0),
+    )
+    return PeerReviewClaimResponse(claimed=True, submission=item, message="已领取1篇互评任务。")
+
+
+@router.post("/peer/review", response_model=PeerReviewSubmitResponse)
+async def submit_peer_review(req: PeerReviewSubmitRequest, current_user: dict = Depends(get_current_user)):
+    submission = get_writing_submission(req.submission_id)
+    if not submission:
+        raise HTTPException(status_code=404, detail="Submission not found")
+    reviewee_id = str(submission.get("user_id") or "")
+    reviewer_id = str(current_user["id"])
+    if reviewee_id == reviewer_id:
+        raise HTTPException(status_code=400, detail="Cannot review your own submission")
+
+    overall_score = _calc_overall_band(req.tr_score, req.cc_score, req.lr_score, req.gra_score)
+    quality_tier = _calc_review_quality_tier(req.comment_text, req.strengths, req.improvements)
+    review_id = str(uuid4())
+    try:
+        create_writing_peer_review(
+            review_id=review_id,
+            submission_id=req.submission_id,
+            reviewer_id=reviewer_id,
+            reviewee_id=reviewee_id,
+            tr_score=req.tr_score,
+            cc_score=req.cc_score,
+            lr_score=req.lr_score,
+            gra_score=req.gra_score,
+            overall_score=overall_score,
+            strengths=req.strengths,
+            improvements=req.improvements,
+            comment_text=req.comment_text,
+            quality_tier=quality_tier,
+        )
+    except Exception as exc:
+        if "UNIQUE constraint failed" in str(exc):
+            raise HTTPException(status_code=400, detail="You already reviewed this submission") from exc
+        raise
+
+    return PeerReviewSubmitResponse(
+        review_id=review_id,
+        submission_id=req.submission_id,
+        overall_score=overall_score,
+        quality_tier=quality_tier,
+        message="互评提交成功。",
+    )
+
+
+@router.get("/peer/reviews/received", response_model=List[PeerReviewItem])
+async def get_received_peer_reviews(submission_id: Optional[str] = None, limit: int = 30, current_user: dict = Depends(get_current_user)):
+    if submission_id:
+        submission = get_writing_submission(submission_id)
+        if not submission or str(submission.get("user_id")) != str(current_user["id"]):
+            raise HTTPException(status_code=404, detail="Submission not found")
+        rows = list_reviews_for_submission(submission_id, limit=limit)
+        return [
+            PeerReviewItem(
+                id=str(x["id"]),
+                submission_id=str(x["submission_id"]),
+                reviewer_id=str(x["reviewer_id"]),
+                reviewee_id=str(x["reviewee_id"]),
+                tr_score=float(x["tr_score"]),
+                cc_score=float(x["cc_score"]),
+                lr_score=float(x["lr_score"]),
+                gra_score=float(x["gra_score"]),
+                overall_score=float(x["overall_score"]),
+                strengths=str(x.get("strengths") or ""),
+                improvements=str(x.get("improvements") or ""),
+                comment_text=str(x.get("comment_text") or ""),
+                quality_tier=str(x.get("quality_tier") or "basic"),
+                created_at=int(x.get("created_at") or 0),
+            )
+            for x in rows
+        ]
+
+    rows = list_received_writing_reviews(user_id=str(current_user["id"]), limit=limit)
+    return [
+        PeerReviewItem(
+            id=str(x["id"]),
+            submission_id=str(x["submission_id"]),
+            reviewer_id=str(x["reviewer_id"]),
+            reviewee_id=str(x["reviewee_id"]),
+            tr_score=float(x["tr_score"]),
+            cc_score=float(x["cc_score"]),
+            lr_score=float(x["lr_score"]),
+            gra_score=float(x["gra_score"]),
+            overall_score=float(x["overall_score"]),
+            strengths=str(x.get("strengths") or ""),
+            improvements=str(x.get("improvements") or ""),
+            comment_text=str(x.get("comment_text") or ""),
+            quality_tier=str(x.get("quality_tier") or "basic"),
+            created_at=int(x.get("created_at") or 0),
+            task_type=str(x.get("task_type") or ""),
+            topic=str(x.get("topic") or ""),
+        )
+        for x in rows
+    ]

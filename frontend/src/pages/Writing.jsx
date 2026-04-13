@@ -1,9 +1,19 @@
 import { useEffect, useState, useRef } from 'react';
-import { NavLink } from 'react-router-dom';
+import { NavLink, useLocation, useNavigate } from 'react-router-dom';
 import { getCurrentUser } from '../utils/api';
-import { analyzeTask1Writing, saveTask1Practice } from '../utils/api';
+import {
+  analyzeTask1Writing,
+  claimWritingPeerSubmission,
+  getMyWritingPeerSubmissions,
+  getReceivedWritingPeerReviews,
+  saveTask1Practice,
+  submitWritingPeerReview,
+  submitWritingPeerSubmission,
+} from '../utils/api';
 
 const Writing = () => {
+  const location = useLocation();
+  const navigate = useNavigate();
   const navItems = [
     { to: '/', label: '🏠 首页' },
     { to: '/chat', label: '🤖 智能对话' },
@@ -26,6 +36,21 @@ const Writing = () => {
   const [aiFeedback, setAiFeedback] = useState({});
   const [saving, setSaving] = useState(false);
   const [submitting, setSubmitting] = useState(false);
+  const [replayNotice, setReplayNotice] = useState('');
+  const [peerTopic, setPeerTopic] = useState('Task 1 图表描述练习');
+  const [peerSubmitting, setPeerSubmitting] = useState(false);
+  const [peerClaimed, setPeerClaimed] = useState(null);
+  const [peerReviewing, setPeerReviewing] = useState(false);
+  const [peerMySubs, setPeerMySubs] = useState([]);
+  const [peerReceived, setPeerReceived] = useState([]);
+  const [peerTR, setPeerTR] = useState(6);
+  const [peerCC, setPeerCC] = useState(6);
+  const [peerLR, setPeerLR] = useState(6);
+  const [peerGRA, setPeerGRA] = useState(6);
+  const [peerStrengths, setPeerStrengths] = useState('');
+  const [peerImprovements, setPeerImprovements] = useState('');
+  const [peerComment, setPeerComment] = useState('');
+  const [peerMessage, setPeerMessage] = useState('');
   const timerRef = useRef(null);
 
   // 获取用户数据
@@ -63,11 +88,39 @@ const Writing = () => {
     };
   }, []);
 
+  const loadPeerData = async () => {
+    try {
+      const [subs, received] = await Promise.all([
+        getMyWritingPeerSubmissions(20),
+        getReceivedWritingPeerReviews(null, 20),
+      ]);
+      setPeerMySubs(subs || []);
+      setPeerReceived(received || []);
+    } catch (err) {
+      console.error('Failed to load peer data:', err);
+    }
+  };
+
   // 实时字数统计
   useEffect(() => {
     const count = writingContent.trim().split(/\s+/).filter(word => word.length > 0).length;
     setWordCount(count);
   }, [writingContent]);
+
+  useEffect(() => {
+    const params = new URLSearchParams(location.search || '');
+    if (params.get('replay') !== '1') return;
+    const qType = (params.get('questionType') || '').toLowerCase();
+    const questionId = params.get('questionId') || '';
+    if (qType === 'writing_task1') {
+      setTaskType('task1');
+    }
+    setReplayNotice(questionId ? `来自错题重练：题目 ${questionId}` : '来自错题重练：建议先完成一篇写作练习');
+  }, [location.search]);
+
+  useEffect(() => {
+    loadPeerData();
+  }, []);
 
   // 模拟题目数据
   const task1Question = {
@@ -153,6 +206,68 @@ const Writing = () => {
     }
   };
 
+  const handlePeerSubmit = async () => {
+    if (!writingContent.trim() || writingContent.trim().length < 30) return;
+    setPeerSubmitting(true);
+    setPeerMessage('');
+    try {
+      const res = await submitWritingPeerSubmission({
+        taskType: taskType === 'task2' ? 'task2' : 'task1',
+        topic: peerTopic.trim() || 'Writing peer review',
+        content: writingContent.trim(),
+      });
+      setPeerMessage(res?.message || '已提交到互评池');
+      await loadPeerData();
+    } catch (err) {
+      setPeerMessage(typeof err === 'string' ? err : '互评投稿失败');
+    } finally {
+      setPeerSubmitting(false);
+    }
+  };
+
+  const handlePeerClaim = async () => {
+    setPeerMessage('');
+    try {
+      const res = await claimWritingPeerSubmission();
+      if (res?.claimed && res?.submission) {
+        setPeerClaimed(res.submission);
+      } else {
+        setPeerClaimed(null);
+      }
+      setPeerMessage(res?.message || '');
+    } catch (err) {
+      setPeerMessage(typeof err === 'string' ? err : '领取互评任务失败');
+    }
+  };
+
+  const handlePeerReviewSubmit = async () => {
+    if (!peerClaimed?.id) return;
+    setPeerReviewing(true);
+    setPeerMessage('');
+    try {
+      const res = await submitWritingPeerReview({
+        submission_id: peerClaimed.id,
+        tr_score: Number(peerTR),
+        cc_score: Number(peerCC),
+        lr_score: Number(peerLR),
+        gra_score: Number(peerGRA),
+        strengths: peerStrengths,
+        improvements: peerImprovements,
+        comment_text: peerComment,
+      });
+      setPeerMessage(`互评提交成功（质量等级：${res?.quality_tier || 'basic'}）`);
+      setPeerClaimed(null);
+      setPeerStrengths('');
+      setPeerImprovements('');
+      setPeerComment('');
+      await loadPeerData();
+    } catch (err) {
+      setPeerMessage(typeof err === 'string' ? err : '提交互评失败');
+    } finally {
+      setPeerReviewing(false);
+    }
+  };
+
   // 格式化时间显示
   const formatTime = (seconds) => {
     const mins = Math.floor(seconds / 60);
@@ -211,6 +326,13 @@ const Writing = () => {
         {/* 右侧内容区 */}
         <div className="content-area">
           <main className="writing-content">
+            {replayNotice && (
+              <div className="card" style={{ marginBottom: 16, borderColor: '#7bb5ff', background: '#f3f8ff' }}>
+                <h3>错题重练指引</h3>
+                <p>{replayNotice}</p>
+                <button onClick={() => navigate('/mistakes?module=writing&questionType=writing_task1')}>返回错题本</button>
+              </div>
+            )}
             {/* 页面标题和面包屑导航 */}
             <div className="page-header">
               <div className="breadcrumb">
@@ -367,6 +489,68 @@ const Writing = () => {
                   <span className="original-word">show</span>
                   <span className="suggested-words">→ demonstrate, indicate, reveal</span>
                 </div>
+              </div>
+            </div>
+
+            <div className="card" style={{ marginTop: 16 }}>
+              <h3>🤝 作文互评 1.0</h3>
+              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center', marginBottom: 8 }}>
+                <input
+                  value={peerTopic}
+                  onChange={(e) => setPeerTopic(e.target.value)}
+                  placeholder="互评题目标题"
+                  style={{ minWidth: 260 }}
+                />
+                <button onClick={handlePeerSubmit} disabled={peerSubmitting || !writingContent.trim() || writingContent.trim().length < 30}>
+                  {peerSubmitting ? '投稿中...' : '投递当前作文到互评池'}
+                </button>
+                <button onClick={handlePeerClaim}>领取一篇互评任务</button>
+              </div>
+              {peerMessage && <p style={{ color: '#0f766e' }}>{peerMessage}</p>}
+
+              {peerClaimed && (
+                <div style={{ border: '1px solid #e5e7eb', borderRadius: 10, padding: 10, marginBottom: 10 }}>
+                  <p><strong>待互评作文：</strong>{peerClaimed.topic}（{peerClaimed.task_type}）</p>
+                  <p style={{ maxHeight: 120, overflow: 'auto', whiteSpace: 'pre-wrap' }}>{peerClaimed.content}</p>
+                  <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 8 }}>
+                    <label>TR <input type="number" min="0" max="9" step="0.5" value={peerTR} onChange={(e) => setPeerTR(e.target.value)} style={{ width: 70 }} /></label>
+                    <label>CC <input type="number" min="0" max="9" step="0.5" value={peerCC} onChange={(e) => setPeerCC(e.target.value)} style={{ width: 70 }} /></label>
+                    <label>LR <input type="number" min="0" max="9" step="0.5" value={peerLR} onChange={(e) => setPeerLR(e.target.value)} style={{ width: 70 }} /></label>
+                    <label>GRA <input type="number" min="0" max="9" step="0.5" value={peerGRA} onChange={(e) => setPeerGRA(e.target.value)} style={{ width: 70 }} /></label>
+                  </div>
+                  <textarea rows={2} value={peerStrengths} onChange={(e) => setPeerStrengths(e.target.value)} placeholder="优点（strengths）" style={{ width: '100%', marginBottom: 6 }} />
+                  <textarea rows={2} value={peerImprovements} onChange={(e) => setPeerImprovements(e.target.value)} placeholder="改进建议（improvements）" style={{ width: '100%', marginBottom: 6 }} />
+                  <textarea rows={3} value={peerComment} onChange={(e) => setPeerComment(e.target.value)} placeholder="综合评语（建议更具体）" style={{ width: '100%', marginBottom: 6 }} />
+                  <button onClick={handlePeerReviewSubmit} disabled={peerReviewing}>
+                    {peerReviewing ? '提交中...' : '提交互评'}
+                  </button>
+                </div>
+              )}
+
+              <div style={{ marginBottom: 8 }}>
+                <h4>我的投稿</h4>
+                <ul>
+                  {peerMySubs.map((x) => (
+                    <li key={x.id}>
+                      {x.topic} | {x.status} | 评分数 {x.review_count} | 平均分 {Number(x.avg_overall_score || 0).toFixed(2)}
+                    </li>
+                  ))}
+                  {peerMySubs.length === 0 && <li>暂无投稿</li>}
+                </ul>
+              </div>
+
+              <div>
+                <h4>我收到的互评</h4>
+                <ul>
+                  {peerReceived.map((x) => (
+                    <li key={x.id}>
+                      {x.topic || x.submission_id} | overall {Number(x.overall_score || 0).toFixed(2)} | 质量 {x.quality_tier}
+                      <br />
+                      优点：{x.strengths || '-'} | 建议：{x.improvements || '-'}
+                    </li>
+                  ))}
+                  {peerReceived.length === 0 && <li>暂无收到互评</li>}
+                </ul>
               </div>
             </div>
           </main>

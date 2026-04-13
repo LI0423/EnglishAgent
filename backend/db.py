@@ -1370,6 +1370,210 @@ def get_plan_progress(plan_id: str) -> Dict[str, Any]:
         conn.close()
 
 
+# Writing peer review DAO
+def create_writing_submission(
+    submission_id: str,
+    user_id: str,
+    task_type: str,
+    topic: str,
+    content: str,
+) -> None:
+    now = int(time.time())
+    conn = get_conn()
+    try:
+        conn.execute(
+            """
+            INSERT INTO writing_submissions (
+              id, user_id, task_type, topic, content, status,
+              review_count, avg_overall_score, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, 'open', 0, 0, ?, ?)
+            """,
+            (
+                str(submission_id),
+                str(user_id),
+                str(task_type),
+                str(topic or ""),
+                str(content or ""),
+                now,
+                now,
+            ),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def get_writing_submission(submission_id: str) -> Optional[Dict[str, Any]]:
+    conn = get_conn()
+    try:
+        cur = conn.execute("SELECT * FROM writing_submissions WHERE id = ?", (str(submission_id),))
+        row = cur.fetchone()
+        return dict(row) if row else None
+    finally:
+        conn.close()
+
+
+def list_user_writing_submissions(user_id: str, limit: int = 20) -> list[Dict[str, Any]]:
+    conn = get_conn()
+    try:
+        cur = conn.execute(
+            """
+            SELECT * FROM writing_submissions
+            WHERE user_id = ?
+            ORDER BY created_at DESC
+            LIMIT ?
+            """,
+            (str(user_id), max(1, int(limit))),
+        )
+        return [dict(x) for x in cur.fetchall()]
+    finally:
+        conn.close()
+
+
+def claim_writing_submission_for_review(reviewer_id: str) -> Optional[Dict[str, Any]]:
+    conn = get_conn()
+    try:
+        cur = conn.execute(
+            """
+            SELECT s.*
+            FROM writing_submissions s
+            WHERE s.user_id != ?
+              AND s.status IN ('open', 'in_review')
+              AND NOT EXISTS (
+                SELECT 1 FROM writing_peer_reviews r
+                WHERE r.submission_id = s.id AND r.reviewer_id = ?
+              )
+            ORDER BY s.created_at ASC
+            LIMIT 1
+            """,
+            (str(reviewer_id), str(reviewer_id)),
+        )
+        row = cur.fetchone()
+        if not row:
+            return None
+        submission = dict(row)
+        if submission.get("status") == "open":
+            conn.execute(
+                "UPDATE writing_submissions SET status = 'in_review', updated_at = ? WHERE id = ?",
+                (int(time.time()), str(submission["id"])),
+            )
+            conn.commit()
+            submission["status"] = "in_review"
+        return submission
+    finally:
+        conn.close()
+
+
+def create_writing_peer_review(
+    review_id: str,
+    submission_id: str,
+    reviewer_id: str,
+    reviewee_id: str,
+    tr_score: float,
+    cc_score: float,
+    lr_score: float,
+    gra_score: float,
+    overall_score: float,
+    strengths: str = "",
+    improvements: str = "",
+    comment_text: str = "",
+    quality_tier: str = "basic",
+) -> None:
+    now = int(time.time())
+    conn = get_conn()
+    try:
+        conn.execute(
+            """
+            INSERT INTO writing_peer_reviews (
+              id, submission_id, reviewer_id, reviewee_id,
+              tr_score, cc_score, lr_score, gra_score, overall_score,
+              strengths, improvements, comment_text, quality_tier, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                str(review_id),
+                str(submission_id),
+                str(reviewer_id),
+                str(reviewee_id),
+                float(tr_score),
+                float(cc_score),
+                float(lr_score),
+                float(gra_score),
+                float(overall_score),
+                str(strengths or ""),
+                str(improvements or ""),
+                str(comment_text or ""),
+                str(quality_tier or "basic"),
+                now,
+            ),
+        )
+
+        cur = conn.execute(
+            """
+            SELECT COUNT(*) AS cnt, AVG(overall_score) AS avg_score
+            FROM writing_peer_reviews
+            WHERE submission_id = ?
+            """,
+            (str(submission_id),),
+        )
+        row = cur.fetchone()
+        cnt = int(row["cnt"] or 0)
+        avg_score = float(row["avg_score"] or 0.0)
+        next_status = "reviewed" if cnt >= 2 else "in_review"
+        conn.execute(
+            """
+            UPDATE writing_submissions
+            SET review_count = ?, avg_overall_score = ?, status = ?, updated_at = ?
+            WHERE id = ?
+            """,
+            (cnt, round(avg_score, 3), next_status, now, str(submission_id)),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def list_reviews_for_submission(submission_id: str, limit: int = 20) -> list[Dict[str, Any]]:
+    conn = get_conn()
+    try:
+        cur = conn.execute(
+            """
+            SELECT *
+            FROM writing_peer_reviews
+            WHERE submission_id = ?
+            ORDER BY created_at DESC
+            LIMIT ?
+            """,
+            (str(submission_id), max(1, int(limit))),
+        )
+        return [dict(x) for x in cur.fetchall()]
+    finally:
+        conn.close()
+
+
+def list_received_writing_reviews(user_id: str, limit: int = 30) -> list[Dict[str, Any]]:
+    conn = get_conn()
+    try:
+        cur = conn.execute(
+            """
+            SELECT
+              r.*,
+              s.task_type,
+              s.topic,
+              s.content
+            FROM writing_peer_reviews r
+            JOIN writing_submissions s ON s.id = r.submission_id
+            WHERE r.reviewee_id = ?
+            ORDER BY r.created_at DESC
+            LIMIT ?
+            """,
+            (str(user_id), max(1, int(limit))),
+        )
+        return [dict(x) for x in cur.fetchall()]
+    finally:
+        conn.close()
+
+
 # Reminder DAO
 def create_reminder(reminder_id: str, user_id: str, reminder_data: Dict[str, Any]) -> None:
     conn = get_conn()

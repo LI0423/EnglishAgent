@@ -356,6 +356,52 @@ def test_speaking_session_user_isolation(isolated_db):
     assert status == 404
 
 
+def test_speaking_turn_and_summary_flow(isolated_db):
+    created = asyncio.run(
+        speaking_router.create_session(current_user={"id": "u1", "username": "u1"})
+    )
+    sid = created.sessionId
+
+    started = asyncio.run(
+        speaking_router.start_part(
+            sid,
+            1,
+            current_user={"id": "u1", "username": "u1"},
+        )
+    )
+    assert started.ok is True
+    assert started.partIndex == 1
+
+    turn = asyncio.run(
+        speaking_router.submit_turn(
+            sid,
+            speaking_router.SpeakingTurnRequest(
+                userText="I study computer science because I enjoy solving real problems in teams.",
+                mode="coach",
+                partIndex=1,
+            ),
+            current_user={"id": "u1", "username": "u1"},
+        )
+    )
+    assert turn.ok is True
+    assert turn.partIndex == 1
+    assert turn.turnIndex >= 1
+    assert turn.followUpQuestion
+    assert isinstance(turn.feedback, dict)
+    assert "content" in turn.feedback
+
+    summary = asyncio.run(
+        speaking_router.summarize_session(
+            sid,
+            current_user={"id": "u1", "username": "u1"},
+        )
+    )
+    assert summary.sessionId == sid
+    assert summary.transcriptWordCount >= 1
+    assert len(summary.highlights) >= 1
+    assert len(summary.drills) >= 1
+
+
 def test_history_sessions_user_isolation(isolated_db):
     db_module.create_session(
         "s_u1_hist",
@@ -468,6 +514,66 @@ def test_writing_analysis_sinks_medium_high_feedback_to_mistakes(isolated_db):
     }
     assert all((m.get("error_type") in allowed_writing_error_types) for m in mistakes)
     assert all("taxonomy:v1" in (m.get("tags") or []) for m in mistakes)
+
+
+def test_writing_peer_review_flow(isolated_db):
+    submission = asyncio.run(
+        writing_router.submit_peer_writing(
+            writing_router.PeerSubmissionCreateRequest(
+                task_type="task1",
+                topic="Bar chart discussion",
+                content="The chart illustrates a clear increase in urban travel demand over the period and provides several comparable indicators.",
+            ),
+            current_user={"id": "u1", "username": "u1"},
+        )
+    )
+    assert submission.submission_id
+
+    claimed = asyncio.run(
+        writing_router.claim_peer_submission(
+            current_user={"id": "u2", "username": "u2"},
+        )
+    )
+    assert claimed.claimed is True
+    assert claimed.submission is not None
+    assert claimed.submission.id == submission.submission_id
+
+    reviewed = asyncio.run(
+        writing_router.submit_peer_review(
+            writing_router.PeerReviewSubmitRequest(
+                submission_id=submission.submission_id,
+                tr_score=6.5,
+                cc_score=6.0,
+                lr_score=6.5,
+                gra_score=6.0,
+                strengths="Structure is clear.",
+                improvements="Use more precise data comparisons.",
+                comment_text="Good overall organization. Add one more concrete comparison sentence.",
+            ),
+            current_user={"id": "u2", "username": "u2"},
+        )
+    )
+    assert reviewed.overall_score > 0
+    assert reviewed.quality_tier in {"basic", "standard", "advanced"}
+
+    subs = asyncio.run(
+        writing_router.get_my_peer_submissions(
+            limit=20,
+            current_user={"id": "u1", "username": "u1"},
+        )
+    )
+    target = next((x for x in subs if x.id == submission.submission_id), None)
+    assert target is not None
+    assert target.review_count >= 1
+
+    received = asyncio.run(
+        writing_router.get_received_peer_reviews(
+            submission_id=submission.submission_id,
+            limit=20,
+            current_user={"id": "u1", "username": "u1"},
+        )
+    )
+    assert len(received) >= 1
 
 
 def test_reminder_retry_backoff_and_failover(isolated_db, monkeypatch):

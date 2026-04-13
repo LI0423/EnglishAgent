@@ -319,6 +319,41 @@ export const getTask1Practices = async () => {
   }
 };
 
+export const submitWritingPeerSubmission = async ({ taskType = 'task1', topic, content }) => {
+  const response = await api.post('/writing/peer/submit', {
+    task_type: taskType,
+    topic,
+    content,
+  }, { headers: getAuthHeader() });
+  return response.data;
+};
+
+export const getMyWritingPeerSubmissions = async (limit = 20) => {
+  const response = await api.get('/writing/peer/submissions', {
+    params: { limit },
+    headers: getAuthHeader(),
+  });
+  return response.data || [];
+};
+
+export const claimWritingPeerSubmission = async () => {
+  const response = await api.post('/writing/peer/claim', {}, { headers: getAuthHeader() });
+  return response.data;
+};
+
+export const submitWritingPeerReview = async (payload) => {
+  const response = await api.post('/writing/peer/review', payload, { headers: getAuthHeader() });
+  return response.data;
+};
+
+export const getReceivedWritingPeerReviews = async (submissionId = null, limit = 30) => {
+  const response = await api.get('/writing/peer/reviews/received', {
+    params: { submission_id: submissionId, limit },
+    headers: getAuthHeader(),
+  });
+  return response.data || [];
+};
+
 export const getTask1CommonStructures = async () => {
   const user = JSON.parse(localStorage.getItem('user'));
   if (!user || !user.access_token) {
@@ -1028,6 +1063,24 @@ export const uploadSpeakingText = async (sessionId, textPartial) => {
   const response = await api.post(`/speaking/session/${sessionId}/audio`, {
     textPartial,
   }, {
+    headers: getAuthHeader(),
+  });
+  return response.data;
+};
+
+export const submitSpeakingTurn = async (sessionId, userText, { mode = 'coach', partIndex = null } = {}) => {
+  const response = await api.post(`/speaking/session/${sessionId}/turn`, {
+    userText,
+    mode,
+    partIndex,
+  }, {
+    headers: getAuthHeader(),
+  });
+  return response.data;
+};
+
+export const summarizeSpeakingSession = async (sessionId) => {
+  const response = await api.post(`/speaking/session/${sessionId}/summary`, {}, {
     headers: getAuthHeader(),
   });
   return response.data;
