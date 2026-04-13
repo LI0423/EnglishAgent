@@ -17,6 +17,7 @@ from ..db import (
     list_received_writing_reviews,
     get_writing_peer_stats,
     list_writing_peer_leaderboard,
+    create_gamification_event,
 )
 from ..services.mistake_taxonomy import normalize_writing_dim_error_type, normalize_writing_feedback_error_type
 from backend.utils.tracking import get_learning_tracker
@@ -756,6 +757,21 @@ async def submit_peer_review(req: PeerReviewSubmitRequest, current_user: dict = 
         if "UNIQUE constraint failed" in str(exc):
             raise HTTPException(status_code=400, detail="You already reviewed this submission") from exc
         raise
+
+    reward_points = 1 if quality_tier == "basic" else (3 if quality_tier == "standard" else 6)
+    create_gamification_event(
+        str(uuid4()),
+        user_id=reviewer_id,
+        source="writing_peer_review",
+        source_id=review_id,
+        points=reward_points,
+        note=f"完成作文互评（{quality_tier}）",
+        metadata={
+            "submission_id": req.submission_id,
+            "quality_tier": quality_tier,
+            "overall_score": overall_score,
+        },
+    )
 
     return PeerReviewSubmitResponse(
         review_id=review_id,

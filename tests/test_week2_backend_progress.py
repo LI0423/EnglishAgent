@@ -83,6 +83,7 @@ from backend.routers import scoring as scoring_router
 from backend.routers import speaking as speaking_router
 from backend.routers import vocabulary as vocabulary_router
 from backend.routers import writing as writing_router
+from backend.routers import gamification as gamification_router
 from backend.services import reminder_service
 from backend.tasks import reminder_tasks
 from backend.tasks import intelligent_reminder_tasks
@@ -658,6 +659,77 @@ def test_writing_peer_ai_assist_and_stats(isolated_db):
     )
     assert len(received) >= 1
     assert (received[0].reviewer_alias or "").startswith("互评同学#")
+
+
+def test_gamification_overview_leaderboard_and_redeem(isolated_db):
+    for i in range(2):
+        submission = asyncio.run(
+            writing_router.submit_peer_writing(
+                writing_router.PeerSubmissionCreateRequest(
+                    task_type="task1",
+                    topic=f"chart-{i}",
+                    content=(
+                        "The chart illustrates a clear trend and provides notable comparisons. "
+                        "Overall, changes remain steady over time with some fluctuations."
+                    ),
+                ),
+                current_user={"id": "u1", "username": "u1"},
+            )
+        )
+        asyncio.run(
+            writing_router.submit_peer_review(
+                writing_router.PeerReviewSubmitRequest(
+                    submission_id=submission.submission_id,
+                    tr_score=6.0,
+                    cc_score=6.0,
+                    lr_score=6.0,
+                    gra_score=6.0,
+                    strengths="Clear structure and readable progression.",
+                    improvements="Add more specific comparisons with exact data.",
+                    comment_text=(
+                        "The response is generally coherent and easy to follow. "
+                        "To improve band score, include more accurate data references and better lexical variety."
+                    ),
+                ),
+                current_user={"id": "u2", "username": "u2"},
+            )
+        )
+
+    overview = asyncio.run(
+        gamification_router.get_overview(
+            current_user={"id": "u2", "username": "u2"},
+        )
+    )
+    assert overview.total_points > 0
+    assert overview.level in {"bronze", "silver", "gold", "diamond"}
+    assert overview.event_count >= 1
+
+    achievements = asyncio.run(
+        gamification_router.get_achievements(
+            limit=20,
+            current_user={"id": "u2", "username": "u2"},
+        )
+    )
+    assert len(achievements) >= 1
+
+    leaderboard = asyncio.run(
+        gamification_router.get_leaderboard(
+            limit=10,
+            current_user={"id": "u1", "username": "u1"},
+        )
+    )
+    assert len(leaderboard) >= 1
+    assert any(item.user_id == "u2" for item in leaderboard)
+
+    if overview.total_points >= 30:
+        redeemed = asyncio.run(
+            gamification_router.redeem_item(
+                gamification_router.RedemptionRequest(item_code="coupon_peer_boost"),
+                current_user={"id": "u2", "username": "u2"},
+            )
+        )
+        assert redeemed.cost_points == 30
+        assert redeemed.total_points == overview.total_points - 30
 
 
 def test_reminder_retry_backoff_and_failover(isolated_db, monkeypatch):

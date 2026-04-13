@@ -1,5 +1,5 @@
-import { Suspense, lazy } from 'react'
-import { BrowserRouter as Router, Routes, Route } from 'react-router-dom'
+import { Suspense, lazy, useEffect } from 'react'
+import { BrowserRouter as Router, Routes, Route, useLocation, useNavigate } from 'react-router-dom'
 import './App.css'
 
 const Login = lazy(() => import('./pages/Login'))
@@ -15,6 +15,7 @@ const Plans = lazy(() => import('./pages/Plans'))
 const Diagnostic = lazy(() => import('./pages/Diagnostic'))
 const Mistakes = lazy(() => import('./pages/Mistakes'))
 const Vocabulary = lazy(() => import('./pages/Vocabulary'))
+const Achievements = lazy(() => import('./pages/Achievements'))
 const ComingSoon = lazy(() => import('./pages/ComingSoon'))
 
 function RouteLoading() {
@@ -25,9 +26,28 @@ function RouteLoading() {
   )
 }
 
+function AuthSessionWatcher() {
+  const navigate = useNavigate()
+  const location = useLocation()
+
+  useEffect(() => {
+    const onAuthExpired = (event) => {
+      const message = event?.detail?.message || '登录状态已失效，请重新登录'
+      if (location.pathname === '/login') return
+      sessionStorage.setItem('login_notice', message)
+      navigate('/login', { replace: true })
+    }
+    window.addEventListener('auth:expired', onAuthExpired)
+    return () => window.removeEventListener('auth:expired', onAuthExpired)
+  }, [location.pathname, navigate])
+
+  return null
+}
+
 function App() {
   return (
     <Router>
+      <AuthSessionWatcher />
       <Suspense fallback={<RouteLoading />}>
         <Routes>
           <Route path="/login" element={<Login />} />
@@ -42,7 +62,7 @@ function App() {
           <Route path="/speaking" element={<Speaking />} />
           <Route path="/reports" element={<Reports />} />
           <Route path="/plans" element={<Plans />} />
-          <Route path="/achievements" element={<ComingSoon />} />
+          <Route path="/achievements" element={<Achievements />} />
           <Route path="/mock-exam" element={<Diagnostic />} />
           <Route path="/profile" element={<ComingSoon />} />
         </Routes>

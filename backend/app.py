@@ -2,7 +2,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 import os
 
-from .routers import auth, speaking, scoring, report, profile, plan, reading, writing, listening, history, chat, diagnostic, reminder, stats, mistakes, vocabulary
+from .routers import auth, speaking, scoring, report, profile, plan, reading, writing, listening, history, chat, diagnostic, reminder, stats, mistakes, vocabulary, gamification
 from .db import init_db
 
 
@@ -48,6 +48,7 @@ app.include_router(reminder.router, prefix="/reminder", tags=["reminder"])  # �
 app.include_router(stats.router)  # 学习统计
 app.include_router(mistakes.router, prefix="/mistakes", tags=["mistakes"])  # 错题管理
 app.include_router(vocabulary.router, prefix="/vocabulary", tags=["vocabulary"])  # 词汇学习
+app.include_router(gamification.router)  # 游戏化激励系统
 
 
 @app.get("/")

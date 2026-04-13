@@ -376,6 +376,46 @@ export const getWritingPeerLeaderboard = async (limit = 10) => {
   return response.data || [];
 };
 
+export const getGamificationOverview = async () => {
+  const response = await api.get('/gamification/overview', {
+    headers: getAuthHeader(),
+  });
+  return response.data;
+};
+
+export const getGamificationEvents = async (limit = 50) => {
+  const response = await api.get('/gamification/events', {
+    params: { limit },
+    headers: getAuthHeader(),
+  });
+  return response.data || [];
+};
+
+export const getGamificationAchievements = async (limit = 50) => {
+  const response = await api.get('/gamification/achievements', {
+    params: { limit },
+    headers: getAuthHeader(),
+  });
+  return response.data || [];
+};
+
+export const getGamificationLeaderboard = async (limit = 20) => {
+  const response = await api.get('/gamification/leaderboard', {
+    params: { limit },
+    headers: getAuthHeader(),
+  });
+  return response.data || [];
+};
+
+export const redeemGamificationItem = async (itemCode) => {
+  const response = await api.post('/gamification/redeem', {
+    item_code: itemCode,
+  }, {
+    headers: getAuthHeader(),
+  });
+  return response.data;
+};
+
 export const getTask1CommonStructures = async () => {
   const user = JSON.parse(localStorage.getItem('user'));
   if (!user || !user.access_token) {

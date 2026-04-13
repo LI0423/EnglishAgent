@@ -1673,6 +1673,215 @@ def list_writing_peer_leaderboard(limit: int = 10) -> list[Dict[str, Any]]:
         conn.close()
 
 
+def create_gamification_event(
+    event_id: str,
+    *,
+    user_id: str,
+    source: str,
+    source_id: str,
+    points: int,
+    note: str = "",
+    metadata: Optional[Dict[str, Any]] = None,
+) -> bool:
+    conn = get_conn()
+    try:
+        conn.execute(
+            """
+            INSERT INTO gamification_events (
+              id, user_id, source, source_id, points, note, metadata, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                str(event_id),
+                str(user_id),
+                str(source),
+                str(source_id),
+                int(points),
+                str(note or ""),
+                json.dumps(metadata or {}),
+                int(time.time()),
+            ),
+        )
+        conn.commit()
+        return True
+    except sqlite3.IntegrityError:
+        return False
+    finally:
+        conn.close()
+
+
+def get_gamification_total_points(user_id: str) -> int:
+    conn = get_conn()
+    try:
+        row = conn.execute(
+            "SELECT COALESCE(SUM(points), 0) AS total FROM gamification_events WHERE user_id = ?",
+            (str(user_id),),
+        ).fetchone()
+        return int((row["total"] or 0) if row else 0)
+    finally:
+        conn.close()
+
+
+def list_gamification_events(user_id: str, limit: int = 50) -> list[Dict[str, Any]]:
+    conn = get_conn()
+    try:
+        cur = conn.execute(
+            """
+            SELECT *
+            FROM gamification_events
+            WHERE user_id = ?
+            ORDER BY created_at DESC
+            LIMIT ?
+            """,
+            (str(user_id), max(1, int(limit))),
+        )
+        rows: list[Dict[str, Any]] = []
+        for row in cur.fetchall():
+            item = dict(row)
+            item["metadata"] = json.loads(item["metadata"]) if item.get("metadata") else {}
+            rows.append(item)
+        return rows
+    finally:
+        conn.close()
+
+
+def list_gamification_leaderboard(limit: int = 20) -> list[Dict[str, Any]]:
+    conn = get_conn()
+    try:
+        cur = conn.execute(
+            """
+            SELECT
+              user_id,
+              COALESCE(SUM(points), 0) AS total_points,
+              COUNT(*) AS event_count,
+              MAX(created_at) AS last_event_at
+            FROM gamification_events
+            GROUP BY user_id
+            ORDER BY total_points DESC, event_count DESC, last_event_at DESC
+            LIMIT ?
+            """,
+            (max(1, int(limit)),),
+        )
+        return [dict(x) for x in cur.fetchall()]
+    finally:
+        conn.close()
+
+
+def create_gamification_achievement(
+    achievement_id: str,
+    *,
+    user_id: str,
+    code: str,
+    title: str,
+    description: str = "",
+    icon: str = "🏅",
+    metadata: Optional[Dict[str, Any]] = None,
+) -> bool:
+    conn = get_conn()
+    try:
+        conn.execute(
+            """
+            INSERT INTO gamification_achievements (
+              id, user_id, code, title, description, icon, unlocked_at, metadata
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                str(achievement_id),
+                str(user_id),
+                str(code),
+                str(title),
+                str(description or ""),
+                str(icon or "🏅"),
+                int(time.time()),
+                json.dumps(metadata or {}),
+            ),
+        )
+        conn.commit()
+        return True
+    except sqlite3.IntegrityError:
+        return False
+    finally:
+        conn.close()
+
+
+def list_gamification_achievements(user_id: str, limit: int = 100) -> list[Dict[str, Any]]:
+    conn = get_conn()
+    try:
+        cur = conn.execute(
+            """
+            SELECT *
+            FROM gamification_achievements
+            WHERE user_id = ?
+            ORDER BY unlocked_at DESC
+            LIMIT ?
+            """,
+            (str(user_id), max(1, int(limit))),
+        )
+        rows: list[Dict[str, Any]] = []
+        for row in cur.fetchall():
+            item = dict(row)
+            item["metadata"] = json.loads(item["metadata"]) if item.get("metadata") else {}
+            rows.append(item)
+        return rows
+    finally:
+        conn.close()
+
+
+def create_gamification_redemption(
+    redemption_id: str,
+    *,
+    user_id: str,
+    item_code: str,
+    item_name: str,
+    cost_points: int,
+    metadata: Optional[Dict[str, Any]] = None,
+) -> None:
+    conn = get_conn()
+    try:
+        conn.execute(
+            """
+            INSERT INTO gamification_redemptions (
+              id, user_id, item_code, item_name, cost_points, status, created_at, metadata
+            ) VALUES (?, ?, ?, ?, ?, 'completed', ?, ?)
+            """,
+            (
+                str(redemption_id),
+                str(user_id),
+                str(item_code),
+                str(item_name),
+                int(cost_points),
+                int(time.time()),
+                json.dumps(metadata or {}),
+            ),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def list_gamification_redemptions(user_id: str, limit: int = 30) -> list[Dict[str, Any]]:
+    conn = get_conn()
+    try:
+        cur = conn.execute(
+            """
+            SELECT *
+            FROM gamification_redemptions
+            WHERE user_id = ?
+            ORDER BY created_at DESC
+            LIMIT ?
+            """,
+            (str(user_id), max(1, int(limit))),
+        )
+        rows: list[Dict[str, Any]] = []
+        for row in cur.fetchall():
+            item = dict(row)
+            item["metadata"] = json.loads(item["metadata"]) if item.get("metadata") else {}
+            rows.append(item)
+        return rows
+    finally:
+        conn.close()
+
+
 # Reminder DAO
 def create_reminder(reminder_id: str, user_id: str, reminder_data: Dict[str, Any]) -> None:
     conn = get_conn()
