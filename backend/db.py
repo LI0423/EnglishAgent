@@ -1574,6 +1574,105 @@ def list_received_writing_reviews(user_id: str, limit: int = 30) -> list[Dict[st
         conn.close()
 
 
+def get_writing_peer_stats(user_id: str) -> Dict[str, Any]:
+    conn = get_conn()
+    try:
+        user_id = str(user_id)
+        sub_row = conn.execute(
+            """
+            SELECT
+              COUNT(*) AS total_submissions,
+              SUM(CASE WHEN status = 'open' THEN 1 ELSE 0 END) AS open_submissions,
+              SUM(CASE WHEN status = 'in_review' THEN 1 ELSE 0 END) AS in_review_submissions,
+              SUM(CASE WHEN status = 'reviewed' THEN 1 ELSE 0 END) AS reviewed_submissions,
+              AVG(avg_overall_score) AS avg_received_score
+            FROM writing_submissions
+            WHERE user_id = ?
+            """,
+            (user_id,),
+        ).fetchone()
+
+        rev_row = conn.execute(
+            """
+            SELECT
+              COUNT(*) AS total_reviews_written,
+              AVG(overall_score) AS avg_given_score,
+              SUM(CASE WHEN quality_tier = 'advanced' THEN 1 ELSE 0 END) AS advanced_count,
+              SUM(CASE WHEN quality_tier = 'standard' THEN 1 ELSE 0 END) AS standard_count,
+              SUM(CASE WHEN quality_tier = 'basic' THEN 1 ELSE 0 END) AS basic_count
+            FROM writing_peer_reviews
+            WHERE reviewer_id = ?
+            """,
+            (user_id,),
+        ).fetchone()
+
+        points_row = conn.execute(
+            """
+            SELECT
+              COALESCE(SUM(
+                CASE quality_tier
+                  WHEN 'advanced' THEN 6
+                  WHEN 'standard' THEN 3
+                  ELSE 1
+                END
+              ), 0) AS total_points
+            FROM writing_peer_reviews
+            WHERE reviewer_id = ?
+            """,
+            (user_id,),
+        ).fetchone()
+
+        return {
+            "user_id": user_id,
+            "total_submissions": int((sub_row["total_submissions"] or 0) if sub_row else 0),
+            "open_submissions": int((sub_row["open_submissions"] or 0) if sub_row else 0),
+            "in_review_submissions": int((sub_row["in_review_submissions"] or 0) if sub_row else 0),
+            "reviewed_submissions": int((sub_row["reviewed_submissions"] or 0) if sub_row else 0),
+            "avg_received_score": round(float((sub_row["avg_received_score"] or 0.0) if sub_row else 0.0), 3),
+            "total_reviews_written": int((rev_row["total_reviews_written"] or 0) if rev_row else 0),
+            "avg_given_score": round(float((rev_row["avg_given_score"] or 0.0) if rev_row else 0.0), 3),
+            "quality_counts": {
+                "advanced": int((rev_row["advanced_count"] or 0) if rev_row else 0),
+                "standard": int((rev_row["standard_count"] or 0) if rev_row else 0),
+                "basic": int((rev_row["basic_count"] or 0) if rev_row else 0),
+            },
+            "total_points": int((points_row["total_points"] or 0) if points_row else 0),
+        }
+    finally:
+        conn.close()
+
+
+def list_writing_peer_leaderboard(limit: int = 10) -> list[Dict[str, Any]]:
+    conn = get_conn()
+    try:
+        cur = conn.execute(
+            """
+            SELECT
+              r.reviewer_id AS reviewer_id,
+              COUNT(*) AS total_reviews,
+              AVG(r.overall_score) AS avg_given_score,
+              SUM(CASE WHEN r.quality_tier = 'advanced' THEN 1 ELSE 0 END) AS advanced_count,
+              SUM(CASE WHEN r.quality_tier = 'standard' THEN 1 ELSE 0 END) AS standard_count,
+              SUM(CASE WHEN r.quality_tier = 'basic' THEN 1 ELSE 0 END) AS basic_count,
+              SUM(
+                CASE r.quality_tier
+                  WHEN 'advanced' THEN 6
+                  WHEN 'standard' THEN 3
+                  ELSE 1
+                END
+              ) AS total_points
+            FROM writing_peer_reviews r
+            GROUP BY r.reviewer_id
+            ORDER BY total_points DESC, total_reviews DESC, avg_given_score DESC
+            LIMIT ?
+            """,
+            (max(1, int(limit)),),
+        )
+        return [dict(x) for x in cur.fetchall()]
+    finally:
+        conn.close()
+
+
 # Reminder DAO
 def create_reminder(reminder_id: str, user_id: str, reminder_data: Dict[str, Any]) -> None:
     conn = get_conn()

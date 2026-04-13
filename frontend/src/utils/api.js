@@ -346,9 +346,31 @@ export const submitWritingPeerReview = async (payload) => {
   return response.data;
 };
 
+export const getWritingPeerReviewAssist = async (payload = {}) => {
+  const response = await api.post('/writing/peer/review/assist', payload, {
+    headers: getAuthHeader(),
+  });
+  return response.data;
+};
+
 export const getReceivedWritingPeerReviews = async (submissionId = null, limit = 30) => {
   const response = await api.get('/writing/peer/reviews/received', {
     params: { submission_id: submissionId, limit },
+    headers: getAuthHeader(),
+  });
+  return response.data || [];
+};
+
+export const getWritingPeerStats = async () => {
+  const response = await api.get('/writing/peer/stats', {
+    headers: getAuthHeader(),
+  });
+  return response.data;
+};
+
+export const getWritingPeerLeaderboard = async (limit = 10) => {
+  const response = await api.get('/writing/peer/leaderboard', {
+    params: { limit },
     headers: getAuthHeader(),
   });
   return response.data || [];

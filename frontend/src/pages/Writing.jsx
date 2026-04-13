@@ -5,6 +5,9 @@ import {
   analyzeTask1Writing,
   claimWritingPeerSubmission,
   getMyWritingPeerSubmissions,
+  getWritingPeerLeaderboard,
+  getWritingPeerReviewAssist,
+  getWritingPeerStats,
   getReceivedWritingPeerReviews,
   saveTask1Practice,
   submitWritingPeerReview,
@@ -43,6 +46,8 @@ const Writing = () => {
   const [peerReviewing, setPeerReviewing] = useState(false);
   const [peerMySubs, setPeerMySubs] = useState([]);
   const [peerReceived, setPeerReceived] = useState([]);
+  const [peerStats, setPeerStats] = useState(null);
+  const [peerLeaderboard, setPeerLeaderboard] = useState([]);
   const [peerTR, setPeerTR] = useState(6);
   const [peerCC, setPeerCC] = useState(6);
   const [peerLR, setPeerLR] = useState(6);
@@ -50,6 +55,7 @@ const Writing = () => {
   const [peerStrengths, setPeerStrengths] = useState('');
   const [peerImprovements, setPeerImprovements] = useState('');
   const [peerComment, setPeerComment] = useState('');
+  const [peerAssistLoading, setPeerAssistLoading] = useState(false);
   const [peerMessage, setPeerMessage] = useState('');
   const timerRef = useRef(null);
 
@@ -90,12 +96,16 @@ const Writing = () => {
 
   const loadPeerData = async () => {
     try {
-      const [subs, received] = await Promise.all([
+      const [subs, received, stats, board] = await Promise.all([
         getMyWritingPeerSubmissions(20),
         getReceivedWritingPeerReviews(null, 20),
+        getWritingPeerStats(),
+        getWritingPeerLeaderboard(8),
       ]);
       setPeerMySubs(subs || []);
       setPeerReceived(received || []);
+      setPeerStats(stats || null);
+      setPeerLeaderboard(board || []);
     } catch (err) {
       console.error('Failed to load peer data:', err);
     }
@@ -237,6 +247,35 @@ const Writing = () => {
       setPeerMessage(res?.message || '');
     } catch (err) {
       setPeerMessage(typeof err === 'string' ? err : '领取互评任务失败');
+    }
+  };
+
+  const handlePeerAssist = async () => {
+    if (!peerClaimed?.id) return;
+    setPeerAssistLoading(true);
+    setPeerMessage('');
+    try {
+      const res = await getWritingPeerReviewAssist({ submission_id: peerClaimed.id });
+      if (res) {
+        setPeerTR(res.tr_score ?? 6);
+        setPeerCC(res.cc_score ?? 6);
+        setPeerLR(res.lr_score ?? 6);
+        setPeerGRA(res.gra_score ?? 6);
+        if (!peerStrengths.trim()) {
+          setPeerStrengths((res.strengths || []).join('；'));
+        }
+        if (!peerImprovements.trim()) {
+          setPeerImprovements((res.improvements || []).join('；'));
+        }
+        if (!peerComment.trim()) {
+          setPeerComment(res.sample_comment || '');
+        }
+        setPeerMessage(`AI建议已生成（建议质量：${res.quality_hint || 'basic'}）`);
+      }
+    } catch (err) {
+      setPeerMessage(typeof err === 'string' ? err : 'AI辅助生成失败');
+    } finally {
+      setPeerAssistLoading(false);
     }
   };
 
@@ -492,64 +531,114 @@ const Writing = () => {
               </div>
             </div>
 
-            <div className="card" style={{ marginTop: 16 }}>
-              <h3>🤝 作文互评 1.0</h3>
-              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center', marginBottom: 8 }}>
-                <input
-                  value={peerTopic}
-                  onChange={(e) => setPeerTopic(e.target.value)}
-                  placeholder="互评题目标题"
-                  style={{ minWidth: 260 }}
-                />
-                <button onClick={handlePeerSubmit} disabled={peerSubmitting || !writingContent.trim() || writingContent.trim().length < 30}>
-                  {peerSubmitting ? '投稿中...' : '投递当前作文到互评池'}
-                </button>
-                <button onClick={handlePeerClaim}>领取一篇互评任务</button>
-              </div>
-              {peerMessage && <p style={{ color: '#0f766e' }}>{peerMessage}</p>}
-
-              {peerClaimed && (
-                <div style={{ border: '1px solid #e5e7eb', borderRadius: 10, padding: 10, marginBottom: 10 }}>
-                  <p><strong>待互评作文：</strong>{peerClaimed.topic}（{peerClaimed.task_type}）</p>
-                  <p style={{ maxHeight: 120, overflow: 'auto', whiteSpace: 'pre-wrap' }}>{peerClaimed.content}</p>
-                  <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 8 }}>
-                    <label>TR <input type="number" min="0" max="9" step="0.5" value={peerTR} onChange={(e) => setPeerTR(e.target.value)} style={{ width: 70 }} /></label>
-                    <label>CC <input type="number" min="0" max="9" step="0.5" value={peerCC} onChange={(e) => setPeerCC(e.target.value)} style={{ width: 70 }} /></label>
-                    <label>LR <input type="number" min="0" max="9" step="0.5" value={peerLR} onChange={(e) => setPeerLR(e.target.value)} style={{ width: 70 }} /></label>
-                    <label>GRA <input type="number" min="0" max="9" step="0.5" value={peerGRA} onChange={(e) => setPeerGRA(e.target.value)} style={{ width: 70 }} /></label>
-                  </div>
-                  <textarea rows={2} value={peerStrengths} onChange={(e) => setPeerStrengths(e.target.value)} placeholder="优点（strengths）" style={{ width: '100%', marginBottom: 6 }} />
-                  <textarea rows={2} value={peerImprovements} onChange={(e) => setPeerImprovements(e.target.value)} placeholder="改进建议（improvements）" style={{ width: '100%', marginBottom: 6 }} />
-                  <textarea rows={3} value={peerComment} onChange={(e) => setPeerComment(e.target.value)} placeholder="综合评语（建议更具体）" style={{ width: '100%', marginBottom: 6 }} />
-                  <button onClick={handlePeerReviewSubmit} disabled={peerReviewing}>
-                    {peerReviewing ? '提交中...' : '提交互评'}
+            <div className="card writing-peer-card">
+              <div className="writing-peer-header">
+                <h3>🤝 作文互评 2.0</h3>
+                <div className="writing-peer-actions">
+                  <input
+                    className="peer-input"
+                    value={peerTopic}
+                    onChange={(e) => setPeerTopic(e.target.value)}
+                    placeholder="互评题目标题"
+                  />
+                  <button onClick={handlePeerSubmit} disabled={peerSubmitting || !writingContent.trim() || writingContent.trim().length < 30}>
+                    {peerSubmitting ? '投稿中...' : '投递当前作文'}
                   </button>
+                  <button onClick={handlePeerClaim}>领取互评任务</button>
+                </div>
+                {peerMessage && <p className="peer-message">{peerMessage}</p>}
+              </div>
+
+              <div className="writing-peer-stats-grid">
+                <div className="peer-stat-item">
+                  <span>互评积分</span>
+                  <strong>{peerStats?.total_points ?? 0}</strong>
+                </div>
+                <div className="peer-stat-item">
+                  <span>互评等级</span>
+                  <strong>{peerStats?.reviewer_level || 'review_newbie'}</strong>
+                </div>
+                <div className="peer-stat-item">
+                  <span>已写互评</span>
+                  <strong>{peerStats?.total_reviews_written ?? 0}</strong>
+                </div>
+                <div className="peer-stat-item">
+                  <span>收到均分</span>
+                  <strong>{Number(peerStats?.avg_received_score || 0).toFixed(2)}</strong>
+                </div>
+              </div>
+
+              {peerStats?.reviewer_badges?.length > 0 && (
+                <div className="peer-badges">
+                  {peerStats.reviewer_badges.map((badge) => (
+                    <span key={badge} className="peer-badge">{badge}</span>
+                  ))}
                 </div>
               )}
 
-              <div style={{ marginBottom: 8 }}>
-                <h4>我的投稿</h4>
-                <ul>
-                  {peerMySubs.map((x) => (
-                    <li key={x.id}>
-                      {x.topic} | {x.status} | 评分数 {x.review_count} | 平均分 {Number(x.avg_overall_score || 0).toFixed(2)}
-                    </li>
-                  ))}
-                  {peerMySubs.length === 0 && <li>暂无投稿</li>}
-                </ul>
+              {peerClaimed && (
+                <div className="peer-review-panel">
+                  <p><strong>待互评作文：</strong>{peerClaimed.topic}（{peerClaimed.task_type}）</p>
+                  <p className="peer-claimed-content">{peerClaimed.content}</p>
+                  <div className="peer-score-row">
+                    <label>TR <input type="number" min="0" max="9" step="0.5" value={peerTR} onChange={(e) => setPeerTR(e.target.value)} /></label>
+                    <label>CC <input type="number" min="0" max="9" step="0.5" value={peerCC} onChange={(e) => setPeerCC(e.target.value)} /></label>
+                    <label>LR <input type="number" min="0" max="9" step="0.5" value={peerLR} onChange={(e) => setPeerLR(e.target.value)} /></label>
+                    <label>GRA <input type="number" min="0" max="9" step="0.5" value={peerGRA} onChange={(e) => setPeerGRA(e.target.value)} /></label>
+                  </div>
+                  <textarea rows={2} value={peerStrengths} onChange={(e) => setPeerStrengths(e.target.value)} placeholder="优点（strengths）" />
+                  <textarea rows={2} value={peerImprovements} onChange={(e) => setPeerImprovements(e.target.value)} placeholder="改进建议（improvements）" />
+                  <textarea rows={3} value={peerComment} onChange={(e) => setPeerComment(e.target.value)} placeholder="综合评语（越具体质量越高）" />
+                  <div className="peer-review-ops">
+                    <button onClick={handlePeerAssist} disabled={peerAssistLoading}>
+                      {peerAssistLoading ? '生成中...' : 'AI辅助生成评语'}
+                    </button>
+                    <button onClick={handlePeerReviewSubmit} disabled={peerReviewing}>
+                      {peerReviewing ? '提交中...' : '提交互评'}
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              <div className="writing-peer-columns">
+                <div>
+                  <h4>我的投稿</h4>
+                  <ul className="peer-list">
+                    {peerMySubs.map((x) => (
+                      <li key={x.id}>
+                        {x.topic} | {x.status} | 评分数 {x.review_count} | 平均分 {Number(x.avg_overall_score || 0).toFixed(2)}
+                      </li>
+                    ))}
+                    {peerMySubs.length === 0 && <li>暂无投稿</li>}
+                  </ul>
+                </div>
+
+                <div>
+                  <h4>我收到的互评</h4>
+                  <ul className="peer-list">
+                    {peerReceived.map((x) => (
+                      <li key={x.id}>
+                        {(x.topic || x.submission_id)} | overall {Number(x.overall_score || 0).toFixed(2)} | 质量 {x.quality_tier}
+                        <br />
+                        评阅者：{x.reviewer_alias || x.reviewer_id}
+                        <br />
+                        优点：{x.strengths || '-'} | 建议：{x.improvements || '-'}
+                      </li>
+                    ))}
+                    {peerReceived.length === 0 && <li>暂无收到互评</li>}
+                  </ul>
+                </div>
               </div>
 
               <div>
-                <h4>我收到的互评</h4>
-                <ul>
-                  {peerReceived.map((x) => (
-                    <li key={x.id}>
-                      {x.topic || x.submission_id} | overall {Number(x.overall_score || 0).toFixed(2)} | 质量 {x.quality_tier}
-                      <br />
-                      优点：{x.strengths || '-'} | 建议：{x.improvements || '-'}
+                <h4>互评排行榜</h4>
+                <ul className="peer-list">
+                  {peerLeaderboard.map((x) => (
+                    <li key={`${x.reviewer_id}-${x.rank}`}>
+                      #{x.rank} {x.reviewer_alias} | 积分 {x.total_points} | 互评数 {x.total_reviews} | 高质量 {x.advanced_count}
                     </li>
                   ))}
-                  {peerReceived.length === 0 && <li>暂无收到互评</li>}
+                  {peerLeaderboard.length === 0 && <li>暂无排行榜数据</li>}
                 </ul>
               </div>
             </div>

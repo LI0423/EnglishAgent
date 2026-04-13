@@ -576,6 +576,90 @@ def test_writing_peer_review_flow(isolated_db):
     assert len(received) >= 1
 
 
+def test_writing_peer_ai_assist_and_stats(isolated_db):
+    submission = asyncio.run(
+        writing_router.submit_peer_writing(
+            writing_router.PeerSubmissionCreateRequest(
+                task_type="task2",
+                topic="Should university be free?",
+                content=(
+                    "I believe free university education should be considered in many countries. "
+                    "On the one hand, this policy can reduce inequality and expand social mobility. "
+                    "For example, students from low-income families may access higher education without heavy debt. "
+                    "However, governments should still design sustainable funding models and quality control measures. "
+                    "In conclusion, free access can be beneficial if combined with strict quality assurance."
+                ),
+            ),
+            current_user={"id": "u1", "username": "u1"},
+        )
+    )
+    assert submission.submission_id
+
+    claimed = asyncio.run(
+        writing_router.claim_peer_submission(
+            current_user={"id": "u2", "username": "u2"},
+        )
+    )
+    assert claimed.claimed is True
+    assert claimed.submission is not None
+
+    assist = asyncio.run(
+        writing_router.get_peer_review_ai_assist(
+            writing_router.PeerReviewAssistRequest(submission_id=submission.submission_id),
+            current_user={"id": "u2", "username": "u2"},
+        )
+    )
+    assert assist.overall_score > 0
+    assert len(assist.sample_comment) > 0
+    assert len(assist.strengths) >= 1
+
+    reviewed = asyncio.run(
+        writing_router.submit_peer_review(
+            writing_router.PeerReviewSubmitRequest(
+                submission_id=submission.submission_id,
+                tr_score=assist.tr_score,
+                cc_score=assist.cc_score,
+                lr_score=assist.lr_score,
+                gra_score=assist.gra_score,
+                strengths=" ".join(assist.strengths),
+                improvements=" ".join(assist.improvements),
+                comment_text=assist.sample_comment,
+            ),
+            current_user={"id": "u2", "username": "u2"},
+        )
+    )
+    assert reviewed.overall_score > 0
+
+    stats = asyncio.run(
+        writing_router.get_peer_stats(
+            current_user={"id": "u2", "username": "u2"},
+        )
+    )
+    assert stats.total_reviews_written >= 1
+    assert stats.total_points >= 1
+    assert len(stats.reviewer_badges) >= 1
+
+    leaderboard = asyncio.run(
+        writing_router.get_peer_leaderboard(
+            limit=10,
+            current_user={"id": "u1", "username": "u1"},
+        )
+    )
+    assert len(leaderboard) >= 1
+    assert any(item.reviewer_id == "u2" for item in leaderboard)
+    assert all(item.reviewer_alias.startswith("互评同学#") for item in leaderboard)
+
+    received = asyncio.run(
+        writing_router.get_received_peer_reviews(
+            submission_id=submission.submission_id,
+            limit=20,
+            current_user={"id": "u1", "username": "u1"},
+        )
+    )
+    assert len(received) >= 1
+    assert (received[0].reviewer_alias or "").startswith("互评同学#")
+
+
 def test_reminder_retry_backoff_and_failover(isolated_db, monkeypatch):
     rid = str(uuid.uuid4())
     db_module.create_reminder(

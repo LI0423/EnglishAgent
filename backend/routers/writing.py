@@ -3,6 +3,7 @@ from pydantic import BaseModel, Field
 from typing import List, Dict, Any, Optional, Literal
 import re
 import time
+import hashlib
 from uuid import uuid4
 from ..deps import get_current_user
 from ..db import (
@@ -14,6 +15,8 @@ from ..db import (
     create_writing_peer_review,
     list_reviews_for_submission,
     list_received_writing_reviews,
+    get_writing_peer_stats,
+    list_writing_peer_leaderboard,
 )
 from ..services.mistake_taxonomy import normalize_writing_dim_error_type, normalize_writing_feedback_error_type
 from backend.utils.tracking import get_learning_tracker
@@ -112,6 +115,128 @@ def _calc_review_quality_tier(comment_text: str, strengths: str, improvements: s
     if words >= 25:
         return "standard"
     return "basic"
+
+
+def _build_reviewer_alias(user_id: str) -> str:
+    suffix = hashlib.md5(str(user_id).encode("utf-8")).hexdigest()[:6].upper()
+    return f"互评同学#{suffix}"
+
+
+def _safe_range_score(value: float) -> float:
+    return max(0.0, min(9.0, round(float(value), 1)))
+
+
+def _ai_assist_for_peer_review(content: str, task_type: str = "task1") -> Dict[str, Any]:
+    text = str(content or "").strip()
+    words = re.findall(r"[A-Za-z]+", text)
+    word_count = len(words)
+    sentences = [x.strip() for x in re.split(r"[.!?]+", text) if x.strip()]
+    paragraphs = [x.strip() for x in text.split("\n") if x.strip()]
+    grammar_errors, grammar_score_base = check_basic_grammar(text)
+
+    connectors = [
+        "however", "therefore", "moreover", "in addition", "for example",
+        "for instance", "while", "although", "because", "as a result",
+    ]
+    connector_hits = sum(1 for c in connectors if c in text.lower())
+    unique_ratio = (len(set(w.lower() for w in words)) / word_count) if word_count > 0 else 0.0
+
+    tr = 5.5
+    cc = 5.5
+    lr = 5.5
+    gra = float(grammar_score_base)
+
+    if task_type == "task1":
+        if word_count >= 150:
+            tr += 1.0
+        if "overall" in text.lower():
+            tr += 0.5
+    else:
+        if word_count >= 250:
+            tr += 1.0
+        if any(k in text.lower() for k in ["in conclusion", "to conclude", "in summary"]):
+            tr += 0.5
+
+    if len(paragraphs) >= 3:
+        cc += 0.7
+    if connector_hits >= 3:
+        cc += 0.8
+    elif connector_hits >= 1:
+        cc += 0.4
+
+    if unique_ratio >= 0.58:
+        lr += 1.1
+    elif unique_ratio >= 0.50:
+        lr += 0.7
+    elif unique_ratio >= 0.42:
+        lr += 0.3
+
+    if len(sentences) >= 6:
+        gra += 0.3
+    if len(grammar_errors) >= 4:
+        gra -= 0.7
+    elif len(grammar_errors) >= 2:
+        gra -= 0.3
+
+    tr = _safe_range_score(tr)
+    cc = _safe_range_score(cc)
+    lr = _safe_range_score(lr)
+    gra = _safe_range_score(gra)
+    overall = _calc_overall_band(tr, cc, lr, gra)
+
+    strengths: list[str] = []
+    improvements: list[str] = []
+
+    if word_count >= (250 if task_type == "task2" else 150):
+        strengths.append("篇幅达标，任务完成度基础较好。")
+    if connector_hits >= 2:
+        strengths.append("衔接词使用较自然，段落逻辑较连贯。")
+    if unique_ratio >= 0.5:
+        strengths.append("词汇有一定变化，重复率控制较好。")
+    if gra >= 6.5:
+        strengths.append("语法准确性较稳，明显错误较少。")
+
+    if not strengths:
+        strengths.append("整体有清晰表达，具备继续打磨的基础。")
+
+    if task_type == "task1" and "overall" not in text.lower():
+        improvements.append("建议补充明确的 Overall 句，总结核心趋势。")
+    if len(paragraphs) < 3:
+        improvements.append("建议至少分为3段，提升结构可读性。")
+    if connector_hits < 2:
+        improvements.append("增加连接词（however/therefore/in addition）强化逻辑衔接。")
+    if unique_ratio < 0.45:
+        improvements.append("提升词汇多样性，减少高频词重复。")
+    if len(grammar_errors) >= 2:
+        improvements.append("优先修正常见语法与拼写错误，提高 GRA 稳定性。")
+
+    if not improvements:
+        improvements.append("可在例证深度与句式多样性上继续拉开分差。")
+
+    sample_comment = (
+        f"这篇作文估计在 {overall:.1f} 分左右。"
+        f"优势在于{strengths[0]}；"
+        f"建议优先改进：{improvements[0]}"
+    )
+
+    return {
+        "estimated_scores": {
+            "tr_score": tr,
+            "cc_score": cc,
+            "lr_score": lr,
+            "gra_score": gra,
+            "overall_score": overall,
+        },
+        "strengths": strengths[:3],
+        "improvements": improvements[:3],
+        "sample_comment": sample_comment,
+        "meta": {
+            "word_count": word_count,
+            "sentence_count": len(sentences),
+            "paragraph_count": len(paragraphs),
+            "grammar_issue_count": len(grammar_errors),
+        },
+    }
 
 # 基础语法检查规则
 grammar_rules = {
@@ -485,6 +610,7 @@ class PeerReviewItem(BaseModel):
     created_at: int
     task_type: Optional[str] = None
     topic: Optional[str] = None
+    reviewer_alias: Optional[str] = None
 
 
 class PeerReviewSubmitResponse(BaseModel):
@@ -493,6 +619,53 @@ class PeerReviewSubmitResponse(BaseModel):
     overall_score: float
     quality_tier: str
     message: str
+
+
+class PeerReviewAssistRequest(BaseModel):
+    submission_id: Optional[str] = None
+    task_type: Literal["task1", "task2"] = "task1"
+    topic: str = ""
+    content: str = ""
+
+
+class PeerReviewAssistResponse(BaseModel):
+    tr_score: float
+    cc_score: float
+    lr_score: float
+    gra_score: float
+    overall_score: float
+    strengths: List[str]
+    improvements: List[str]
+    sample_comment: str
+    quality_hint: str
+    meta: Dict[str, Any]
+
+
+class PeerStatsResponse(BaseModel):
+    user_id: str
+    total_submissions: int
+    open_submissions: int
+    in_review_submissions: int
+    reviewed_submissions: int
+    avg_received_score: float
+    total_reviews_written: int
+    avg_given_score: float
+    quality_counts: Dict[str, int]
+    total_points: int
+    reviewer_level: str
+    reviewer_badges: List[str]
+
+
+class PeerLeaderboardItem(BaseModel):
+    reviewer_id: str
+    reviewer_alias: str
+    total_reviews: int
+    avg_given_score: float
+    advanced_count: int
+    standard_count: int
+    basic_count: int
+    total_points: int
+    rank: int
 
 
 @router.post("/peer/submit", response_model=PeerSubmissionCreateResponse)
@@ -593,6 +766,111 @@ async def submit_peer_review(req: PeerReviewSubmitRequest, current_user: dict = 
     )
 
 
+@router.post("/peer/review/assist", response_model=PeerReviewAssistResponse)
+async def get_peer_review_ai_assist(req: PeerReviewAssistRequest, current_user: dict = Depends(get_current_user)):
+    text = str(req.content or "").strip()
+    task_type = req.task_type
+    if req.submission_id:
+        submission = get_writing_submission(req.submission_id)
+        if not submission:
+            raise HTTPException(status_code=404, detail="Submission not found")
+        if str(submission.get("user_id")) == str(current_user["id"]):
+            raise HTTPException(status_code=400, detail="Cannot assist your own submission review")
+        text = str(submission.get("content") or "").strip()
+        task_type = str(submission.get("task_type") or task_type)
+
+    if len(text) < 30:
+        raise HTTPException(status_code=400, detail="Content is too short for review assist")
+
+    assist = _ai_assist_for_peer_review(text, task_type=task_type)
+    est = assist["estimated_scores"]
+    quality_hint = _calc_review_quality_tier(
+        assist.get("sample_comment", ""),
+        " ".join(assist.get("strengths") or []),
+        " ".join(assist.get("improvements") or []),
+    )
+    return PeerReviewAssistResponse(
+        tr_score=float(est["tr_score"]),
+        cc_score=float(est["cc_score"]),
+        lr_score=float(est["lr_score"]),
+        gra_score=float(est["gra_score"]),
+        overall_score=float(est["overall_score"]),
+        strengths=[str(x) for x in (assist.get("strengths") or [])],
+        improvements=[str(x) for x in (assist.get("improvements") or [])],
+        sample_comment=str(assist.get("sample_comment") or ""),
+        quality_hint=quality_hint,
+        meta=dict(assist.get("meta") or {}),
+    )
+
+
+@router.get("/peer/stats", response_model=PeerStatsResponse)
+async def get_peer_stats(current_user: dict = Depends(get_current_user)):
+    stats = get_writing_peer_stats(user_id=str(current_user["id"]))
+    points = int(stats.get("total_points") or 0)
+    reviews = int(stats.get("total_reviews_written") or 0)
+
+    if points >= 180:
+        level = "review_master"
+    elif points >= 90:
+        level = "review_pro"
+    elif points >= 30:
+        level = "review_active"
+    else:
+        level = "review_newbie"
+
+    badges: list[str] = []
+    quality = stats.get("quality_counts") or {}
+    if int(quality.get("advanced") or 0) >= 5:
+        badges.append("高质量评语达人")
+    if reviews >= 10:
+        badges.append("互评活跃贡献者")
+    if float(stats.get("avg_given_score") or 0.0) >= 7.0 and reviews >= 3:
+        badges.append("稳定评分官")
+    if not badges:
+        badges.append("互评新星")
+
+    return PeerStatsResponse(
+        user_id=str(stats.get("user_id") or str(current_user["id"])),
+        total_submissions=int(stats.get("total_submissions") or 0),
+        open_submissions=int(stats.get("open_submissions") or 0),
+        in_review_submissions=int(stats.get("in_review_submissions") or 0),
+        reviewed_submissions=int(stats.get("reviewed_submissions") or 0),
+        avg_received_score=float(stats.get("avg_received_score") or 0.0),
+        total_reviews_written=int(stats.get("total_reviews_written") or 0),
+        avg_given_score=float(stats.get("avg_given_score") or 0.0),
+        quality_counts={
+            "advanced": int((quality.get("advanced") or 0)),
+            "standard": int((quality.get("standard") or 0)),
+            "basic": int((quality.get("basic") or 0)),
+        },
+        total_points=points,
+        reviewer_level=level,
+        reviewer_badges=badges,
+    )
+
+
+@router.get("/peer/leaderboard", response_model=List[PeerLeaderboardItem])
+async def get_peer_leaderboard(limit: int = 10, current_user: dict = Depends(get_current_user)):
+    rows = list_writing_peer_leaderboard(limit=max(1, min(50, int(limit))))
+    items: list[PeerLeaderboardItem] = []
+    for idx, row in enumerate(rows):
+        reviewer_id = str(row.get("reviewer_id") or "")
+        items.append(
+            PeerLeaderboardItem(
+                reviewer_id=reviewer_id,
+                reviewer_alias=_build_reviewer_alias(reviewer_id),
+                total_reviews=int(row.get("total_reviews") or 0),
+                avg_given_score=round(float(row.get("avg_given_score") or 0.0), 3),
+                advanced_count=int(row.get("advanced_count") or 0),
+                standard_count=int(row.get("standard_count") or 0),
+                basic_count=int(row.get("basic_count") or 0),
+                total_points=int(row.get("total_points") or 0),
+                rank=idx + 1,
+            )
+        )
+    return items
+
+
 @router.get("/peer/reviews/received", response_model=List[PeerReviewItem])
 async def get_received_peer_reviews(submission_id: Optional[str] = None, limit: int = 30, current_user: dict = Depends(get_current_user)):
     if submission_id:
@@ -616,6 +894,7 @@ async def get_received_peer_reviews(submission_id: Optional[str] = None, limit: 
                 comment_text=str(x.get("comment_text") or ""),
                 quality_tier=str(x.get("quality_tier") or "basic"),
                 created_at=int(x.get("created_at") or 0),
+                reviewer_alias=_build_reviewer_alias(str(x.get("reviewer_id") or "")),
             )
             for x in rows
         ]
@@ -639,6 +918,7 @@ async def get_received_peer_reviews(submission_id: Optional[str] = None, limit: 
             created_at=int(x.get("created_at") or 0),
             task_type=str(x.get("task_type") or ""),
             topic=str(x.get("topic") or ""),
+            reviewer_alias=_build_reviewer_alias(str(x.get("reviewer_id") or "")),
         )
         for x in rows
     ]
