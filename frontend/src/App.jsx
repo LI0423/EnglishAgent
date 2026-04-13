@@ -17,6 +17,7 @@ const Mistakes = lazy(() => import('./pages/Mistakes'))
 const Vocabulary = lazy(() => import('./pages/Vocabulary'))
 const Achievements = lazy(() => import('./pages/Achievements'))
 const Community = lazy(() => import('./pages/Community'))
+const StudyGroups = lazy(() => import('./pages/StudyGroups'))
 const ComingSoon = lazy(() => import('./pages/ComingSoon'))
 
 function RouteLoading() {
@@ -59,6 +60,7 @@ function App() {
           <Route path="/mistakes" element={<Mistakes />} />
           <Route path="/vocabulary" element={<Vocabulary />} />
           <Route path="/community" element={<Community />} />
+          <Route path="/groups" element={<StudyGroups />} />
           <Route path="/listening" element={<Listening />} />
           <Route path="/reading" element={<Reading />} />
           <Route path="/speaking" element={<Speaking />} />

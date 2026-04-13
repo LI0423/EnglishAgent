@@ -2156,6 +2156,258 @@ def get_user_community_summary(user_id: str) -> Dict[str, int]:
         conn.close()
 
 
+def create_study_group(
+    group_id: str,
+    *,
+    owner_user_id: str,
+    name: str,
+    description: str = "",
+    is_public: bool = True,
+    max_members: int = 20,
+) -> None:
+    now = int(time.time())
+    conn = get_conn()
+    try:
+        conn.execute(
+            """
+            INSERT INTO study_groups (
+              id, owner_user_id, name, description, is_public, max_members, member_count, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?)
+            """,
+            (
+                str(group_id),
+                str(owner_user_id),
+                str(name),
+                str(description or ""),
+                1 if is_public else 0,
+                max(2, int(max_members)),
+                now,
+                now,
+            ),
+        )
+        conn.execute(
+            """
+            INSERT INTO study_group_members (
+              id, group_id, user_id, role, joined_at, last_checkin_at, checkin_streak, total_checkins
+            ) VALUES (?, ?, ?, 'owner', ?, 0, 0, 0)
+            """,
+            (str(uuid4()), str(group_id), str(owner_user_id), now),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def get_study_group(group_id: str) -> Optional[Dict[str, Any]]:
+    conn = get_conn()
+    try:
+        row = conn.execute("SELECT * FROM study_groups WHERE id = ?", (str(group_id),)).fetchone()
+        return dict(row) if row else None
+    finally:
+        conn.close()
+
+
+def list_study_groups(public_only: bool = True, limit: int = 30, offset: int = 0) -> list[Dict[str, Any]]:
+    conn = get_conn()
+    try:
+        if public_only:
+            cur = conn.execute(
+                """
+                SELECT *
+                FROM study_groups
+                WHERE is_public = 1
+                ORDER BY created_at DESC
+                LIMIT ? OFFSET ?
+                """,
+                (max(1, int(limit)), max(0, int(offset))),
+            )
+        else:
+            cur = conn.execute(
+                """
+                SELECT *
+                FROM study_groups
+                ORDER BY created_at DESC
+                LIMIT ? OFFSET ?
+                """,
+                (max(1, int(limit)), max(0, int(offset))),
+            )
+        return [dict(x) for x in cur.fetchall()]
+    finally:
+        conn.close()
+
+
+def list_user_study_groups(user_id: str, limit: int = 30) -> list[Dict[str, Any]]:
+    conn = get_conn()
+    try:
+        cur = conn.execute(
+            """
+            SELECT g.*, m.role, m.joined_at, m.last_checkin_at, m.checkin_streak, m.total_checkins
+            FROM study_group_members m
+            JOIN study_groups g ON g.id = m.group_id
+            WHERE m.user_id = ?
+            ORDER BY m.joined_at DESC
+            LIMIT ?
+            """,
+            (str(user_id), max(1, int(limit))),
+        )
+        return [dict(x) for x in cur.fetchall()]
+    finally:
+        conn.close()
+
+
+def get_study_group_member(group_id: str, user_id: str) -> Optional[Dict[str, Any]]:
+    conn = get_conn()
+    try:
+        row = conn.execute(
+            "SELECT * FROM study_group_members WHERE group_id = ? AND user_id = ?",
+            (str(group_id), str(user_id)),
+        ).fetchone()
+        return dict(row) if row else None
+    finally:
+        conn.close()
+
+
+def join_study_group(group_id: str, user_id: str, role: str = "member") -> Dict[str, Any]:
+    now = int(time.time())
+    conn = get_conn()
+    try:
+        group = conn.execute("SELECT * FROM study_groups WHERE id = ?", (str(group_id),)).fetchone()
+        if not group:
+            raise ValueError("group_not_found")
+        if int(group["member_count"] or 0) >= int(group["max_members"] or 0):
+            raise ValueError("group_full")
+
+        existing = conn.execute(
+            "SELECT * FROM study_group_members WHERE group_id = ? AND user_id = ?",
+            (str(group_id), str(user_id)),
+        ).fetchone()
+        if existing:
+            return dict(existing)
+
+        conn.execute(
+            """
+            INSERT INTO study_group_members (
+              id, group_id, user_id, role, joined_at, last_checkin_at, checkin_streak, total_checkins
+            ) VALUES (?, ?, ?, ?, ?, 0, 0, 0)
+            """,
+            (str(uuid4()), str(group_id), str(user_id), str(role), now),
+        )
+        conn.execute(
+            "UPDATE study_groups SET member_count = member_count + 1, updated_at = ? WHERE id = ?",
+            (now, str(group_id)),
+        )
+        conn.commit()
+        row = conn.execute(
+            "SELECT * FROM study_group_members WHERE group_id = ? AND user_id = ?",
+            (str(group_id), str(user_id)),
+        ).fetchone()
+        return dict(row) if row else {}
+    finally:
+        conn.close()
+
+
+def create_study_group_checkin(
+    checkin_id: str,
+    *,
+    group_id: str,
+    user_id: str,
+    note: str = "",
+    score: int = 1,
+) -> Dict[str, Any]:
+    now = int(time.time())
+    day_start = int(now // 86400) * 86400
+    conn = get_conn()
+    try:
+        member = conn.execute(
+            "SELECT * FROM study_group_members WHERE group_id = ? AND user_id = ?",
+            (str(group_id), str(user_id)),
+        ).fetchone()
+        if not member:
+            raise ValueError("not_member")
+
+        existing_today = conn.execute(
+            """
+            SELECT * FROM study_group_checkins
+            WHERE group_id = ? AND user_id = ? AND created_at >= ? AND created_at < ?
+            LIMIT 1
+            """,
+            (str(group_id), str(user_id), day_start, day_start + 86400),
+        ).fetchone()
+        if existing_today:
+            return dict(existing_today)
+
+        conn.execute(
+            """
+            INSERT INTO study_group_checkins (id, group_id, user_id, note, score, created_at)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (str(checkin_id), str(group_id), str(user_id), str(note or ""), max(1, int(score)), now),
+        )
+
+        last_checkin_at = int(member["last_checkin_at"] or 0)
+        prev_day_start = int(last_checkin_at // 86400) * 86400 if last_checkin_at > 0 else 0
+        streak = int(member["checkin_streak"] or 0)
+        if prev_day_start == day_start - 86400:
+            streak += 1
+        elif prev_day_start == day_start:
+            streak = streak
+        else:
+            streak = 1
+
+        conn.execute(
+            """
+            UPDATE study_group_members
+            SET last_checkin_at = ?, checkin_streak = ?, total_checkins = total_checkins + 1
+            WHERE group_id = ? AND user_id = ?
+            """,
+            (now, streak, str(group_id), str(user_id)),
+        )
+        conn.commit()
+        row = conn.execute(
+            "SELECT * FROM study_group_checkins WHERE id = ?",
+            (str(checkin_id),),
+        ).fetchone()
+        return dict(row) if row else {}
+    finally:
+        conn.close()
+
+
+def list_study_group_checkins(group_id: str, limit: int = 100) -> list[Dict[str, Any]]:
+    conn = get_conn()
+    try:
+        cur = conn.execute(
+            """
+            SELECT *
+            FROM study_group_checkins
+            WHERE group_id = ?
+            ORDER BY created_at DESC
+            LIMIT ?
+            """,
+            (str(group_id), max(1, int(limit))),
+        )
+        return [dict(x) for x in cur.fetchall()]
+    finally:
+        conn.close()
+
+
+def list_study_group_leaderboard(group_id: str, limit: int = 20) -> list[Dict[str, Any]]:
+    conn = get_conn()
+    try:
+        cur = conn.execute(
+            """
+            SELECT user_id, role, checkin_streak, total_checkins, last_checkin_at
+            FROM study_group_members
+            WHERE group_id = ?
+            ORDER BY total_checkins DESC, checkin_streak DESC, last_checkin_at DESC
+            LIMIT ?
+            """,
+            (str(group_id), max(1, int(limit))),
+        )
+        return [dict(x) for x in cur.fetchall()]
+    finally:
+        conn.close()
+
+
 # Reminder DAO
 def create_reminder(reminder_id: str, user_id: str, reminder_data: Dict[str, Any]) -> None:
     conn = get_conn()

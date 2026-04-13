@@ -479,6 +479,59 @@ export const getMyCommunitySummary = async () => {
   return response.data;
 };
 
+export const createStudyGroup = async (payload) => {
+  const response = await api.post('/study-group/groups', payload, {
+    headers: getAuthHeader(),
+  });
+  return response.data;
+};
+
+export const getStudyGroups = async (limit = 30, offset = 0) => {
+  const response = await api.get('/study-group/groups', {
+    params: { limit, offset },
+    headers: getAuthHeader(),
+  });
+  return response.data || [];
+};
+
+export const getMyStudyGroups = async (limit = 30) => {
+  const response = await api.get('/study-group/groups/me', {
+    params: { limit },
+    headers: getAuthHeader(),
+  });
+  return response.data || [];
+};
+
+export const joinStudyGroup = async (groupId) => {
+  const response = await api.post(`/study-group/groups/${groupId}/join`, {}, {
+    headers: getAuthHeader(),
+  });
+  return response.data;
+};
+
+export const checkinStudyGroup = async (groupId, payload = {}) => {
+  const response = await api.post(`/study-group/groups/${groupId}/checkin`, payload, {
+    headers: getAuthHeader(),
+  });
+  return response.data;
+};
+
+export const getStudyGroupCheckins = async (groupId, limit = 100) => {
+  const response = await api.get(`/study-group/groups/${groupId}/checkins`, {
+    params: { limit },
+    headers: getAuthHeader(),
+  });
+  return response.data || [];
+};
+
+export const getStudyGroupLeaderboard = async (groupId, limit = 20) => {
+  const response = await api.get(`/study-group/groups/${groupId}/leaderboard`, {
+    params: { limit },
+    headers: getAuthHeader(),
+  });
+  return response.data || [];
+};
+
 export const getTask1CommonStructures = async () => {
   const user = JSON.parse(localStorage.getItem('user'));
   if (!user || !user.access_token) {

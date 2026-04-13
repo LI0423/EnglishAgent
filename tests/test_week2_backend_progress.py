@@ -85,6 +85,7 @@ from backend.routers import vocabulary as vocabulary_router
 from backend.routers import writing as writing_router
 from backend.routers import gamification as gamification_router
 from backend.routers import community as community_router
+from backend.routers import study_group as study_group_router
 from backend.services import reminder_service
 from backend.tasks import reminder_tasks
 from backend.tasks import intelligent_reminder_tasks
@@ -837,6 +838,78 @@ def test_learning_community_post_comment_vote_flow(isolated_db):
     )
     assert overview_u1.total_points >= 3
     assert overview_u2.total_points >= 1
+
+
+def test_study_group_create_join_checkin_leaderboard_flow(isolated_db):
+    group = asyncio.run(
+        study_group_router.create_group(
+            study_group_router.StudyGroupCreateRequest(
+                name="7分冲刺组",
+                description="每日打卡+互相督促",
+                is_public=True,
+                max_members=10,
+            ),
+            current_user={"id": "u1", "username": "u1"},
+        )
+    )
+    assert group.id
+    assert group.member_count >= 1
+
+    joined = asyncio.run(
+        study_group_router.join_group(
+            group.id,
+            current_user={"id": "u2", "username": "u2"},
+        )
+    )
+    assert joined.get("group_id") == group.id
+
+    checkin = asyncio.run(
+        study_group_router.checkin_group(
+            group.id,
+            study_group_router.GroupCheckinRequest(
+                note="完成阅读和写作各1套",
+                score=3,
+            ),
+            current_user={"id": "u2", "username": "u2"},
+        )
+    )
+    assert checkin.group_id == group.id
+    assert checkin.score >= 1
+
+    leaderboard = asyncio.run(
+        study_group_router.get_group_leaderboard(
+            group.id,
+            limit=20,
+            current_user={"id": "u1", "username": "u1"},
+        )
+    )
+    assert len(leaderboard) >= 2
+    assert any(m.user_id == "u2" for m in leaderboard)
+
+    checkins = asyncio.run(
+        study_group_router.get_group_checkins(
+            group.id,
+            limit=20,
+            current_user={"id": "u1", "username": "u1"},
+        )
+    )
+    assert len(checkins) >= 1
+    assert any(x.user_id == "u2" for x in checkins)
+
+    my_groups = asyncio.run(
+        study_group_router.get_my_groups(
+            limit=20,
+            current_user={"id": "u2", "username": "u2"},
+        )
+    )
+    assert any(g.id == group.id for g in my_groups)
+
+    overview_u2 = asyncio.run(
+        gamification_router.get_overview(
+            current_user={"id": "u2", "username": "u2"},
+        )
+    )
+    assert overview_u2.total_points >= 3
 
 
 def test_reminder_retry_backoff_and_failover(isolated_db, monkeypatch):
