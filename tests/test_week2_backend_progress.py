@@ -87,6 +87,7 @@ from backend.routers import gamification as gamification_router
 from backend.routers import community as community_router
 from backend.routers import study_group as study_group_router
 from backend.routers import payment as payment_router
+from backend.routers import admin as admin_router
 from backend.services import reminder_service
 from backend.tasks import reminder_tasks
 from backend.tasks import intelligent_reminder_tasks
@@ -1003,6 +1004,156 @@ def test_payment_order_callback_and_writing_entitlement_consume(isolated_db):
     assert writing_ent_after is not None
     after_balance = int(writing_ent_after.get("balance") or 0)
     assert after_balance == before_balance - 1
+
+
+def test_admin_console_overview_moderation_orders_and_ledger(isolated_db):
+    pending_post = asyncio.run(
+        community_router.create_post(
+            community_router.CommunityPostCreateRequest(
+                post_type="discussion",
+                title="Need group tips",
+                content="这是一条广告内容，求拉群",
+                tags=["community"],
+                is_anonymous=False,
+            ),
+            current_user={"id": "u1", "username": "u1"},
+        )
+    )
+    assert pending_post.status == "pending_review"
+
+    published_post = asyncio.run(
+        community_router.create_post(
+            community_router.CommunityPostCreateRequest(
+                post_type="discussion",
+                title="Daily checkin tips",
+                content="Share your effective daily checkin method here.",
+                tags=["group"],
+                is_anonymous=False,
+            ),
+            current_user={"id": "u1", "username": "u1"},
+        )
+    )
+    assert published_post.status == "published"
+
+    post_comment = asyncio.run(
+        community_router.create_comment(
+            published_post.post_id,
+            community_router.CommunityCommentCreateRequest(
+                content="广告广告，私聊加vx",
+                is_anonymous=False,
+            ),
+            current_user={"id": "u2", "username": "u2"},
+        )
+    )
+    assert post_comment.status == "pending_review"
+
+    order = asyncio.run(
+        payment_router.create_order(
+            payment_router.CreateOrderRequest(product_code="writing_ai_review_pack_10", quantity=1),
+            current_user={"id": "u1", "username": "u1"},
+        )
+    )
+    intent = asyncio.run(
+        payment_router.mock_pay_order(
+            order.order.id,
+            current_user={"id": "u1", "username": "u1"},
+        )
+    )
+    payload = intent.callback_payload
+    _ = asyncio.run(
+        payment_router.mock_callback(
+            payment_router.MockCallbackRequest(
+                order_id=payload["order_id"],
+                provider_txn_id=payload["provider_txn_id"],
+                status=payload["status"],
+                signature=payload["signature"],
+                raw_payload={"source": "admin-test"},
+            )
+        )
+    )
+
+    with pytest.raises(Exception) as forbidden:
+        asyncio.run(
+            admin_router.admin_overview(
+                current_user={"id": "u1", "username": "u1"},
+            )
+        )
+    assert getattr(forbidden.value, "status_code", None) == 403
+
+    admin_user = {"id": "u1", "username": "demo"}
+    overview = asyncio.run(
+        admin_router.admin_overview(
+            current_user=admin_user,
+        )
+    )
+    assert overview.total_users >= 2
+    assert overview.total_orders >= 1
+
+    posts = asyncio.run(
+        admin_router.admin_pending_posts(
+            limit=20,
+            current_user=admin_user,
+        )
+    )
+    assert any(x["id"] == pending_post.post_id for x in posts)
+
+    comments = asyncio.run(
+        admin_router.admin_pending_comments(
+            limit=20,
+            current_user=admin_user,
+        )
+    )
+    assert any(x["id"] == post_comment.id for x in comments)
+
+    _ = asyncio.run(
+        admin_router.admin_moderate_post(
+            pending_post.post_id,
+            admin_router.ModerateRequest(action="approve", reason="合法讨论内容"),
+            current_user=admin_user,
+        )
+    )
+    _ = asyncio.run(
+        admin_router.admin_moderate_comment(
+            post_comment.id,
+            admin_router.ModerateRequest(action="reject", reason="违规引流"),
+            current_user=admin_user,
+        )
+    )
+
+    posts_after = asyncio.run(
+        admin_router.admin_pending_posts(
+            limit=20,
+            current_user=admin_user,
+        )
+    )
+    comments_after = asyncio.run(
+        admin_router.admin_pending_comments(
+            limit=20,
+            current_user=admin_user,
+        )
+    )
+    assert all(x["id"] != pending_post.post_id for x in posts_after)
+    assert all(x["id"] != post_comment.id for x in comments_after)
+
+    order_rows = asyncio.run(
+        admin_router.admin_orders(
+            status="paid",
+            user_id="u1",
+            limit=50,
+            current_user=admin_user,
+        )
+    )
+    assert any(x["id"] == order.order.id for x in order_rows)
+
+    ledger_rows = asyncio.run(
+        admin_router.admin_entitlement_ledger(
+            user_id="u1",
+            feature_code="writing_ai_review",
+            limit=100,
+            current_user=admin_user,
+        )
+    )
+    assert len(ledger_rows) >= 1
 
 
 def test_reminder_retry_backoff_and_failover(isolated_db, monkeypatch):

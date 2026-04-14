@@ -19,6 +19,7 @@ const Achievements = lazy(() => import('./pages/Achievements'))
 const Community = lazy(() => import('./pages/Community'))
 const StudyGroups = lazy(() => import('./pages/StudyGroups'))
 const PaymentCenter = lazy(() => import('./pages/PaymentCenter'))
+const Admin = lazy(() => import('./pages/Admin'))
 const ComingSoon = lazy(() => import('./pages/ComingSoon'))
 
 function RouteLoading() {
@@ -63,6 +64,7 @@ function App() {
           <Route path="/community" element={<Community />} />
           <Route path="/groups" element={<StudyGroups />} />
           <Route path="/payment" element={<PaymentCenter />} />
+          <Route path="/admin" element={<Admin />} />
           <Route path="/listening" element={<Listening />} />
           <Route path="/reading" element={<Reading />} />
           <Route path="/speaking" element={<Speaking />} />

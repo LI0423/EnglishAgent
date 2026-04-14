@@ -2690,6 +2690,251 @@ def list_user_entitlements(user_id: str) -> list[Dict[str, Any]]:
         conn.close()
 
 
+def is_admin_user(user_id: str, username: str = "") -> bool:
+    env_admins = {
+        x.strip().lower()
+        for x in str(os.environ.get("ADMIN_USERNAMES", "admin,demo")).split(",")
+        if x.strip()
+    }
+    if str(username or "").strip().lower() in env_admins:
+        return True
+    conn = get_conn()
+    try:
+        row = conn.execute(
+            "SELECT 1 FROM admin_users WHERE user_id = ? LIMIT 1",
+            (str(user_id),),
+        ).fetchone()
+        return bool(row)
+    finally:
+        conn.close()
+
+
+def create_admin_audit_log(
+    log_id: str,
+    *,
+    admin_user_id: str,
+    action: str,
+    target_type: str,
+    target_id: str,
+    detail: str = "",
+    metadata: Optional[Dict[str, Any]] = None,
+) -> None:
+    conn = get_conn()
+    try:
+        conn.execute(
+            """
+            INSERT INTO admin_audit_logs (
+              id, admin_user_id, action, target_type, target_id, detail, metadata, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                str(log_id),
+                str(admin_user_id),
+                str(action),
+                str(target_type),
+                str(target_id),
+                str(detail or ""),
+                json.dumps(metadata or {}),
+                int(time.time()),
+            ),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def get_admin_overview_metrics() -> Dict[str, Any]:
+    conn = get_conn()
+    try:
+        users = conn.execute("SELECT COUNT(*) AS cnt FROM users").fetchone()
+        active_users = conn.execute(
+            """
+            SELECT COUNT(DISTINCT user_id) AS cnt
+            FROM user_activities
+            WHERE created_at >= ?
+            """,
+            (int(time.time()) - 7 * 86400,),
+        ).fetchone()
+        orders = conn.execute(
+            """
+            SELECT
+              COUNT(*) AS total_orders,
+              COALESCE(SUM(CASE WHEN status = 'paid' THEN total_price_cents ELSE 0 END), 0) AS paid_amount_cents,
+              COALESCE(SUM(CASE WHEN status = 'paid' THEN 1 ELSE 0 END), 0) AS paid_orders
+            FROM payment_orders
+            """
+        ).fetchone()
+        pending_posts = conn.execute(
+            "SELECT COUNT(*) AS cnt FROM community_posts WHERE status = 'pending_review'"
+        ).fetchone()
+        pending_comments = conn.execute(
+            "SELECT COUNT(*) AS cnt FROM community_comments WHERE status = 'pending_review'"
+        ).fetchone()
+        writing_ent = conn.execute(
+            """
+            SELECT
+              COALESCE(SUM(balance), 0) AS balance_sum,
+              COALESCE(SUM(total_granted), 0) AS granted_sum,
+              COALESCE(SUM(total_consumed), 0) AS consumed_sum
+            FROM user_entitlements
+            WHERE feature_code = 'writing_ai_review'
+            """
+        ).fetchone()
+        return {
+            "total_users": int((users["cnt"] or 0) if users else 0),
+            "active_users_7d": int((active_users["cnt"] or 0) if active_users else 0),
+            "total_orders": int((orders["total_orders"] or 0) if orders else 0),
+            "paid_orders": int((orders["paid_orders"] or 0) if orders else 0),
+            "paid_amount_cents": int((orders["paid_amount_cents"] or 0) if orders else 0),
+            "pending_posts": int((pending_posts["cnt"] or 0) if pending_posts else 0),
+            "pending_comments": int((pending_comments["cnt"] or 0) if pending_comments else 0),
+            "writing_ai_review_balance_sum": int((writing_ent["balance_sum"] or 0) if writing_ent else 0),
+            "writing_ai_review_granted_sum": int((writing_ent["granted_sum"] or 0) if writing_ent else 0),
+            "writing_ai_review_consumed_sum": int((writing_ent["consumed_sum"] or 0) if writing_ent else 0),
+        }
+    finally:
+        conn.close()
+
+
+def list_pending_community_posts(limit: int = 50) -> list[Dict[str, Any]]:
+    conn = get_conn()
+    try:
+        cur = conn.execute(
+            """
+            SELECT *
+            FROM community_posts
+            WHERE status = 'pending_review'
+            ORDER BY created_at ASC
+            LIMIT ?
+            """,
+            (max(1, int(limit)),),
+        )
+        rows: list[Dict[str, Any]] = []
+        for row in cur.fetchall():
+            item = dict(row)
+            item["tags"] = json.loads(item["tags"]) if item.get("tags") else []
+            rows.append(item)
+        return rows
+    finally:
+        conn.close()
+
+
+def list_pending_community_comments(limit: int = 100) -> list[Dict[str, Any]]:
+    conn = get_conn()
+    try:
+        cur = conn.execute(
+            """
+            SELECT c.*, p.title AS post_title
+            FROM community_comments c
+            LEFT JOIN community_posts p ON p.id = c.post_id
+            WHERE c.status = 'pending_review'
+            ORDER BY c.created_at ASC
+            LIMIT ?
+            """,
+            (max(1, int(limit)),),
+        )
+        return [dict(x) for x in cur.fetchall()]
+    finally:
+        conn.close()
+
+
+def moderate_community_post(post_id: str, status: str) -> bool:
+    now = int(time.time())
+    conn = get_conn()
+    try:
+        cur = conn.execute(
+            "UPDATE community_posts SET status = ?, updated_at = ? WHERE id = ?",
+            (str(status), now, str(post_id)),
+        )
+        conn.commit()
+        return cur.rowcount > 0
+    finally:
+        conn.close()
+
+
+def moderate_community_comment(comment_id: str, status: str) -> bool:
+    now = int(time.time())
+    conn = get_conn()
+    try:
+        cur = conn.execute(
+            "UPDATE community_comments SET status = ?, updated_at = ? WHERE id = ?",
+            (str(status), now, str(comment_id)),
+        )
+        conn.commit()
+        return cur.rowcount > 0
+    finally:
+        conn.close()
+
+
+def list_payment_orders_admin(status: str = "", user_id: str = "", limit: int = 100) -> list[Dict[str, Any]]:
+    where = ["1=1"]
+    params: list[Any] = []
+    if str(status).strip():
+        where.append("status = ?")
+        params.append(str(status).strip())
+    if str(user_id).strip():
+        where.append("user_id = ?")
+        params.append(str(user_id).strip())
+    params.append(max(1, int(limit)))
+    conn = get_conn()
+    try:
+        cur = conn.execute(
+            f"""
+            SELECT *
+            FROM payment_orders
+            WHERE {' AND '.join(where)}
+            ORDER BY created_at DESC
+            LIMIT ?
+            """,
+            params,
+        )
+        rows: list[Dict[str, Any]] = []
+        for row in cur.fetchall():
+            item = dict(row)
+            item["metadata"] = json.loads(item["metadata"]) if item.get("metadata") else {}
+            rows.append(item)
+        return rows
+    finally:
+        conn.close()
+
+
+def list_entitlement_ledger_admin(
+    *,
+    user_id: str = "",
+    feature_code: str = "",
+    limit: int = 200,
+) -> list[Dict[str, Any]]:
+    where = ["1=1"]
+    params: list[Any] = []
+    if str(user_id).strip():
+        where.append("user_id = ?")
+        params.append(str(user_id).strip())
+    if str(feature_code).strip():
+        where.append("feature_code = ?")
+        params.append(str(feature_code).strip())
+    params.append(max(1, int(limit)))
+    conn = get_conn()
+    try:
+        cur = conn.execute(
+            f"""
+            SELECT *
+            FROM entitlement_ledger
+            WHERE {' AND '.join(where)}
+            ORDER BY created_at DESC
+            LIMIT ?
+            """,
+            params,
+        )
+        rows: list[Dict[str, Any]] = []
+        for row in cur.fetchall():
+            item = dict(row)
+            item["metadata"] = json.loads(item["metadata"]) if item.get("metadata") else {}
+            rows.append(item)
+        return rows
+    finally:
+        conn.close()
+
+
 # Reminder DAO
 def create_reminder(reminder_id: str, user_id: str, reminder_data: Dict[str, Any]) -> None:
     conn = get_conn()

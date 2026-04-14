@@ -578,6 +578,65 @@ export const getPaymentEntitlements = async () => {
   return response.data || [];
 };
 
+export const getAdminOverview = async () => {
+  const response = await api.get('/admin/overview', {
+    headers: getAuthHeader(),
+  });
+  return response.data;
+};
+
+export const getAdminPendingPosts = async (limit = 50) => {
+  const response = await api.get('/admin/moderation/posts', {
+    params: { limit },
+    headers: getAuthHeader(),
+  });
+  return response.data || [];
+};
+
+export const getAdminPendingComments = async (limit = 100) => {
+  const response = await api.get('/admin/moderation/comments', {
+    params: { limit },
+    headers: getAuthHeader(),
+  });
+  return response.data || [];
+};
+
+export const moderateAdminPost = async (postId, action, reason = '') => {
+  const response = await api.post(`/admin/moderation/posts/${postId}`, {
+    action,
+    reason,
+  }, {
+    headers: getAuthHeader(),
+  });
+  return response.data;
+};
+
+export const moderateAdminComment = async (commentId, action, reason = '') => {
+  const response = await api.post(`/admin/moderation/comments/${commentId}`, {
+    action,
+    reason,
+  }, {
+    headers: getAuthHeader(),
+  });
+  return response.data;
+};
+
+export const getAdminOrders = async ({ status = '', userId = '', limit = 100 } = {}) => {
+  const response = await api.get('/admin/orders', {
+    params: { status, user_id: userId, limit },
+    headers: getAuthHeader(),
+  });
+  return response.data || [];
+};
+
+export const getAdminEntitlementLedger = async ({ userId = '', featureCode = '', limit = 200 } = {}) => {
+  const response = await api.get('/admin/entitlements/ledger', {
+    params: { user_id: userId, feature_code: featureCode, limit },
+    headers: getAuthHeader(),
+  });
+  return response.data || [];
+};
+
 export const getTask1CommonStructures = async () => {
   const user = JSON.parse(localStorage.getItem('user'));
   if (!user || !user.access_token) {
