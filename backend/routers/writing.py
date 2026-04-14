@@ -4,6 +4,7 @@ from typing import List, Dict, Any, Optional, Literal
 import re
 import time
 import hashlib
+import os
 from uuid import uuid4
 from ..deps import get_current_user
 from ..db import (
@@ -18,6 +19,8 @@ from ..db import (
     get_writing_peer_stats,
     list_writing_peer_leaderboard,
     create_gamification_event,
+    get_user_entitlement_balance,
+    consume_user_entitlement,
 )
 from ..services.mistake_taxonomy import normalize_writing_dim_error_type, normalize_writing_feedback_error_type
 from backend.utils.tracking import get_learning_tracker
@@ -239,6 +242,28 @@ def _ai_assist_for_peer_review(content: str, task_type: str = "task1") -> Dict[s
         },
     }
 
+
+def _guard_and_consume_writing_review_entitlement(user_id: str, request_id: str) -> None:
+    strict = str(os.environ.get("PAYMENT_REQUIRE_WRITING_REVIEW", "0")).strip() in {"1", "true", "yes"}
+    balance = get_user_entitlement_balance(str(user_id), "writing_ai_review")
+    if balance is None:
+        if strict:
+            raise HTTPException(status_code=402, detail="写作AI批改权益不足，请先在支付中心购买次数包")
+        return
+    if int(balance) <= 0:
+        raise HTTPException(status_code=402, detail="写作AI批改权益已用尽，请前往支付中心续费")
+    ok = consume_user_entitlement(
+        user_id=str(user_id),
+        feature_code="writing_ai_review",
+        amount=1,
+        source_type="writing_analyze",
+        source_id=str(request_id),
+        note="写作Task1 AI批改扣减1次",
+        metadata={"module": "writing", "endpoint": "task1_analyze"},
+    )
+    if not ok:
+        raise HTTPException(status_code=402, detail="写作AI批改权益扣减失败，请稍后重试")
+
 # 基础语法检查规则
 grammar_rules = {
     "capitalization": r"^(\s*[a-z])",  # 句子开头小写
@@ -313,6 +338,7 @@ async def analyze_task1_writing(req: Task1WritingRequest, current_user: dict = D
     """分析Task 1 (Academic)写作内容"""
     if not req.text:
         raise HTTPException(status_code=400, detail="写作内容不能为空")
+    _guard_and_consume_writing_review_entitlement(str(current_user["id"]), str(uuid4()))
 
     # 简单的结构分析
     sentences = [s.strip() for s in req.text.split('.') if s.strip()]

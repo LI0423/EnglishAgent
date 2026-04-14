@@ -532,6 +532,52 @@ export const getStudyGroupLeaderboard = async (groupId, limit = 20) => {
   return response.data || [];
 };
 
+export const getPaymentProducts = async () => {
+  const response = await api.get('/payment/products', {
+    headers: getAuthHeader(),
+  });
+  return response.data || [];
+};
+
+export const createPaymentOrder = async (productCode, quantity = 1) => {
+  const response = await api.post('/payment/order', {
+    product_code: productCode,
+    quantity,
+  }, {
+    headers: getAuthHeader(),
+  });
+  return response.data;
+};
+
+export const getPaymentOrders = async (limit = 30) => {
+  const response = await api.get('/payment/orders', {
+    params: { limit },
+    headers: getAuthHeader(),
+  });
+  return response.data || [];
+};
+
+export const createMockPayIntent = async (orderId) => {
+  const response = await api.post(`/payment/order/${orderId}/mock-pay`, {}, {
+    headers: getAuthHeader(),
+  });
+  return response.data;
+};
+
+export const callbackMockPay = async (payload) => {
+  const response = await api.post('/payment/callback/mock', payload, {
+    headers: getAuthHeader(),
+  });
+  return response.data;
+};
+
+export const getPaymentEntitlements = async () => {
+  const response = await api.get('/payment/entitlements', {
+    headers: getAuthHeader(),
+  });
+  return response.data || [];
+};
+
 export const getTask1CommonStructures = async () => {
   const user = JSON.parse(localStorage.getItem('user'));
   if (!user || !user.access_token) {

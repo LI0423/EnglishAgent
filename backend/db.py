@@ -2408,6 +2408,288 @@ def list_study_group_leaderboard(group_id: str, limit: int = 20) -> list[Dict[st
         conn.close()
 
 
+def create_payment_order(
+    order_id: str,
+    *,
+    user_id: str,
+    product_code: str,
+    product_name: str,
+    quantity: int,
+    unit_price_cents: int,
+    total_price_cents: int,
+    currency: str = "CNY",
+    metadata: Optional[Dict[str, Any]] = None,
+) -> None:
+    now = int(time.time())
+    conn = get_conn()
+    try:
+        conn.execute(
+            """
+            INSERT INTO payment_orders (
+              id, user_id, product_code, product_name, quantity,
+              unit_price_cents, total_price_cents, currency, status, metadata,
+              created_at, updated_at, paid_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, NULL)
+            """,
+            (
+                str(order_id),
+                str(user_id),
+                str(product_code),
+                str(product_name),
+                max(1, int(quantity)),
+                int(unit_price_cents),
+                int(total_price_cents),
+                str(currency or "CNY"),
+                json.dumps(metadata or {}),
+                now,
+                now,
+            ),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def get_payment_order(order_id: str) -> Optional[Dict[str, Any]]:
+    conn = get_conn()
+    try:
+        row = conn.execute("SELECT * FROM payment_orders WHERE id = ?", (str(order_id),)).fetchone()
+        if not row:
+            return None
+        item = dict(row)
+        item["metadata"] = json.loads(item["metadata"]) if item.get("metadata") else {}
+        return item
+    finally:
+        conn.close()
+
+
+def list_user_payment_orders(user_id: str, limit: int = 30) -> list[Dict[str, Any]]:
+    conn = get_conn()
+    try:
+        cur = conn.execute(
+            """
+            SELECT *
+            FROM payment_orders
+            WHERE user_id = ?
+            ORDER BY created_at DESC
+            LIMIT ?
+            """,
+            (str(user_id), max(1, int(limit))),
+        )
+        rows: list[Dict[str, Any]] = []
+        for row in cur.fetchall():
+            item = dict(row)
+            item["metadata"] = json.loads(item["metadata"]) if item.get("metadata") else {}
+            rows.append(item)
+        return rows
+    finally:
+        conn.close()
+
+
+def update_payment_order_status(order_id: str, status: str, paid_at: Optional[int] = None) -> None:
+    now = int(time.time())
+    conn = get_conn()
+    try:
+        conn.execute(
+            "UPDATE payment_orders SET status = ?, updated_at = ?, paid_at = COALESCE(?, paid_at) WHERE id = ?",
+            (str(status), now, int(paid_at) if paid_at else None, str(order_id)),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def create_payment_transaction(
+    transaction_id: str,
+    *,
+    order_id: str,
+    user_id: str,
+    provider: str,
+    provider_txn_id: str,
+    amount_cents: int,
+    status: str = "pending",
+    raw_payload: Optional[Dict[str, Any]] = None,
+) -> bool:
+    now = int(time.time())
+    conn = get_conn()
+    try:
+        conn.execute(
+            """
+            INSERT INTO payment_transactions (
+              id, order_id, user_id, provider, provider_txn_id,
+              amount_cents, status, raw_payload, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                str(transaction_id),
+                str(order_id),
+                str(user_id),
+                str(provider),
+                str(provider_txn_id),
+                int(amount_cents),
+                str(status),
+                json.dumps(raw_payload or {}),
+                now,
+                now,
+            ),
+        )
+        conn.commit()
+        return True
+    except sqlite3.IntegrityError:
+        return False
+    finally:
+        conn.close()
+
+
+def upsert_user_entitlement(
+    *,
+    user_id: str,
+    feature_code: str,
+    delta: int,
+    source_type: str,
+    source_id: str,
+    note: str = "",
+    metadata: Optional[Dict[str, Any]] = None,
+) -> bool:
+    now = int(time.time())
+    delta = int(delta)
+    if delta == 0:
+        return True
+    conn = get_conn()
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        dup = conn.execute(
+            """
+            SELECT id FROM entitlement_ledger
+            WHERE user_id = ? AND feature_code = ? AND source_type = ? AND source_id = ?
+            LIMIT 1
+            """,
+            (str(user_id), str(feature_code), str(source_type), str(source_id)),
+        ).fetchone()
+        if dup:
+            conn.rollback()
+            return False
+
+        row = conn.execute(
+            """
+            SELECT *
+            FROM user_entitlements
+            WHERE user_id = ? AND feature_code = ?
+            """,
+            (str(user_id), str(feature_code)),
+        ).fetchone()
+        if not row:
+            eid = str(uuid4())
+            balance = max(0, delta)
+            granted = max(0, delta)
+            consumed = max(0, -delta)
+            conn.execute(
+                """
+                INSERT INTO user_entitlements (
+                  id, user_id, feature_code, balance, total_granted, total_consumed, updated_at, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (eid, str(user_id), str(feature_code), balance, granted, consumed, now, now),
+            )
+            new_balance = balance
+        else:
+            balance = int(row["balance"] or 0)
+            new_balance = balance + delta
+            if new_balance < 0:
+                conn.rollback()
+                raise ValueError("insufficient_entitlement")
+            total_granted = int(row["total_granted"] or 0) + max(0, delta)
+            total_consumed = int(row["total_consumed"] or 0) + max(0, -delta)
+            conn.execute(
+                """
+                UPDATE user_entitlements
+                SET balance = ?, total_granted = ?, total_consumed = ?, updated_at = ?
+                WHERE user_id = ? AND feature_code = ?
+                """,
+                (new_balance, total_granted, total_consumed, now, str(user_id), str(feature_code)),
+            )
+
+        conn.execute(
+            """
+            INSERT INTO entitlement_ledger (
+              id, user_id, feature_code, change_amount, balance_after,
+              source_type, source_id, note, metadata, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                str(uuid4()),
+                str(user_id),
+                str(feature_code),
+                delta,
+                new_balance,
+                str(source_type),
+                str(source_id),
+                str(note or ""),
+                json.dumps(metadata or {}),
+                now,
+            ),
+        )
+        conn.commit()
+        return True
+    finally:
+        conn.close()
+
+
+def consume_user_entitlement(
+    *,
+    user_id: str,
+    feature_code: str,
+    amount: int,
+    source_type: str,
+    source_id: str,
+    note: str = "",
+    metadata: Optional[Dict[str, Any]] = None,
+) -> bool:
+    try:
+        return upsert_user_entitlement(
+            user_id=user_id,
+            feature_code=feature_code,
+            delta=-abs(int(amount)),
+            source_type=source_type,
+            source_id=source_id,
+            note=note,
+            metadata=metadata,
+        )
+    except ValueError:
+        return False
+
+
+def get_user_entitlement_balance(user_id: str, feature_code: str) -> Optional[int]:
+    conn = get_conn()
+    try:
+        row = conn.execute(
+            "SELECT balance FROM user_entitlements WHERE user_id = ? AND feature_code = ?",
+            (str(user_id), str(feature_code)),
+        ).fetchone()
+        if not row:
+            return None
+        return int(row["balance"] or 0)
+    finally:
+        conn.close()
+
+
+def list_user_entitlements(user_id: str) -> list[Dict[str, Any]]:
+    conn = get_conn()
+    try:
+        cur = conn.execute(
+            """
+            SELECT *
+            FROM user_entitlements
+            WHERE user_id = ?
+            ORDER BY updated_at DESC
+            """,
+            (str(user_id),),
+        )
+        return [dict(x) for x in cur.fetchall()]
+    finally:
+        conn.close()
+
+
 # Reminder DAO
 def create_reminder(reminder_id: str, user_id: str, reminder_data: Dict[str, Any]) -> None:
     conn = get_conn()

@@ -86,6 +86,7 @@ from backend.routers import writing as writing_router
 from backend.routers import gamification as gamification_router
 from backend.routers import community as community_router
 from backend.routers import study_group as study_group_router
+from backend.routers import payment as payment_router
 from backend.services import reminder_service
 from backend.tasks import reminder_tasks
 from backend.tasks import intelligent_reminder_tasks
@@ -910,6 +911,98 @@ def test_study_group_create_join_checkin_leaderboard_flow(isolated_db):
         )
     )
     assert overview_u2.total_points >= 3
+
+
+def test_payment_order_callback_and_writing_entitlement_consume(isolated_db):
+    products = asyncio.run(
+        payment_router.list_products(
+            current_user={"id": "u1", "username": "u1"},
+        )
+    )
+    assert any(p.code == "writing_ai_review_pack_10" for p in products)
+
+    created = asyncio.run(
+        payment_router.create_order(
+            payment_router.CreateOrderRequest(
+                product_code="writing_ai_review_pack_10",
+                quantity=1,
+            ),
+            current_user={"id": "u1", "username": "u1"},
+        )
+    )
+    order_id = created.order.id
+    assert order_id
+
+    intent = asyncio.run(
+        payment_router.mock_pay_order(
+            order_id,
+            current_user={"id": "u1", "username": "u1"},
+        )
+    )
+    payload = intent.callback_payload
+    callback_1 = asyncio.run(
+        payment_router.mock_callback(
+            payment_router.MockCallbackRequest(
+                order_id=payload["order_id"],
+                provider_txn_id=payload["provider_txn_id"],
+                status=payload["status"],
+                signature=payload["signature"],
+                raw_payload={"channel": "pytest"},
+            )
+        )
+    )
+    assert callback_1["status"] == "paid"
+
+    callback_2 = asyncio.run(
+        payment_router.mock_callback(
+            payment_router.MockCallbackRequest(
+                order_id=payload["order_id"],
+                provider_txn_id=payload["provider_txn_id"],
+                status=payload["status"],
+                signature=payload["signature"],
+                raw_payload={"channel": "pytest-retry"},
+            )
+        )
+    )
+    assert callback_2["status"] == "paid"
+
+    ents_before = asyncio.run(
+        payment_router.get_entitlements(
+            current_user={"id": "u1", "username": "u1"},
+        )
+    )
+    writing_ent_before = next((x for x in ents_before if x.get("feature_code") == "writing_ai_review"), None)
+    assert writing_ent_before is not None
+    before_balance = int(writing_ent_before.get("balance") or 0)
+    assert before_balance >= 10
+
+    req = writing_router.Task1WritingRequest(
+        text=(
+            "The line graph illustrates changes in urban transport usage from 2010 to 2020. "
+            "Overall, there was a clear upward trend in rail transport, while bus usage remained relatively stable. "
+            "In 2010, rail accounted for around 20 percent, then climbed steadily to about 45 percent by the end of the period."
+        ),
+        chart_type="chart",
+        topic="Urban transport",
+        keywords=["trend", "transport"],
+    )
+    result = asyncio.run(
+        writing_router.analyze_task1_writing(
+            req,
+            current_user={"id": "u1", "username": "u1"},
+        )
+    )
+    assert result.total_score >= 0
+
+    ents_after = asyncio.run(
+        payment_router.get_entitlements(
+            current_user={"id": "u1", "username": "u1"},
+        )
+    )
+    writing_ent_after = next((x for x in ents_after if x.get("feature_code") == "writing_ai_review"), None)
+    assert writing_ent_after is not None
+    after_balance = int(writing_ent_after.get("balance") or 0)
+    assert after_balance == before_balance - 1
 
 
 def test_reminder_retry_backoff_and_failover(isolated_db, monkeypatch):
