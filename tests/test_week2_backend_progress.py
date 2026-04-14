@@ -88,6 +88,7 @@ from backend.routers import community as community_router
 from backend.routers import study_group as study_group_router
 from backend.routers import payment as payment_router
 from backend.routers import admin as admin_router
+from backend.routers import campaign as campaign_router
 from backend.services import reminder_service
 from backend.tasks import reminder_tasks
 from backend.tasks import intelligent_reminder_tasks
@@ -1154,6 +1155,85 @@ def test_admin_console_overview_moderation_orders_and_ledger(isolated_db):
         )
     )
     assert len(ledger_rows) >= 1
+
+
+def test_campaign_growth_flow_create_join_progress_complete_reward(isolated_db):
+    now = int(time.time())
+    created = asyncio.run(
+        campaign_router.create_campaign(
+            campaign_router.CampaignCreateRequest(
+                title="7天打卡挑战",
+                description="每天至少完成一次学习任务",
+                campaign_type="checkin",
+                start_at=now - 10,
+                end_at=now + 7 * 86400,
+                reward_points=9,
+                target=3,
+                auto_start=True,
+            ),
+            current_user={"id": "u1", "username": "demo"},
+        )
+    )
+    assert created.id
+    assert created.status == "active"
+
+    campaigns = asyncio.run(
+        campaign_router.get_campaigns(
+            status="active",
+            current_user={"id": "u2", "username": "u2"},
+        )
+    )
+    assert any(c.id == created.id for c in campaigns)
+
+    joined = asyncio.run(
+        campaign_router.join_campaign(
+            created.id,
+            current_user={"id": "u2", "username": "u2"},
+        )
+    )
+    assert joined.progress == 0
+    assert joined.target == 3
+
+    for _ in range(3):
+        progressed = asyncio.run(
+            campaign_router.report_campaign_event(
+                created.id,
+                campaign_router.CampaignEventRequest(
+                    event_type="manual_progress",
+                    value=1,
+                    metadata={"from": "pytest"},
+                ),
+                current_user={"id": "u2", "username": "u2"},
+            )
+        )
+    assert progressed.status == "completed"
+    assert progressed.progress >= 3
+
+    me = asyncio.run(
+        campaign_router.campaign_me(
+            created.id,
+            current_user={"id": "u2", "username": "u2"},
+        )
+    )
+    assert me is not None
+    assert me.status == "completed"
+
+    stats = asyncio.run(
+        campaign_router.campaign_stats(
+            created.id,
+            current_user={"id": "u1", "username": "demo"},
+        )
+    )
+    assert int(stats["participant_count"]) >= 1
+    assert int(stats["completed_count"]) >= 1
+    assert float(stats["completion_rate"]) > 0
+
+    g_overview = asyncio.run(
+        gamification_router.get_overview(
+            current_user={"id": "u2", "username": "u2"},
+        )
+    )
+    assert g_overview.total_points >= 9
 
 
 def test_reminder_retry_backoff_and_failover(isolated_db, monkeypatch):

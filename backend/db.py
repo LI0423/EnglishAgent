@@ -2935,6 +2935,292 @@ def list_entitlement_ledger_admin(
         conn.close()
 
 
+def create_growth_campaign(
+    campaign_id: str,
+    *,
+    created_by: str,
+    title: str,
+    description: str,
+    campaign_type: str,
+    status: str,
+    start_at: int,
+    end_at: int,
+    reward_points: int,
+    rules: Optional[Dict[str, Any]] = None,
+) -> None:
+    now = int(time.time())
+    conn = get_conn()
+    try:
+        conn.execute(
+            """
+            INSERT INTO growth_campaigns (
+              id, created_by, title, description, campaign_type, status,
+              start_at, end_at, reward_points, rules_json, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                str(campaign_id),
+                str(created_by),
+                str(title),
+                str(description or ""),
+                str(campaign_type),
+                str(status),
+                int(start_at),
+                int(end_at),
+                max(0, int(reward_points)),
+                json.dumps(rules or {}),
+                now,
+                now,
+            ),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def update_growth_campaign_status(campaign_id: str, status: str) -> bool:
+    conn = get_conn()
+    try:
+        cur = conn.execute(
+            "UPDATE growth_campaigns SET status = ?, updated_at = ? WHERE id = ?",
+            (str(status), int(time.time()), str(campaign_id)),
+        )
+        conn.commit()
+        return cur.rowcount > 0
+    finally:
+        conn.close()
+
+
+def get_growth_campaign(campaign_id: str) -> Optional[Dict[str, Any]]:
+    conn = get_conn()
+    try:
+        row = conn.execute("SELECT * FROM growth_campaigns WHERE id = ?", (str(campaign_id),)).fetchone()
+        if not row:
+            return None
+        item = dict(row)
+        item["rules_json"] = json.loads(item["rules_json"]) if item.get("rules_json") else {}
+        return item
+    finally:
+        conn.close()
+
+
+def list_growth_campaigns(status: str = "", limit: int = 50) -> list[Dict[str, Any]]:
+    where = ["1=1"]
+    params: list[Any] = []
+    if str(status).strip():
+        where.append("status = ?")
+        params.append(str(status).strip())
+    params.append(max(1, int(limit)))
+    conn = get_conn()
+    try:
+        cur = conn.execute(
+            f"""
+            SELECT *
+            FROM growth_campaigns
+            WHERE {' AND '.join(where)}
+            ORDER BY start_at DESC, created_at DESC
+            LIMIT ?
+            """,
+            params,
+        )
+        rows: list[Dict[str, Any]] = []
+        for row in cur.fetchall():
+            item = dict(row)
+            item["rules_json"] = json.loads(item["rules_json"]) if item.get("rules_json") else {}
+            rows.append(item)
+        return rows
+    finally:
+        conn.close()
+
+
+def join_growth_campaign(campaign_id: str, user_id: str, target: int = 1) -> Dict[str, Any]:
+    now = int(time.time())
+    conn = get_conn()
+    try:
+        row = conn.execute(
+            """
+            SELECT *
+            FROM growth_campaign_participants
+            WHERE campaign_id = ? AND user_id = ?
+            """,
+            (str(campaign_id), str(user_id)),
+        ).fetchone()
+        if row:
+            return dict(row)
+
+        pid = str(uuid4())
+        conn.execute(
+            """
+            INSERT INTO growth_campaign_participants (
+              id, campaign_id, user_id, status, progress, target, joined_at, updated_at, completed_at
+            ) VALUES (?, ?, ?, 'joined', 0, ?, ?, ?, NULL)
+            """,
+            (pid, str(campaign_id), str(user_id), max(1, int(target)), now, now),
+        )
+        conn.commit()
+        created = conn.execute(
+            """
+            SELECT *
+            FROM growth_campaign_participants
+            WHERE id = ?
+            """,
+            (pid,),
+        ).fetchone()
+        return dict(created) if created else {}
+    finally:
+        conn.close()
+
+
+def get_growth_campaign_participant(campaign_id: str, user_id: str) -> Optional[Dict[str, Any]]:
+    conn = get_conn()
+    try:
+        row = conn.execute(
+            """
+            SELECT *
+            FROM growth_campaign_participants
+            WHERE campaign_id = ? AND user_id = ?
+            """,
+            (str(campaign_id), str(user_id)),
+        ).fetchone()
+        return dict(row) if row else None
+    finally:
+        conn.close()
+
+
+def add_growth_campaign_event(
+    event_id: str,
+    *,
+    campaign_id: str,
+    user_id: str,
+    event_type: str,
+    value: int = 1,
+    metadata: Optional[Dict[str, Any]] = None,
+) -> None:
+    conn = get_conn()
+    try:
+        conn.execute(
+            """
+            INSERT INTO growth_campaign_events (
+              id, campaign_id, user_id, event_type, value, metadata, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                str(event_id),
+                str(campaign_id),
+                str(user_id),
+                str(event_type),
+                max(1, int(value)),
+                json.dumps(metadata or {}),
+                int(time.time()),
+            ),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def advance_growth_campaign_progress(
+    *,
+    campaign_id: str,
+    user_id: str,
+    delta: int = 1,
+) -> Dict[str, Any]:
+    now = int(time.time())
+    conn = get_conn()
+    try:
+        row = conn.execute(
+            """
+            SELECT *
+            FROM growth_campaign_participants
+            WHERE campaign_id = ? AND user_id = ?
+            """,
+            (str(campaign_id), str(user_id)),
+        ).fetchone()
+        if not row:
+            raise ValueError("participant_not_found")
+        progress = int(row["progress"] or 0) + max(1, int(delta))
+        target = max(1, int(row["target"] or 1))
+        status = "completed" if progress >= target else str(row["status"] or "joined")
+        completed_at = now if status == "completed" else row["completed_at"]
+        conn.execute(
+            """
+            UPDATE growth_campaign_participants
+            SET progress = ?, status = ?, updated_at = ?, completed_at = ?
+            WHERE campaign_id = ? AND user_id = ?
+            """,
+            (progress, status, now, completed_at, str(campaign_id), str(user_id)),
+        )
+        conn.commit()
+        updated = conn.execute(
+            """
+            SELECT *
+            FROM growth_campaign_participants
+            WHERE campaign_id = ? AND user_id = ?
+            """,
+            (str(campaign_id), str(user_id)),
+        ).fetchone()
+        return dict(updated) if updated else {}
+    finally:
+        conn.close()
+
+
+def list_growth_campaign_participants(campaign_id: str, limit: int = 200) -> list[Dict[str, Any]]:
+    conn = get_conn()
+    try:
+        cur = conn.execute(
+            """
+            SELECT *
+            FROM growth_campaign_participants
+            WHERE campaign_id = ?
+            ORDER BY progress DESC, updated_at DESC
+            LIMIT ?
+            """,
+            (str(campaign_id), max(1, int(limit))),
+        )
+        return [dict(x) for x in cur.fetchall()]
+    finally:
+        conn.close()
+
+
+def get_growth_campaign_stats(campaign_id: str) -> Dict[str, Any]:
+    conn = get_conn()
+    try:
+        total = conn.execute(
+            "SELECT COUNT(*) AS cnt FROM growth_campaign_participants WHERE campaign_id = ?",
+            (str(campaign_id),),
+        ).fetchone()
+        completed = conn.execute(
+            """
+            SELECT COUNT(*) AS cnt
+            FROM growth_campaign_participants
+            WHERE campaign_id = ? AND status = 'completed'
+            """,
+            (str(campaign_id),),
+        ).fetchone()
+        events = conn.execute(
+            """
+            SELECT
+              COUNT(*) AS event_count,
+              COALESCE(SUM(value), 0) AS total_value
+            FROM growth_campaign_events
+            WHERE campaign_id = ?
+            """,
+            (str(campaign_id),),
+        ).fetchone()
+        participant_total = int((total["cnt"] or 0) if total else 0)
+        completed_total = int((completed["cnt"] or 0) if completed else 0)
+        rate = (completed_total / participant_total * 100.0) if participant_total > 0 else 0.0
+        return {
+            "participant_count": participant_total,
+            "completed_count": completed_total,
+            "completion_rate": round(rate, 2),
+            "event_count": int((events["event_count"] or 0) if events else 0),
+            "event_value_total": int((events["total_value"] or 0) if events else 0),
+        }
+    finally:
+        conn.close()
+
+
 # Reminder DAO
 def create_reminder(reminder_id: str, user_id: str, reminder_data: Dict[str, Any]) -> None:
     conn = get_conn()

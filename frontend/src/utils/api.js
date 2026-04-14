@@ -637,6 +637,57 @@ export const getAdminEntitlementLedger = async ({ userId = '', featureCode = '',
   return response.data || [];
 };
 
+export const createCampaign = async (payload) => {
+  const response = await api.post('/campaigns', payload, {
+    headers: getAuthHeader(),
+  });
+  return response.data;
+};
+
+export const setCampaignStatus = async (campaignId, status) => {
+  const response = await api.post(`/campaigns/${campaignId}/status`, null, {
+    params: { status },
+    headers: getAuthHeader(),
+  });
+  return response.data;
+};
+
+export const getCampaigns = async (status = '') => {
+  const response = await api.get('/campaigns', {
+    params: { status },
+    headers: getAuthHeader(),
+  });
+  return response.data || [];
+};
+
+export const joinCampaign = async (campaignId) => {
+  const response = await api.post(`/campaigns/${campaignId}/join`, {}, {
+    headers: getAuthHeader(),
+  });
+  return response.data;
+};
+
+export const reportCampaignEvent = async (campaignId, payload) => {
+  const response = await api.post(`/campaigns/${campaignId}/event`, payload, {
+    headers: getAuthHeader(),
+  });
+  return response.data;
+};
+
+export const getCampaignMe = async (campaignId) => {
+  const response = await api.get(`/campaigns/${campaignId}/me`, {
+    headers: getAuthHeader(),
+  });
+  return response.data;
+};
+
+export const getCampaignStats = async (campaignId) => {
+  const response = await api.get(`/campaigns/${campaignId}/stats`, {
+    headers: getAuthHeader(),
+  });
+  return response.data;
+};
+
 export const getTask1CommonStructures = async () => {
   const user = JSON.parse(localStorage.getItem('user'));
   if (!user || !user.access_token) {

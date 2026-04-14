@@ -16,6 +16,7 @@ const Home = () => {
     { to: '/groups', label: '👨‍👩‍👧‍👦 学习小组' },
     { to: '/payment', label: '💳 支付中心' },
     { to: '/admin', label: '🛠️ 运营后台' },
+    { to: '/campaigns', label: '🎉 活动中心' },
     { to: '/reports', label: '📊 学习报告' },
     { to: '/plans', label: '🎯 个性化计划' },
     { to: '/achievements', label: '🏆 成就中心' },
