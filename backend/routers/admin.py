@@ -7,6 +7,10 @@ from ..deps import get_current_user
 from ..db import (
     is_admin_user,
     get_admin_overview_metrics,
+    get_admin_retention_metrics,
+    get_admin_payment_funnel_metrics,
+    get_admin_entitlement_efficiency,
+    get_admin_campaign_conversion_metrics,
     list_pending_community_posts,
     list_pending_community_comments,
     moderate_community_post,
@@ -43,6 +47,44 @@ class ModerateRequest(BaseModel):
     reason: str = ""
 
 
+class AdminRetentionResponse(BaseModel):
+    cohort_days: int
+    new_users: int
+    d1_retention_rate: float
+    d7_retention_rate: float
+    cohorts: List[Dict[str, Any]]
+
+
+class AdminFunnelResponse(BaseModel):
+    days: int
+    inferred_exposure: bool
+    exposure_users: int
+    order_users: int
+    paid_users: int
+    order_count: int
+    paid_count: int
+    paid_amount_cents: int
+    exposure_to_order_rate: float
+    order_to_paid_rate: float
+    exposure_to_paid_rate: float
+
+
+class AdminEntitlementEfficiencyResponse(BaseModel):
+    days: int
+    feature_summary: List[Dict[str, Any]]
+    source_breakdown: List[Dict[str, Any]]
+
+
+class AdminCampaignConversionResponse(BaseModel):
+    days: int
+    campaign_count: int
+    participant_total: int
+    completed_total: int
+    avg_completion_rate: float
+    reward_cost_points_total: int
+    campaigns: List[Dict[str, Any]]
+
+
 @router.get("/admin/overview", response_model=AdminOverviewResponse, tags=["admin"])
 async def admin_overview(current_user: dict = Depends(get_current_user)):
     _ensure_admin(current_user)
@@ -58,6 +100,68 @@ async def admin_overview(current_user: dict = Depends(get_current_user)):
         writing_ai_review_balance_sum=int(data.get("writing_ai_review_balance_sum") or 0),
         writing_ai_review_granted_sum=int(data.get("writing_ai_review_granted_sum") or 0),
         writing_ai_review_consumed_sum=int(data.get("writing_ai_review_consumed_sum") or 0),
+    )
+
+
+@router.get("/admin/reports/retention", response_model=AdminRetentionResponse, tags=["admin"])
+async def admin_report_retention(cohort_days: int = 14, current_user: dict = Depends(get_current_user)):
+    _ensure_admin(current_user)
+    data = get_admin_retention_metrics(cohort_days=max(3, min(60, int(cohort_days))))
+    return AdminRetentionResponse(
+        cohort_days=int(data.get("cohort_days") or 14),
+        new_users=int(data.get("new_users") or 0),
+        d1_retention_rate=float(data.get("d1_retention_rate") or 0.0),
+        d7_retention_rate=float(data.get("d7_retention_rate") or 0.0),
+        cohorts=list(data.get("cohorts") or []),
+    )
+
+
+@router.get("/admin/reports/funnel", response_model=AdminFunnelResponse, tags=["admin"])
+async def admin_report_funnel(days: int = 30, current_user: dict = Depends(get_current_user)):
+    _ensure_admin(current_user)
+    data = get_admin_payment_funnel_metrics(days=max(7, min(120, int(days))))
+    return AdminFunnelResponse(
+        days=int(data.get("days") or 30),
+        inferred_exposure=bool(data.get("inferred_exposure")),
+        exposure_users=int(data.get("exposure_users") or 0),
+        order_users=int(data.get("order_users") or 0),
+        paid_users=int(data.get("paid_users") or 0),
+        order_count=int(data.get("order_count") or 0),
+        paid_count=int(data.get("paid_count") or 0),
+        paid_amount_cents=int(data.get("paid_amount_cents") or 0),
+        exposure_to_order_rate=float(data.get("exposure_to_order_rate") or 0.0),
+        order_to_paid_rate=float(data.get("order_to_paid_rate") or 0.0),
+        exposure_to_paid_rate=float(data.get("exposure_to_paid_rate") or 0.0),
+    )
+
+
+@router.get("/admin/reports/entitlement-efficiency", response_model=AdminEntitlementEfficiencyResponse, tags=["admin"])
+async def admin_report_entitlement_efficiency(
+    feature_code: str = "",
+    days: int = 30,
+    current_user: dict = Depends(get_current_user),
+):
+    _ensure_admin(current_user)
+    data = get_admin_entitlement_efficiency(feature_code=feature_code, days=max(7, min(120, int(days))))
+    return AdminEntitlementEfficiencyResponse(
+        days=int(data.get("days") or 30),
+        feature_summary=list(data.get("feature_summary") or []),
+        source_breakdown=list(data.get("source_breakdown") or []),
+    )
+
+
+@router.get("/admin/reports/campaign-conversion", response_model=AdminCampaignConversionResponse, tags=["admin"])
+async def admin_report_campaign_conversion(days: int = 30, current_user: dict = Depends(get_current_user)):
+    _ensure_admin(current_user)
+    data = get_admin_campaign_conversion_metrics(days=max(7, min(180, int(days))))
+    return AdminCampaignConversionResponse(
+        days=int(data.get("days") or 30),
+        campaign_count=int(data.get("campaign_count") or 0),
+        participant_total=int(data.get("participant_total") or 0),
+        completed_total=int(data.get("completed_total") or 0),
+        avg_completion_rate=float(data.get("avg_completion_rate") or 0.0),
+        reward_cost_points_total=int(data.get("reward_cost_points_total") or 0),
+        campaigns=list(data.get("campaigns") or []),
     )
 
 

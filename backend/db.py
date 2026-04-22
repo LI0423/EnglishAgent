@@ -2935,6 +2935,298 @@ def list_entitlement_ledger_admin(
         conn.close()
 
 
+def get_admin_retention_metrics(cohort_days: int = 14, now_ts: Optional[int] = None) -> Dict[str, Any]:
+    now = int(now_ts or time.time())
+    cohort_days = max(3, min(60, int(cohort_days)))
+    day0 = int(now // 86400) * 86400
+    start_day = day0 - cohort_days * 86400
+
+    conn = get_conn()
+    try:
+        users = conn.execute(
+            """
+            SELECT id, created_at
+            FROM users
+            WHERE created_at >= ?
+            """,
+            (start_day,),
+        ).fetchall()
+        if not users:
+            return {
+                "cohort_days": cohort_days,
+                "new_users": 0,
+                "d1_retention_rate": 0.0,
+                "d7_retention_rate": 0.0,
+                "cohorts": [],
+            }
+
+        activity_rows = conn.execute(
+            """
+            SELECT user_id, created_at AS ts FROM user_activities
+            WHERE created_at >= ?
+            UNION ALL
+            SELECT user_id, timestamp AS ts FROM learning_events
+            WHERE timestamp >= ?
+            """,
+            (start_day, start_day),
+        ).fetchall()
+        active_days_by_user: Dict[str, set[int]] = {}
+        for row in activity_rows:
+            uid = str(row["user_id"] or "")
+            if not uid:
+                continue
+            day = int(int(row["ts"] or 0) // 86400) * 86400
+            if uid not in active_days_by_user:
+                active_days_by_user[uid] = set()
+            active_days_by_user[uid].add(day)
+
+        cohorts: Dict[int, Dict[str, Any]] = {}
+        for user in users:
+            uid = str(user["id"])
+            signup_day = int(int(user["created_at"] or 0) // 86400) * 86400
+            if signup_day < start_day:
+                continue
+            if signup_day not in cohorts:
+                cohorts[signup_day] = {"date_ts": signup_day, "new_users": 0, "d1_retained": 0, "d7_retained": 0}
+            cohorts[signup_day]["new_users"] += 1
+            user_active_days = active_days_by_user.get(uid, set())
+            if signup_day + 86400 in user_active_days:
+                cohorts[signup_day]["d1_retained"] += 1
+            if signup_day + 7 * 86400 in user_active_days:
+                cohorts[signup_day]["d7_retained"] += 1
+
+        rows: list[Dict[str, Any]] = []
+        total_new = 0
+        total_d1 = 0
+        total_d7 = 0
+        for day in sorted(cohorts.keys()):
+            c = cohorts[day]
+            n = int(c["new_users"] or 0)
+            d1 = int(c["d1_retained"] or 0)
+            d7 = int(c["d7_retained"] or 0)
+            total_new += n
+            total_d1 += d1
+            total_d7 += d7
+            rows.append(
+                {
+                    "date_ts": day,
+                    "date": time.strftime("%Y-%m-%d", time.localtime(day)),
+                    "new_users": n,
+                    "d1_retained": d1,
+                    "d7_retained": d7,
+                    "d1_rate": round((d1 / n * 100.0), 2) if n > 0 else 0.0,
+                    "d7_rate": round((d7 / n * 100.0), 2) if n > 0 else 0.0,
+                }
+            )
+
+        return {
+            "cohort_days": cohort_days,
+            "new_users": total_new,
+            "d1_retention_rate": round((total_d1 / total_new * 100.0), 2) if total_new > 0 else 0.0,
+            "d7_retention_rate": round((total_d7 / total_new * 100.0), 2) if total_new > 0 else 0.0,
+            "cohorts": rows,
+        }
+    finally:
+        conn.close()
+
+
+def get_admin_payment_funnel_metrics(days: int = 30, now_ts: Optional[int] = None) -> Dict[str, Any]:
+    now = int(now_ts or time.time())
+    days = max(7, min(120, int(days)))
+    since = now - days * 86400
+    conn = get_conn()
+    try:
+        exposure_row = conn.execute(
+            """
+            SELECT COUNT(DISTINCT user_id) AS cnt
+            FROM learning_events
+            WHERE timestamp >= ?
+              AND (event_name = 'payment_center_view' OR event_type = 'payment')
+            """,
+            (since,),
+        ).fetchone()
+        order_row = conn.execute(
+            """
+            SELECT
+              COUNT(*) AS order_count,
+              COUNT(DISTINCT user_id) AS order_users,
+              COALESCE(SUM(total_price_cents), 0) AS order_amount
+            FROM payment_orders
+            WHERE created_at >= ?
+            """,
+            (since,),
+        ).fetchone()
+        paid_row = conn.execute(
+            """
+            SELECT
+              COUNT(*) AS paid_count,
+              COUNT(DISTINCT user_id) AS paid_users,
+              COALESCE(SUM(total_price_cents), 0) AS paid_amount
+            FROM payment_orders
+            WHERE created_at >= ? AND status = 'paid'
+            """,
+            (since,),
+        ).fetchone()
+        fallback_exposure_row = conn.execute(
+            """
+            SELECT COUNT(DISTINCT user_id) AS cnt
+            FROM user_activities
+            WHERE created_at >= ?
+            """,
+            (since,),
+        ).fetchone()
+
+        exposure_users = int((exposure_row["cnt"] or 0) if exposure_row else 0)
+        inferred = False
+        if exposure_users <= 0:
+            exposure_users = int((fallback_exposure_row["cnt"] or 0) if fallback_exposure_row else 0)
+            inferred = True
+        order_users = int((order_row["order_users"] or 0) if order_row else 0)
+        paid_users = int((paid_row["paid_users"] or 0) if paid_row else 0)
+        order_count = int((order_row["order_count"] or 0) if order_row else 0)
+        paid_count = int((paid_row["paid_count"] or 0) if paid_row else 0)
+        paid_amount = int((paid_row["paid_amount"] or 0) if paid_row else 0)
+
+        return {
+            "days": days,
+            "inferred_exposure": inferred,
+            "exposure_users": exposure_users,
+            "order_users": order_users,
+            "paid_users": paid_users,
+            "order_count": order_count,
+            "paid_count": paid_count,
+            "paid_amount_cents": paid_amount,
+            "exposure_to_order_rate": round((order_users / exposure_users * 100.0), 2) if exposure_users > 0 else 0.0,
+            "order_to_paid_rate": round((paid_users / order_users * 100.0), 2) if order_users > 0 else 0.0,
+            "exposure_to_paid_rate": round((paid_users / exposure_users * 100.0), 2) if exposure_users > 0 else 0.0,
+        }
+    finally:
+        conn.close()
+
+
+def get_admin_entitlement_efficiency(feature_code: str = "", days: int = 30, now_ts: Optional[int] = None) -> Dict[str, Any]:
+    now = int(now_ts or time.time())
+    days = max(7, min(120, int(days)))
+    since = now - days * 86400
+    conn = get_conn()
+    try:
+        where = "1=1"
+        params: list[Any] = []
+        if str(feature_code).strip():
+            where = "feature_code = ?"
+            params.append(str(feature_code).strip())
+
+        cur = conn.execute(
+            f"""
+            SELECT
+              feature_code,
+              COALESCE(SUM(balance), 0) AS balance_sum,
+              COALESCE(SUM(total_granted), 0) AS granted_sum,
+              COALESCE(SUM(total_consumed), 0) AS consumed_sum,
+              COUNT(*) AS account_count
+            FROM user_entitlements
+            WHERE {where}
+            GROUP BY feature_code
+            ORDER BY granted_sum DESC
+            """,
+            params,
+        )
+        summary_rows = [dict(x) for x in cur.fetchall()]
+
+        log_where = "created_at >= ?"
+        log_params: list[Any] = [since]
+        if str(feature_code).strip():
+            log_where += " AND feature_code = ?"
+            log_params.append(str(feature_code).strip())
+        source_cur = conn.execute(
+            f"""
+            SELECT source_type, COUNT(*) AS event_count, COALESCE(SUM(change_amount), 0) AS change_total
+            FROM entitlement_ledger
+            WHERE {log_where}
+            GROUP BY source_type
+            ORDER BY event_count DESC
+            """,
+            log_params,
+        )
+        source_rows = [dict(x) for x in source_cur.fetchall()]
+
+        enriched: list[Dict[str, Any]] = []
+        for row in summary_rows:
+            granted = int(row.get("granted_sum") or 0)
+            consumed = int(row.get("consumed_sum") or 0)
+            balance = int(row.get("balance_sum") or 0)
+            usage = (consumed / granted * 100.0) if granted > 0 else 0.0
+            enriched.append(
+                {
+                    "feature_code": str(row.get("feature_code") or ""),
+                    "account_count": int(row.get("account_count") or 0),
+                    "granted_sum": granted,
+                    "consumed_sum": consumed,
+                    "balance_sum": balance,
+                    "usage_rate": round(usage, 2),
+                }
+            )
+        return {"days": days, "feature_summary": enriched, "source_breakdown": source_rows}
+    finally:
+        conn.close()
+
+
+def get_admin_campaign_conversion_metrics(days: int = 30, now_ts: Optional[int] = None) -> Dict[str, Any]:
+    now = int(now_ts or time.time())
+    days = max(7, min(180, int(days)))
+    since = now - days * 86400
+    conn = get_conn()
+    try:
+        campaigns = conn.execute(
+            """
+            SELECT *
+            FROM growth_campaigns
+            WHERE created_at >= ?
+            ORDER BY created_at DESC
+            """,
+            (since,),
+        ).fetchall()
+        rows: list[Dict[str, Any]] = []
+        for c in campaigns:
+            cid = str(c["id"])
+            stats = get_growth_campaign_stats(cid)
+            reward_points = int(c["reward_points"] or 0)
+            completed = int(stats.get("completed_count") or 0)
+            reward_cost = reward_points * completed
+            rows.append(
+                {
+                    "campaign_id": cid,
+                    "title": str(c["title"] or ""),
+                    "status": str(c["status"] or ""),
+                    "campaign_type": str(c["campaign_type"] or "challenge"),
+                    "participant_count": int(stats.get("participant_count") or 0),
+                    "completed_count": completed,
+                    "completion_rate": float(stats.get("completion_rate") or 0.0),
+                    "event_count": int(stats.get("event_count") or 0),
+                    "reward_points": reward_points,
+                    "reward_cost_points": reward_cost,
+                    "created_at": int(c["created_at"] or 0),
+                }
+            )
+
+        total_campaigns = len(rows)
+        total_participants = sum(int(x["participant_count"]) for x in rows)
+        total_completed = sum(int(x["completed_count"]) for x in rows)
+        total_reward_cost = sum(int(x["reward_cost_points"]) for x in rows)
+        avg_completion_rate = (sum(float(x["completion_rate"]) for x in rows) / total_campaigns) if total_campaigns > 0 else 0.0
+        return {
+            "days": days,
+            "campaign_count": total_campaigns,
+            "participant_total": total_participants,
+            "completed_total": total_completed,
+            "avg_completion_rate": round(avg_completion_rate, 2),
+            "reward_cost_points_total": total_reward_cost,
+            "campaigns": rows,
+        }
+    finally:
+        conn.close()
+
+
 def create_growth_campaign(
     campaign_id: str,
     *,

@@ -637,6 +637,38 @@ export const getAdminEntitlementLedger = async ({ userId = '', featureCode = '',
   return response.data || [];
 };
 
+export const getAdminRetentionReport = async (cohortDays = 14) => {
+  const response = await api.get('/admin/reports/retention', {
+    params: { cohort_days: cohortDays },
+    headers: getAuthHeader(),
+  });
+  return response.data;
+};
+
+export const getAdminFunnelReport = async (days = 30) => {
+  const response = await api.get('/admin/reports/funnel', {
+    params: { days },
+    headers: getAuthHeader(),
+  });
+  return response.data;
+};
+
+export const getAdminEntitlementEfficiencyReport = async (featureCode = '', days = 30) => {
+  const response = await api.get('/admin/reports/entitlement-efficiency', {
+    params: { feature_code: featureCode, days },
+    headers: getAuthHeader(),
+  });
+  return response.data;
+};
+
+export const getAdminCampaignConversionReport = async (days = 30) => {
+  const response = await api.get('/admin/reports/campaign-conversion', {
+    params: { days },
+    headers: getAuthHeader(),
+  });
+  return response.data;
+};
+
 export const createCampaign = async (payload) => {
   const response = await api.post('/campaigns', payload, {
     headers: getAuthHeader(),

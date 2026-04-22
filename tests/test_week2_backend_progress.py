@@ -1156,6 +1156,43 @@ def test_admin_console_overview_moderation_orders_and_ledger(isolated_db):
     )
     assert len(ledger_rows) >= 1
 
+    retention = asyncio.run(
+        admin_router.admin_report_retention(
+            cohort_days=14,
+            current_user=admin_user,
+        )
+    )
+    assert retention.cohort_days == 14
+    assert retention.new_users >= 0
+
+    funnel = asyncio.run(
+        admin_router.admin_report_funnel(
+            days=30,
+            current_user=admin_user,
+        )
+    )
+    assert funnel.days == 30
+    assert funnel.paid_count >= 1
+
+    ent_eff = asyncio.run(
+        admin_router.admin_report_entitlement_efficiency(
+            feature_code="writing_ai_review",
+            days=30,
+            current_user=admin_user,
+        )
+    )
+    assert ent_eff.days == 30
+    assert isinstance(ent_eff.feature_summary, list)
+
+    campaign_conv = asyncio.run(
+        admin_router.admin_report_campaign_conversion(
+            days=30,
+            current_user=admin_user,
+        )
+    )
+    assert campaign_conv.days == 30
+    assert campaign_conv.campaign_count >= 0
+
 
 def test_campaign_growth_flow_create_join_progress_complete_reward(isolated_db):
     now = int(time.time())
