@@ -1,5 +1,6 @@
 import { Link, useLocation } from 'react-router-dom';
 
+import TopNav from "../components/layout/TopNav";
 const titleMap = {
   '/listening': '听力练习',
   '/reading': '阅读练习',
@@ -16,15 +17,15 @@ function ComingSoon() {
   const title = titleMap[location.pathname] || '功能页面';
 
   return (
-    <div className="home-page">
-      <header className="top-nav">
-        <div className="nav-content">
-          <div className="nav-left">
-            <h1>🚧 {title}</h1>
+    <div className="home-page web-dashboard">
+      <TopNav />
+      <div className="content-area content-shell content-shell-sm">
+        <div className="web-page-head">
+          <div>
+            <h2>{title}</h2>
+            <p>该功能正在建设中。</p>
           </div>
         </div>
-      </header>
-      <div className="content-area content-shell content-shell-sm">
         <div className="card">
           <h3>该页面正在建设中</h3>
           <p>当前路径：{location.pathname}</p>

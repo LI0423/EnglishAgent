@@ -1,35 +1,28 @@
 import { useEffect, useState, useRef } from 'react';
-import { NavLink, useLocation, useNavigate } from 'react-router-dom';
+import { useLocation, useNavigate } from 'react-router-dom';
 import { getCurrentUser } from '../utils/api';
+import SidebarMenu from '../components/layout/SidebarMenu';
 import {
+  analyzeTask2Writing,
   analyzeTask1Writing,
+  brainstormTask2,
   claimWritingPeerSubmission,
+  getTask2CommonStructures,
   getMyWritingPeerSubmissions,
   getWritingPeerLeaderboard,
   getWritingPeerReviewAssist,
   getWritingPeerStats,
   getReceivedWritingPeerReviews,
+  saveTask2Practice,
   saveTask1Practice,
   submitWritingPeerReview,
   submitWritingPeerSubmission,
 } from '../utils/api';
 
+import TopNav from "../components/layout/TopNav";
 const Writing = () => {
   const location = useLocation();
   const navigate = useNavigate();
-  const navItems = [
-    { to: '/', label: '🏠 首页' },
-    { to: '/chat', label: '🤖 智能对话' },
-    { to: '/listening', label: '🎧 听力练习' },
-    { to: '/reading', label: '📚 阅读练习' },
-    { to: '/writing', label: '📝 写作练习' },
-    { to: '/speaking', label: '💬 口语练习' },
-    { to: '/vocabulary', label: '📋 词汇学习' },
-    { to: '/mistakes', label: '🔖 错题本' },
-    { to: '/mock-exam', label: '🎯 模拟考试' },
-    { to: '/reports', label: '📊 学习报告' },
-    { to: '/profile', label: '👤 个人中心' },
-  ];
 
   const [userData, setUserData] = useState({ username: '李同学' });
   const [writingContent, setWritingContent] = useState('');
@@ -37,6 +30,10 @@ const Writing = () => {
   const [timeRemaining, setTimeRemaining] = useState(40 * 60); // 40分钟
   const [taskType, setTaskType] = useState('task1');
   const [aiFeedback, setAiFeedback] = useState({});
+  const [task2Brainstorm, setTask2Brainstorm] = useState(null);
+  const [task2Structures, setTask2Structures] = useState([]);
+  const [task2Stance, setTask2Stance] = useState('balanced');
+  const [brainstorming, setBrainstorming] = useState(false);
   const [saving, setSaving] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [replayNotice, setReplayNotice] = useState('');
@@ -74,6 +71,17 @@ const Writing = () => {
 
     fetchUserData();
   }, []);
+
+  useEffect(() => {
+    setPeerTopic(taskType === 'task2' ? 'Task 2 观点论证练习' : 'Task 1 图表描述练习');
+    setTimeRemaining(taskType === 'task2' ? 40 * 60 : 20 * 60);
+    setAiFeedback({});
+    if (taskType === 'task2') {
+      getTask2CommonStructures()
+        .then((res) => setTask2Structures(res?.structures || []))
+        .catch(() => setTask2Structures([]));
+    }
+  }, [taskType]);
 
   // 初始化倒计时
   useEffect(() => {
@@ -124,6 +132,8 @@ const Writing = () => {
     const questionId = params.get('questionId') || '';
     if (qType === 'writing_task1') {
       setTaskType('task1');
+    } else if (qType === 'writing_task2') {
+      setTaskType('task2');
     }
     setReplayNotice(questionId ? `来自错题重练：题目 ${questionId}` : '来自错题重练：建议先完成一篇写作练习');
   }, [location.search]);
@@ -135,10 +145,17 @@ const Writing = () => {
   // 模拟题目数据
   const task1Question = {
     title: '图表写作：2023年不同城市旅游人数',
-    chartType: '柱状图',
+    chartType: 'chart',
     requirements: '总结图表中的主要信息，比较数据并提供相关见解，至少150词。',
     exampleImage: '📊'
   };
+  const task2Question = {
+    title: '观点论证：大学教育是否应当免费',
+    requirements: '围绕题目表达明确立场，给出论证与例子，至少250词。',
+    prompt: 'Some people think higher education should be free for everyone. To what extent do you agree or disagree?',
+  };
+  const activeQuestion = taskType === 'task2' ? task2Question : task1Question;
+  const targetWordCount = taskType === 'task2' ? 250 : 150;
 
   // 处理写作内容变化
   const handleContentChange = (e) => {
@@ -151,11 +168,20 @@ const Writing = () => {
 
     setSaving(true);
     try {
-      await saveTask1Practice(
-        writingContent,
-        task1Question.chartType,
-        task1Question.title
-      );
+      if (taskType === 'task2') {
+        await saveTask2Practice(
+          writingContent,
+          task2Question.title,
+          [],
+          task2Stance,
+        );
+      } else {
+        await saveTask1Practice(
+          writingContent,
+          task1Question.chartType,
+          task1Question.title,
+        );
+      }
       alert('草稿保存成功！');
     } catch (error) {
       console.error('Failed to save draft:', error);
@@ -171,12 +197,21 @@ const Writing = () => {
 
     setSubmitting(true);
     try {
-      // 分析写作内容
-      const analysis = await analyzeTask1Writing(
-        writingContent,
-        task1Question.chartType,
-        task1Question.title
-      );
+      let analysis = null;
+      if (taskType === 'task2') {
+        analysis = await analyzeTask2Writing(
+          writingContent,
+          task2Question.title,
+          [],
+          task2Stance,
+        );
+      } else {
+        analysis = await analyzeTask1Writing(
+          writingContent,
+          task1Question.chartType,
+          task1Question.title,
+        );
+      }
       
       if (analysis) {
         setAiFeedback(analysis);
@@ -184,17 +219,39 @@ const Writing = () => {
       }
 
       // 保存写作练习
-      await saveTask1Practice(
-        writingContent,
-        task1Question.chartType,
-        task1Question.title,
-        analysis?.total_score
-      );
+      if (taskType === 'task2') {
+        await saveTask2Practice(
+          writingContent,
+          task2Question.title,
+          [],
+          task2Stance,
+        );
+      } else {
+        await saveTask1Practice(
+          writingContent,
+          task1Question.chartType,
+          task1Question.title,
+          analysis?.total_score,
+        );
+      }
     } catch (error) {
       console.error('Failed to submit writing:', error);
       alert('提交失败，请重试！');
     } finally {
       setSubmitting(false);
+    }
+  };
+
+  const handleTask2Brainstorm = async () => {
+    setBrainstorming(true);
+    try {
+      const data = await brainstormTask2(task2Question.title, [], task2Stance);
+      setTask2Brainstorm(data || null);
+    } catch (error) {
+      console.error('Failed to brainstorm task2:', error);
+      alert(typeof error === 'string' ? error : '生成Task2思路失败，请重试');
+    } finally {
+      setBrainstorming(false);
     }
   };
 
@@ -315,69 +372,32 @@ const Writing = () => {
   };
 
   return (
-    <div className="writing-page">
+    <div className="home-page web-dashboard writing-page">
       {/* 顶部导航栏 */}
-      <header className="top-nav">
-        <div className="nav-content">
-          <div className="nav-left">
-            <h1>🎓 IELTS Agent</h1>
-          </div>
-          <div className="nav-right">
-            <div className="notification">
-              <span className="icon">🔔</span>
-              <span className="badge">3</span>
-            </div>
-            <div className="user-profile">
-              <span className="avatar">👤</span>
-              <span className="username">{userData.username}</span>
-            </div>
-            <div className="settings">
-              <span className="icon">⚙️</span>
-            </div>
-          </div>
-        </div>
-      </header>
+      <TopNav username={userData.username} />
 
       {/* 主要内容布局 */}
       <div className="main-layout">
         {/* 左侧导航栏 */}
         <div className="sidebar">
-          <div className="sidebar-header">
-            <h2>🎓 IELTS Agent</h2>
-          </div>
-          <nav className="sidebar-nav">
-            <ul>
-              {navItems.map((item) => (
-                <li key={item.to}>
-                  <NavLink
-                    to={item.to}
-                    end={item.to === '/'}
-                    className={({ isActive }) => `sidebar-nav-link${isActive ? ' active' : ''}`}
-                  >
-                    {item.label}
-                  </NavLink>
-                </li>
-              ))}
-            </ul>
-          </nav>
+          <SidebarMenu />
         </div>
 
         {/* 右侧内容区 */}
-        <div className="content-area">
+        <div className="content-area content-shell">
           <main className="writing-content">
             {replayNotice && (
               <div className="card" style={{ marginBottom: 16, borderColor: '#7bb5ff', background: '#f3f8ff' }}>
                 <h3>错题重练指引</h3>
                 <p>{replayNotice}</p>
-                <button onClick={() => navigate('/mistakes?module=writing&questionType=writing_task1')}>返回错题本</button>
+                <button onClick={() => navigate(`/mistakes?module=writing&questionType=${taskType === 'task2' ? 'writing_task2' : 'writing_task1'}`)}>返回错题本</button>
               </div>
             )}
-            {/* 页面标题和面包屑导航 */}
-            <div className="page-header">
-              <div className="breadcrumb">
-                <span>首页</span> &gt; <span>写作练习</span>
+            <div className="web-page-head">
+              <div>
+                <h2>写作练习</h2>
+                <p>Task 1 / Task 2 写作训练、草稿保存、AI 反馈与互评。</p>
               </div>
-              <h1 className="page-title">📝 写作练习</h1>
             </div>
 
             {/* 任务类型切换 */}
@@ -399,11 +419,31 @@ const Writing = () => {
             {/* 题目展示区 */}
             <div className="question-section">
               <div className="question-card">
-                <h2 className="question-title">{task1Question.title}</h2>
-                <div className="chart-placeholder">{task1Question.exampleImage}</div>
+                <h2 className="question-title">{activeQuestion.title}</h2>
+                {taskType === 'task1' ? (
+                  <div className="chart-placeholder">{task1Question.exampleImage}</div>
+                ) : (
+                  <div className="chart-placeholder">🧠</div>
+                )}
                 <div className="question-requirements">
                   <h3>写作要求：</h3>
-                  <p>{task1Question.requirements}</p>
+                  <p>{activeQuestion.requirements}</p>
+                  {taskType === 'task2' && (
+                    <>
+                      <p style={{ marginTop: 8 }}><strong>题干：</strong>{task2Question.prompt}</p>
+                      <label style={{ display: 'inline-flex', alignItems: 'center', gap: 8, marginTop: 8 }}>
+                        立场
+                        <select value={task2Stance} onChange={(e) => setTask2Stance(e.target.value)}>
+                          <option value="agree">agree</option>
+                          <option value="disagree">disagree</option>
+                          <option value="balanced">balanced</option>
+                        </select>
+                        <button type="button" onClick={handleTask2Brainstorm} disabled={brainstorming}>
+                          {brainstorming ? '生成中...' : '生成Task2思路'}
+                        </button>
+                      </label>
+                    </>
+                  )}
                 </div>
               </div>
 
@@ -427,7 +467,7 @@ const Writing = () => {
                     )}
                     {aiFeedback.total_score && (
                       <div className="score-section">
-                        <h4>总分：<span className="score-value">{aiFeedback.total_score}/9</span></h4>
+                        <h4>综合得分：<span className="score-value">{aiFeedback.total_score}/80</span></h4>
                         <div className="score-details">
                           <div className="score-item">
                             <span>结构：{aiFeedback.structure_score}/9</span>
@@ -453,13 +493,49 @@ const Writing = () => {
               </div>
             </div>
 
+            {taskType === 'task2' && (task2Brainstorm || (task2Structures || []).length > 0) && (
+              <div className="card" style={{ marginTop: 16 }}>
+                <h3>Task 2 思路与结构建议</h3>
+                {(task2Structures || []).length > 0 && (
+                  <>
+                    <h4>推荐结构</h4>
+                    <ul>
+                      {(task2Structures || []).map((x, idx) => (
+                        <li key={idx}>{x}</li>
+                      ))}
+                    </ul>
+                  </>
+                )}
+                {task2Brainstorm && (
+                  <>
+                    <h4>Thesis 备选</h4>
+                    <ul>
+                      {(task2Brainstorm.thesis_options || []).map((x, idx) => <li key={`thesis-${idx}`}>{x}</li>)}
+                    </ul>
+                    <h4>正方论点</h4>
+                    <ul>
+                      {(task2Brainstorm.arguments_for || []).map((x, idx) => <li key={`for-${idx}`}>{x}</li>)}
+                    </ul>
+                    <h4>反方论点</h4>
+                    <ul>
+                      {(task2Brainstorm.arguments_against || []).map((x, idx) => <li key={`against-${idx}`}>{x}</li>)}
+                    </ul>
+                    <h4>段落提纲</h4>
+                    <ul>
+                      {(task2Brainstorm.paragraph_outline || []).map((x, idx) => <li key={`outline-${idx}`}>{x}</li>)}
+                    </ul>
+                  </>
+                )}
+              </div>
+            )}
+
             {/* 写作区域 */}
             <div className="writing-section">
               <div className="writing-header">
                 <div className="writing-info">
                   <div className="timer">⏱️ {formatTime(timeRemaining)}</div>
-                  <div className={`word-count ${wordCount >= 150 ? 'target-reached' : ''}`}>
-                    字数：{wordCount}/150
+                  <div className={`word-count ${wordCount >= targetWordCount ? 'target-reached' : ''}`}>
+                    字数：{wordCount}/{targetWordCount}
                   </div>
                 </div>
                 
@@ -489,7 +565,7 @@ const Writing = () => {
                   <button 
                     className="toolbar-btn submit-btn"
                     onClick={handleSubmit}
-                    disabled={submitting || !writingContent.trim() || wordCount < 150}
+                    disabled={submitting || !writingContent.trim() || wordCount < targetWordCount}
                   >
                     {submitting ? '提交中...' : '📤 提交练习'}
                   </button>

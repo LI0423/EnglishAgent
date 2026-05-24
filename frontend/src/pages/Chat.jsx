@@ -1,21 +1,11 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { NavLink, useNavigate } from 'react-router-dom';
+import { useNavigate } from 'react-router-dom';
 import { getCurrentUser, getChatHistory, getChatSessions, postChatMessage } from '../utils/api';
+import SidebarMenu from '../components/layout/SidebarMenu';
 
+import TopNav from "../components/layout/TopNav";
 const Chat = () => {
   const navigate = useNavigate();
-  const navItems = [
-    { to: '/', label: '🏠 首页' },
-    { to: '/chat', label: '🤖 智能对话' },
-    { to: '/listening', label: '🎧 听力练习' },
-    { to: '/reading', label: '📚 阅读练习' },
-    { to: '/writing', label: '📝 写作练习' },
-    { to: '/speaking', label: '💬 口语练习' },
-    { to: '/vocabulary', label: '📋 词汇学习' },
-    { to: '/mistakes', label: '🔖 错题本' },
-    { to: '/reports', label: '📊 学习报告' },
-    { to: '/profile', label: '👤 个人中心' },
-  ];
 
   const [userData, setUserData] = useState({ username: '同学' });
   const [input, setInput] = useState('');
@@ -161,45 +151,28 @@ const Chat = () => {
   };
 
   return (
-    <div className="chat-page">
-      <header className="top-nav">
-        <div className="nav-content">
-          <div className="nav-left">
-            <h1>🎓 IELTS Agent</h1>
-          </div>
-          <div className="nav-right">
-            <div className="user-profile">
-              <span className="avatar">👤</span>
-              <span className="username">{userData.username}</span>
-            </div>
-          </div>
-        </div>
-      </header>
+    <div className="home-page web-dashboard chat-page">
+      <TopNav username={userData.username} />
 
       <div className="main-layout">
         <div className="sidebar">
-          <div className="sidebar-header">
-            <h2>🎓 IELTS Agent</h2>
-          </div>
-          <nav className="sidebar-nav">
-            <ul>
-              {navItems.map((item) => (
-                <li key={item.to}>
-                  <NavLink
-                    to={item.to}
-                    end={item.to === '/'}
-                    className={({ isActive }) => `sidebar-nav-link${isActive ? ' active' : ''}`}
-                  >
-                    {item.label}
-                  </NavLink>
-                </li>
-              ))}
-            </ul>
-          </nav>
+          <SidebarMenu />
         </div>
 
-        <div className="content-area">
+        <div className="content-area content-shell">
           <main className={`chat-content ${sessionsExpanded ? 'has-session-drawer' : ''}`}>
+            <div className="web-page-head">
+              <div>
+                <h2>智能对话</h2>
+                <p>面向词汇解释、学习建议和深度检索的对话工作台。</p>
+              </div>
+              <div className="web-page-head-actions">
+                <button type="button" onClick={() => setShowAdvanced((v) => !v)}>
+                  {showAdvanced ? '收起高级设置' : '高级设置'}
+                </button>
+              </div>
+            </div>
+
             <section className="chat-session-toolbar">
               <button type="button" className="chat-session-toggle" onClick={() => setSessionsExpanded((v) => !v)}>
                 {sessionsExpanded ? '收起历史会话' : '展开历史会话'}
@@ -238,13 +211,6 @@ const Chat = () => {
                 ))}
               </div>
             </aside>
-
-            <div className="chat-header">
-              <h2>🤖 智能对话</h2>
-              <button className="chat-settings-btn" onClick={() => setShowAdvanced((v) => !v)}>
-                {showAdvanced ? '收起高级设置' : '展开高级设置'}
-              </button>
-            </div>
 
             {showAdvanced && (
               <section className="chat-advanced-panel">

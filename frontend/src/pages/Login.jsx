@@ -1,6 +1,6 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { confirmPasswordResetByCode, login, requestPasswordResetCode } from '../utils/api';
+import { confirmPasswordResetByCode, login, normalizeUiError, requestPasswordResetCode } from '../utils/api';
 import AuthLayout from '../components/auth/AuthLayout';
 import AuthSocialGrid from '../components/auth/AuthSocialGrid';
 import '../App.css';
@@ -22,6 +22,14 @@ const Login = () => {
   const [isConfirmingReset, setIsConfirmingReset] = useState(false);
   const navigate = useNavigate();
 
+  useEffect(() => {
+    const notice = sessionStorage.getItem('login_notice');
+    if (notice) {
+      setError(notice);
+      sessionStorage.removeItem('login_notice');
+    }
+  }, []);
+
   const handleSubmit = async (e) => {
     e.preventDefault();
     setError('');
@@ -31,7 +39,7 @@ const Login = () => {
       await login(account, password);
       navigate('/');
     } catch (err) {
-      setError(err || 'Login failed. Please check your credentials.');
+      setError(normalizeUiError(err, '登录失败，请检查账号或密码'));
     } finally {
       setIsLoading(false);
     }
@@ -51,7 +59,7 @@ const Login = () => {
       }
       setResetMessage(result?.message || '重置请求已提交');
     } catch (err) {
-      setResetMessage(String(err || '重置请求失败'));
+      setResetMessage(normalizeUiError(err, '重置请求失败'));
     } finally {
       setIsRequestingReset(false);
     }
@@ -73,7 +81,7 @@ const Login = () => {
       setResetMessage(result?.message || '密码重置成功，请使用新密码登录');
       setShowReset(false);
     } catch (err) {
-      setResetMessage(String(err || '密码重置失败'));
+      setResetMessage(normalizeUiError(err, '密码重置失败'));
     } finally {
       setIsConfirmingReset(false);
     }

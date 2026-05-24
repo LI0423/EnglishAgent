@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { NavLink } from 'react-router-dom';
+import SidebarMenu from '../components/layout/SidebarMenu';
 import {
   completeDiagnostic,
   getDiagnosticBankHealth,
@@ -12,17 +12,8 @@ import {
   submitDiagnosticAnswers,
 } from '../utils/api';
 
+import TopNav from "../components/layout/TopNav";
 function Diagnostic() {
-  const navItems = [
-    { to: '/', label: '🏠 首页' },
-    { to: '/chat', label: '🤖 智能对话' },
-    { to: '/listening', label: '🎧 听力练习' },
-    { to: '/reading', label: '📚 阅读练习' },
-    { to: '/writing', label: '📝 写作练习' },
-    { to: '/speaking', label: '💬 口语练习' },
-    { to: '/mock-exam', label: '🎯 诊断测评' },
-    { to: '/reports', label: '📊 学习报告' },
-  ];
 
   const [sessionId, setSessionId] = useState('');
   const [bankVersion, setBankVersion] = useState('');
@@ -80,28 +71,19 @@ function Diagnostic() {
   }, []);
 
   return (
-    <div className="home-page">
-      <header className="top-nav">
-        <div className="nav-content">
-          <div className="nav-left"><h1>🎯 诊断测评</h1></div>
-        </div>
-      </header>
+    <div className="home-page web-dashboard diagnostic-page">
+      <TopNav />
       <div className="main-layout">
         <div className="sidebar">
-          <div className="sidebar-header"><h2>🎓 IELTS Agent</h2></div>
-          <nav className="sidebar-nav">
-            <ul>
-              {navItems.map((item) => (
-                <li key={item.to}>
-                  <NavLink to={item.to} end={item.to === '/'} className={({ isActive }) => `sidebar-nav-link${isActive ? ' active' : ''}`}>
-                    {item.label}
-                  </NavLink>
-                </li>
-              ))}
-            </ul>
-          </nav>
+          <SidebarMenu />
         </div>
         <div className="content-area content-shell">
+          <div className="web-page-head">
+            <div>
+              <h2>诊断测评</h2>
+              <p>模拟诊断、能力分布与建议路径的统一入口。</p>
+            </div>
+          </div>
           <div className="card" style={{ marginBottom: 16 }}>
             <h3>开始诊断</h3>
             <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 8 }}>

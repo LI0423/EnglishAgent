@@ -10,6 +10,7 @@ from pydantic import BaseModel
 
 from ..db import save_mistake
 from ..deps import get_current_user
+from ..services.mistake_taxonomy import normalize_reading_error_type
 
 router = APIRouter()
 
@@ -97,6 +98,49 @@ class QuizVersionResponse(BaseModel):
     count: int
 
 
+class ReadingStrategyGenerateRequest(BaseModel):
+    mode: str = "skim"  # skim | scan | mixed
+    count: int = 3
+    difficulty: Optional[str] = None
+
+
+class ReadingStrategyDrillQuestion(BaseModel):
+    id: str
+    mode: str
+    difficulty: str
+    title: str
+    passage: str
+    prompt: str
+    time_limit_seconds: int
+    hint: Optional[str] = None
+
+
+class ReadingStrategyGenerateResponse(BaseModel):
+    session_id: str
+    mode: str
+    questions: List[ReadingStrategyDrillQuestion]
+
+
+class ReadingStrategyAnswer(BaseModel):
+    question_id: str
+    answer: str
+    spent_seconds: int = 0
+
+
+class ReadingStrategySubmitRequest(BaseModel):
+    session_id: str
+    answers: List[ReadingStrategyAnswer]
+
+
+class ReadingStrategySubmitResponse(BaseModel):
+    total: int
+    correct: int
+    accuracy: float
+    on_time_rate: float
+    recommended_focus: str
+    details: List[Dict[str, Any]]
+
+
 synonym_dict = {
     "important": ["significant", "crucial", "vital"],
     "improve": ["enhance", "boost", "advance"],
@@ -152,6 +196,76 @@ DEFAULT_READING_QUESTION_BANK = [
 READING_QUESTION_BANK: List[Dict[str, Any]] = []
 READING_QUESTION_BANK_VERSION = "builtin-fallback"
 READING_QUIZ_RUNTIME: Dict[str, Dict[str, Any]] = {}
+READING_STRATEGY_RUNTIME: Dict[str, Dict[str, Any]] = {}
+
+READING_STRATEGY_DRILL_BANK: List[Dict[str, Any]] = [
+    {
+        "id": "skim_b_1",
+        "mode": "skim",
+        "difficulty": "basic",
+        "title": "Urban Mobility Pilot",
+        "passage": "A city pilot introduced bus-priority lanes near schools. After six months, average travel delay fell by 12% and commuter satisfaction rose, especially during morning peak hours.",
+        "prompt": "略读后回答：这段话的主旨是什么？",
+        "answer": "bus-priority lanes improved commute efficiency",
+        "time_limit_seconds": 45,
+        "hint": "先抓主题句和结果数据。",
+    },
+    {
+        "id": "skim_i_1",
+        "mode": "skim",
+        "difficulty": "intermediate",
+        "title": "Remote Work and Productivity",
+        "passage": "A multi-company report found hybrid teams maintained output, but gains varied by task type. Creative planning improved with asynchronous drafting, while urgent coordination still relied on short real-time meetings.",
+        "prompt": "略读后回答：作者最核心的结论是什么？",
+        "answer": "hybrid work outcomes depend on task type",
+        "time_limit_seconds": 50,
+        "hint": "注意转折词 but 和 while。",
+    },
+    {
+        "id": "skim_a_1",
+        "mode": "skim",
+        "difficulty": "advanced",
+        "title": "Policy Transfer Limits",
+        "passage": "Cross-national replication of transit policies often fails when local governance capacity differs. The article argues that institutional fit, not headline design, predicts whether reforms remain effective beyond pilot phases.",
+        "prompt": "略读后回答：作者对政策复制的立场是什么？",
+        "answer": "policy transfer requires local institutional fit",
+        "time_limit_seconds": 55,
+        "hint": "抓 not ... predicts ... 的判断句。",
+    },
+    {
+        "id": "scan_b_1",
+        "mode": "scan",
+        "difficulty": "basic",
+        "title": "Course Registration Notice",
+        "passage": "Registration opens on 12 May. Payment deadline is 18 May. Orientation session is on 21 May in Hall B.",
+        "prompt": "扫读定位：付款截止日期是几号？",
+        "answer": "18 may",
+        "time_limit_seconds": 25,
+        "hint": "直接找 deadline 关键词。",
+    },
+    {
+        "id": "scan_i_1",
+        "mode": "scan",
+        "difficulty": "intermediate",
+        "title": "Research Grant Memo",
+        "passage": "Teams must submit draft budgets by Friday 6:00 pm. Final compliance forms are due next Tuesday. Priority review is granted to proposals above $30,000.",
+        "prompt": "扫读定位：哪个条件可以进入优先评审？",
+        "answer": "proposals above $30,000",
+        "time_limit_seconds": 30,
+        "hint": "锁定 Priority review 句子。",
+    },
+    {
+        "id": "scan_a_1",
+        "mode": "scan",
+        "difficulty": "advanced",
+        "title": "Longitudinal Study Notes",
+        "passage": "Phase 1 tracked 240 households for 9 months. Attrition reached 14% by month 6. Sensitivity analysis was rerun after excluding incomplete logs, producing a 0.7-point variance shift.",
+        "prompt": "扫读定位：流失率在第6个月是多少？",
+        "answer": "14%",
+        "time_limit_seconds": 30,
+        "hint": "优先搜索 attrition 与 month 6。",
+    },
+]
 
 
 def _question_bank_path() -> str:
@@ -160,9 +274,26 @@ def _question_bank_path() -> str:
         os.path.join(
             os.path.dirname(os.path.dirname(__file__)),
             "data",
-            "reading_question_bank.v1.json",
+        "reading_question_bank.v1.json",
         ),
     )
+
+
+def _normalize_free_text(value: Any) -> str:
+    text = str(value or "").strip().lower()
+    cleaned = []
+    for ch in text:
+        if ch.isalnum() or ch.isspace() or ch in {"$", "%"}:
+            cleaned.append(ch)
+    return " ".join("".join(cleaned).split())
+
+
+def _token_overlap(user_answer: str, expected: str) -> float:
+    user_tokens = set(_normalize_free_text(user_answer).split())
+    exp_tokens = set(_normalize_free_text(expected).split())
+    if not user_tokens or not exp_tokens:
+        return 0.0
+    return len(user_tokens & exp_tokens) / len(exp_tokens)
 
 
 def _load_reading_question_bank() -> None:
@@ -288,6 +419,8 @@ async def submit_reading_quiz(
         if is_correct:
             correct += 1
         else:
+            raw_qtype = str(q.get("question_type") or "unknown")
+            normalized_error_type = normalize_reading_error_type(raw_qtype)
             save_mistake(
                 str(uuid4()),
                 str(current_user["id"]),
@@ -295,13 +428,18 @@ async def submit_reading_quiz(
                     "module": "reading",
                     "question_id": qid,
                     "question_type": "reading_quiz",
-                    "error_type": "reading_incorrect",
+                    "error_type": normalized_error_type,
                     "content": str(q.get("prompt") or ""),
                     "user_answer": user_answer,
                     "correct_answer": str(q.get("_answer") or ""),
                     "explanation": str(q.get("_explanation") or "Reading quiz incorrect answer."),
                     "difficulty": str(q.get("difficulty") or "medium"),
-                    "tags": ["reading_quiz", str(q.get("question_type") or "unknown")],
+                    "tags": [
+                        "reading_quiz",
+                        raw_qtype,
+                        f"error_type:{normalized_error_type}",
+                        "taxonomy:v1",
+                    ],
                 },
             )
         details.append(
@@ -317,6 +455,148 @@ async def submit_reading_quiz(
     total = len(runtime.get("questions", []))
     accuracy = round((correct / total), 4) if total else 0.0
     return ReadingQuizSubmitResponse(total=total, correct=correct, accuracy=accuracy, details=details)
+
+
+@router.post("/strategy/drill/generate", response_model=ReadingStrategyGenerateResponse)
+async def generate_reading_strategy_drill(
+    payload: ReadingStrategyGenerateRequest,
+    current_user: dict = Depends(get_current_user),
+):
+    mode = (payload.mode or "skim").strip().lower()
+    if mode not in {"skim", "scan", "mixed"}:
+        raise HTTPException(status_code=400, detail="Unsupported reading strategy mode")
+    count = max(1, min(int(payload.count or 3), 10))
+    difficulty = (payload.difficulty or "").strip().lower()
+
+    pool = READING_STRATEGY_DRILL_BANK
+    if mode != "mixed":
+        pool = [x for x in pool if str(x.get("mode") or "") == mode]
+    if difficulty:
+        pool = [x for x in pool if str(x.get("difficulty") or "") == difficulty]
+    if not pool:
+        raise HTTPException(status_code=400, detail="No reading strategy drills found for given filters")
+
+    selected = pool[:] if len(pool) <= count else random.sample(pool, count)
+    built: List[Dict[str, Any]] = []
+    for item in selected:
+        built.append(
+            {
+                "id": str(uuid4()),
+                "mode": str(item.get("mode") or "skim"),
+                "difficulty": str(item.get("difficulty") or "intermediate"),
+                "title": str(item.get("title") or "Untitled"),
+                "passage": str(item.get("passage") or ""),
+                "prompt": str(item.get("prompt") or ""),
+                "time_limit_seconds": int(item.get("time_limit_seconds") or 45),
+                "hint": str(item.get("hint") or ""),
+                "_answer": str(item.get("answer") or ""),
+            }
+        )
+
+    session_id = str(uuid4())
+    READING_STRATEGY_RUNTIME[session_id] = {
+        "user_id": str(current_user["id"]),
+        "mode": mode,
+        "questions": built,
+        "created_at": int(time.time()),
+    }
+
+    return ReadingStrategyGenerateResponse(
+        session_id=session_id,
+        mode=mode,
+        questions=[ReadingStrategyDrillQuestion(**{k: v for k, v in q.items() if not k.startswith("_")}) for q in built],
+    )
+
+
+@router.post("/strategy/drill/submit", response_model=ReadingStrategySubmitResponse)
+async def submit_reading_strategy_drill(
+    payload: ReadingStrategySubmitRequest,
+    current_user: dict = Depends(get_current_user),
+):
+    runtime = READING_STRATEGY_RUNTIME.get(payload.session_id)
+    if not runtime:
+        raise HTTPException(status_code=404, detail="Reading strategy drill session not found")
+    if str(runtime.get("user_id")) != str(current_user["id"]):
+        raise HTTPException(status_code=403, detail="Access denied")
+
+    answer_map = {str(a.question_id): a for a in payload.answers}
+    details: List[Dict[str, Any]] = []
+    correct = 0
+    on_time = 0
+    for q in runtime.get("questions", []):
+        qid = str(q.get("id") or "")
+        answer_item = answer_map.get(qid)
+        user_answer = str(getattr(answer_item, "answer", "") or "").strip()
+        spent_seconds = int(getattr(answer_item, "spent_seconds", 0) or 0)
+        expected = str(q.get("_answer") or "")
+        overlap = _token_overlap(user_answer, expected)
+        is_correct = overlap >= 0.7
+        time_limit = int(q.get("time_limit_seconds") or 45)
+        is_on_time = spent_seconds <= time_limit if spent_seconds > 0 else False
+        if is_correct:
+            correct += 1
+        if is_on_time:
+            on_time += 1
+        if not is_correct:
+            raw_mode = str(q.get("mode") or "skim")
+            error_type = "reading_inference_error" if raw_mode == "skim" else "reading_matching_mismatch"
+            save_mistake(
+                str(uuid4()),
+                str(current_user["id"]),
+                {
+                    "module": "reading",
+                    "question_id": qid,
+                    "question_type": "reading_strategy",
+                    "error_type": error_type,
+                    "content": str(q.get("prompt") or ""),
+                    "user_answer": user_answer,
+                    "correct_answer": expected,
+                    "explanation": "阅读策略训练未命中目标信息，建议先按题型使用 skim/scan 策略。",
+                    "difficulty": str(q.get("difficulty") or "medium"),
+                    "tags": [
+                        "reading_strategy",
+                        raw_mode,
+                        f"error_type:{error_type}",
+                        "taxonomy:v1",
+                    ],
+                },
+            )
+
+        details.append(
+            {
+                "question_id": qid,
+                "mode": str(q.get("mode") or ""),
+                "difficulty": str(q.get("difficulty") or ""),
+                "is_correct": is_correct,
+                "score": round(overlap, 3),
+                "spent_seconds": spent_seconds,
+                "time_limit_seconds": time_limit,
+                "is_on_time": is_on_time,
+                "user_answer": user_answer,
+                "expected_answer": expected,
+            }
+        )
+
+    total = len(runtime.get("questions", []))
+    accuracy = round((correct / total), 4) if total else 0.0
+    on_time_rate = round((on_time / total), 4) if total else 0.0
+    if accuracy < 0.6 and on_time_rate < 0.6:
+        recommended_focus = "先练 scan（定位关键词）再做 skim（主旨提炼）"
+    elif accuracy < 0.6:
+        recommended_focus = "重点提升 skim 主旨提炼"
+    elif on_time_rate < 0.6:
+        recommended_focus = "重点提升 scan 定位速度"
+    else:
+        recommended_focus = "进入 mixed 组合训练并提高难度"
+
+    return ReadingStrategySubmitResponse(
+        total=total,
+        correct=correct,
+        accuracy=accuracy,
+        on_time_rate=on_time_rate,
+        recommended_focus=recommended_focus,
+        details=details,
+    )
 
 
 @router.post("/synonyms", response_model=SynonymRecognitionResponse)

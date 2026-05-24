@@ -4,6 +4,7 @@ from typing import List, Optional
 from uuid import uuid4
 from ..deps import get_current_user
 from ..db import get_transcript_for_user, save_mistake, save_score
+from ..services.mistake_taxonomy import normalize_speaking_error_type
 from agent_core import speaking_agent
 
 
@@ -95,6 +96,7 @@ async def score_speaking(req: ScoringRequest, current_user: dict = Depends(get_c
     score_map = {"FC": scores.FC, "LR": scores.LR, "GR": scores.GR, "PR": scores.PR}
     for dim, value in score_map.items():
         if float(value) < 6.5:
+            normalized_error_type = normalize_speaking_error_type(dim)
             save_mistake(
                 str(uuid4()),
                 str(current_user["id"]),
@@ -102,13 +104,13 @@ async def score_speaking(req: ScoringRequest, current_user: dict = Depends(get_c
                     "module": "speaking",
                     "question_id": str(session_id),
                     "question_type": "speaking_assessment",
-                    "error_type": f"low_{dim.lower()}",
+                    "error_type": normalized_error_type,
                     "content": f"Speaking assessment dimension {dim} below target.",
                     "user_answer": str(value),
                     "correct_answer": ">=6.5",
                     "explanation": f"{dim} score is {value}. Review action items and practice drills.",
                     "difficulty": "intermediate",
-                    "tags": ["speaking_assessment", dim],
+                    "tags": ["speaking_assessment", dim, f"error_type:{normalized_error_type}", "taxonomy:v1"],
                 },
             )
 
@@ -119,4 +121,3 @@ async def score_speaking(req: ScoringRequest, current_user: dict = Depends(get_c
         actionItems=action_items,
         highlights=highlights
     )
-

@@ -1,5 +1,5 @@
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from typing import List, Dict, Any, Optional, Tuple
 import json
 import os
@@ -179,12 +179,19 @@ class Weakness(BaseModel):
     module: str
     skills: List[str]
     error_types: List[str]
+    total_questions: int = 0
+    correct_count: int = 0
+    wrong_count: int = 0
+    accuracy_rate: float = 0.0
+    difficulty_breakdown: Dict[str, Dict[str, int]] = Field(default_factory=dict)
 
 
 class Recommendation(BaseModel):
     type: str
     content: str
     priority: int
+    focus_difficulty: str = ""
+    evidence_summary: str = ""
 
 
 class DiagnosticReport(BaseModel):
@@ -379,19 +386,44 @@ def _estimate_ability(answers: List[Dict[str, Any]]) -> float:
 def _build_report_from_answers(modules: List[str], answers: List[Dict[str, Any]]) -> Dict[str, Any]:
     module_stats: Dict[str, Dict[str, float]] = {}
     for module in modules:
-        module_stats[module] = {"weight": 0.0, "gain": 0.0, "total": 0.0, "correct": 0.0}
+        module_stats[module] = {
+            "weight": 0.0,
+            "gain": 0.0,
+            "total": 0.0,
+            "correct": 0.0,
+            "basic_total": 0.0,
+            "basic_correct": 0.0,
+            "intermediate_total": 0.0,
+            "intermediate_correct": 0.0,
+            "advanced_total": 0.0,
+            "advanced_correct": 0.0,
+        }
 
     for item in answers:
         module = item.get("module", "general")
         if module not in module_stats:
-            module_stats[module] = {"weight": 0.0, "gain": 0.0, "total": 0.0, "correct": 0.0}
+            module_stats[module] = {
+                "weight": 0.0,
+                "gain": 0.0,
+                "total": 0.0,
+                "correct": 0.0,
+                "basic_total": 0.0,
+                "basic_correct": 0.0,
+                "intermediate_total": 0.0,
+                "intermediate_correct": 0.0,
+                "advanced_total": 0.0,
+                "advanced_correct": 0.0,
+            }
         level = str(item.get("difficulty") or "intermediate")
         w = float(DIFFICULTY_SCORE.get(level, 2.0))
         module_stats[module]["weight"] += w
         module_stats[module]["total"] += 1
+        level_key = level if level in {"basic", "intermediate", "advanced"} else "intermediate"
+        module_stats[module][f"{level_key}_total"] += 1
         if item.get("is_correct"):
             module_stats[module]["gain"] += w
             module_stats[module]["correct"] += 1
+            module_stats[module][f"{level_key}_correct"] += 1
 
     module_scores = []
     weaknesses = []
@@ -403,20 +435,46 @@ def _build_report_from_answers(modules: List[str], answers: List[Dict[str, Any]]
         band = round(4.5 + ratio * 3.5, 1)
         band_scores.append(band)
         module_scores.append({"module": module, "score": band, "max_score": 9.0})
+        total_questions = int(stat["total"] or 0)
+        correct_count = int(stat["correct"] or 0)
+        wrong_count = max(total_questions - correct_count, 0)
+        accuracy_rate = round((correct_count / total_questions * 100.0), 2) if total_questions > 0 else 0.0
+        difficulty_breakdown = {
+            "basic": {
+                "total": int(stat["basic_total"] or 0),
+                "correct": int(stat["basic_correct"] or 0),
+            },
+            "intermediate": {
+                "total": int(stat["intermediate_total"] or 0),
+                "correct": int(stat["intermediate_correct"] or 0),
+            },
+            "advanced": {
+                "total": int(stat["advanced_total"] or 0),
+                "correct": int(stat["advanced_correct"] or 0),
+            },
+        }
 
         if ratio < 0.6:
+            focus_difficulty = "basic" if ratio < 0.4 else "intermediate"
             weaknesses.append(
                 {
                     "module": module,
                     "skills": ["accuracy", "time_management", "question_strategy"],
                     "error_types": ["concept_gaps", "careless_mistakes"],
+                    "total_questions": total_questions,
+                    "correct_count": correct_count,
+                    "wrong_count": wrong_count,
+                    "accuracy_rate": accuracy_rate,
+                    "difficulty_breakdown": difficulty_breakdown,
                 }
             )
             recommendations.append(
                 {
                     "type": module,
-                    "content": f"Prioritize {module} drills at {('basic' if ratio < 0.4 else 'intermediate')} level and reattempt missed items.",
+                    "content": f"Prioritize {module} drills at {focus_difficulty} level and reattempt missed items.",
                     "priority": 1,
+                    "focus_difficulty": focus_difficulty,
+                    "evidence_summary": f"{module}: correct {correct_count}/{total_questions}, accuracy {accuracy_rate}%",
                 }
             )
         else:
@@ -425,6 +483,8 @@ def _build_report_from_answers(modules: List[str], answers: List[Dict[str, Any]]
                     "type": module,
                     "content": f"Maintain {module} with mixed timed sets and add advanced questions.",
                     "priority": 2,
+                    "focus_difficulty": "advanced",
+                    "evidence_summary": f"{module}: correct {correct_count}/{total_questions}, accuracy {accuracy_rate}%",
                 }
             )
 
@@ -529,6 +589,14 @@ async def get_diagnostic_bank_health(current_user: dict = Depends(get_current_us
             "advanced": advanced,
             "total": module_total,
         }
+    module_totals = [v.get("total", 0) for v in module_stats.values()]
+    min_module_total = min(module_totals) if module_totals else 0
+    if total_questions >= 160 and min_module_total >= 35:
+        coverage_status = "strong"
+    elif total_questions >= 80 and min_module_total >= 15:
+        coverage_status = "standard"
+    else:
+        coverage_status = "starter"
 
     return {
         "version": QUESTION_BANK_VERSION,
@@ -537,6 +605,9 @@ async def get_diagnostic_bank_health(current_user: dict = Depends(get_current_us
         "total_questions": total_questions,
         "module_count": len(module_stats),
         "modules": module_stats,
+        "coverage_status": coverage_status,
+        "recommended_total_questions": 160,
+        "recommended_min_questions_per_module": 35,
         "has_fallback": QUESTION_BANK_VERSION == "builtin-fallback",
         "load_error": QUESTION_BANK_LOAD_ERROR,
         "last_loaded_at": QUESTION_BANK_LAST_LOADED_AT,
@@ -727,6 +798,11 @@ async def get_report(
                     module=item["module"],
                     skills=item["skills"],
                     error_types=item["error_types"],
+                    total_questions=int(item.get("total_questions") or 0),
+                    correct_count=int(item.get("correct_count") or 0),
+                    wrong_count=int(item.get("wrong_count") or 0),
+                    accuracy_rate=float(item.get("accuracy_rate") or 0.0),
+                    difficulty_breakdown=dict(item.get("difficulty_breakdown") or {}),
                 )
             )
         recommendations = []
@@ -736,6 +812,8 @@ async def get_report(
                     type=item["type"],
                     content=item["content"],
                     priority=item.get("priority", 1),
+                    focus_difficulty=str(item.get("focus_difficulty") or ""),
+                    evidence_summary=str(item.get("evidence_summary") or ""),
                 )
             )
         return DiagnosticReport(

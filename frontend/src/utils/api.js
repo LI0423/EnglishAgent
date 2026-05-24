@@ -82,6 +82,7 @@ api.interceptors.response.use(
     const detail = String(error?.response?.data?.detail || '');
     if (status === 401 && /invalid token|missing token|token subject|user not found/i.test(detail)) {
       localStorage.removeItem('user');
+      clearCurrentUserCache();
       const message = '登录状态已失效，请重新登录';
       error.userMessage = message;
       if (typeof window !== 'undefined') {
@@ -101,6 +102,16 @@ const getStoredToken = () => {
   }
 };
 
+let currentUserCache = null;
+let currentUserCacheToken = '';
+let currentUserRequest = null;
+
+export const clearCurrentUserCache = () => {
+  currentUserCache = null;
+  currentUserCacheToken = '';
+  currentUserRequest = null;
+};
+
 export const login = async (usernameOrPhone, password) => {
   try {
     const account = String(usernameOrPhone || '').trim();
@@ -112,6 +123,7 @@ export const login = async (usernameOrPhone, password) => {
     const accessToken = response.data.access_token || response.data.token;
     if (accessToken) {
       localStorage.setItem('user', JSON.stringify({ ...response.data, access_token: accessToken }));
+      clearCurrentUserCache();
     }
     return response.data;
   } catch (error) {
@@ -125,6 +137,7 @@ export const register = async (username, email, password) => {
     const accessToken = response.data.access_token || response.data.token;
     if (accessToken) {
       localStorage.setItem('user', JSON.stringify({ ...response.data, access_token: accessToken }));
+      clearCurrentUserCache();
     }
     return response.data;
   } catch (error) {
@@ -138,6 +151,7 @@ export const registerPhone = async (phone, password) => {
     const accessToken = response.data?.data?.access_token || response.data?.access_token || response.data?.token;
     if (accessToken) {
       localStorage.setItem('user', JSON.stringify({ ...response.data, access_token: accessToken }));
+      clearCurrentUserCache();
     }
     return response.data;
   } catch (error) {
@@ -191,6 +205,46 @@ export const confirmPasswordResetByCode = async (account, code, newPassword) => 
 export const getCurrentUser = async () => {
   const token = getStoredToken();
   if (!token) {
+    clearCurrentUserCache();
+    return null;
+  }
+
+  if (currentUserCache && currentUserCacheToken === token) {
+    return currentUserCache;
+  }
+
+  if (currentUserRequest && currentUserCacheToken === token) {
+    return currentUserRequest;
+  }
+
+  currentUserCacheToken = token;
+  currentUserRequest = api.get('/auth/me', {
+    headers: {
+      'Authorization': `Bearer ${token}`,
+    },
+  }).then((response) => {
+    currentUserCache = response.data;
+    return currentUserCache;
+  }).catch(() => {
+    localStorage.removeItem('user');
+    clearCurrentUserCache();
+    return null;
+  }).finally(() => {
+    currentUserRequest = null;
+  });
+
+  return currentUserRequest;
+};
+
+export const refreshCurrentUser = async () => {
+  clearCurrentUserCache();
+  return getCurrentUser();
+};
+
+export const getCurrentUserUncached = async () => {
+  const token = getStoredToken();
+  if (!token) {
+    clearCurrentUserCache();
     return null;
   }
 
@@ -203,12 +257,14 @@ export const getCurrentUser = async () => {
     return response.data;
   } catch {
     localStorage.removeItem('user');
+    clearCurrentUserCache();
     return null;
   }
 };
 
 export const logout = () => {
   localStorage.removeItem('user');
+  clearCurrentUserCache();
 };
 
 // 用户档案相关API
@@ -276,6 +332,30 @@ export const analyzeTask1Writing = async (text, chartType, topic, keywords = [])
   }
 };
 
+export const analyzeTask2Writing = async (text, topic, keywords = [], stance = null) => {
+  const user = JSON.parse(localStorage.getItem('user'));
+  if (!user || !user.access_token) {
+    throw new Error('Unauthorized');
+  }
+
+  try {
+    const response = await api.post('/writing/task2/analyze', {
+      text,
+      topic,
+      keywords,
+      stance,
+    }, {
+      headers: {
+        'Authorization': `Bearer ${user.access_token}`,
+      },
+    });
+    return response.data;
+  } catch (error) {
+    console.error('Failed to analyze task 2 writing:', error);
+    throw getErrorDetail(error, '分析失败');
+  }
+};
+
 export const saveTask1Practice = async (text, chartType, topic, score = null) => {
   const user = JSON.parse(localStorage.getItem('user'));
   if (!user || !user.access_token) {
@@ -296,6 +376,30 @@ export const saveTask1Practice = async (text, chartType, topic, score = null) =>
     return response.data;
   } catch (error) {
     console.error('Failed to save task 1 practice:', error);
+    throw getErrorDetail(error, '保存失败');
+  }
+};
+
+export const saveTask2Practice = async (text, topic, keywords = [], stance = null) => {
+  const user = JSON.parse(localStorage.getItem('user'));
+  if (!user || !user.access_token) {
+    throw new Error('Unauthorized');
+  }
+
+  try {
+    const response = await api.post('/writing/task2/practice', {
+      text,
+      topic,
+      keywords,
+      stance,
+    }, {
+      headers: {
+        'Authorization': `Bearer ${user.access_token}`,
+      },
+    });
+    return response.data;
+  } catch (error) {
+    console.error('Failed to save task 2 practice:', error);
     throw getErrorDetail(error, '保存失败');
   }
 };
@@ -758,6 +862,47 @@ export const getTask1CommonVocabulary = async () => {
   }
 };
 
+export const getTask2CommonStructures = async () => {
+  const user = JSON.parse(localStorage.getItem('user'));
+  if (!user || !user.access_token) {
+    return [];
+  }
+
+  try {
+    const response = await api.get('/writing/task2/common-structures', {
+      headers: {
+        'Authorization': `Bearer ${user.access_token}`,
+      },
+    });
+    return response.data;
+  } catch (error) {
+    console.error('Failed to get task 2 common structures:', error);
+    return { structures: [] };
+  }
+};
+
+export const brainstormTask2 = async (topic, keywords = [], stance = null) => {
+  const user = JSON.parse(localStorage.getItem('user'));
+  if (!user || !user.access_token) {
+    throw new Error('Unauthorized');
+  }
+  try {
+    const response = await api.post('/writing/task2/brainstorm', {
+      topic,
+      keywords,
+      stance,
+    }, {
+      headers: {
+        'Authorization': `Bearer ${user.access_token}`,
+      },
+    });
+    return response.data;
+  } catch (error) {
+    console.error('Failed to brainstorm task 2:', error);
+    throw getErrorDetail(error, '生成思路失败');
+  }
+};
+
 // 获取计划任务列表
 export const getPlanTasks = async (planId) => {
   const user = JSON.parse(localStorage.getItem('user'));
@@ -796,6 +941,29 @@ export const getStatsOverview = async (timeRange = 86400) => {
   } catch (error) {
     console.error('Failed to get stats overview:', error);
     return null;
+  }
+};
+
+export const getDashboardOverview = async () => {
+  try {
+    const response = await api.get('/dashboard/overview', {
+      headers: getAuthHeader(),
+    });
+    return response.data;
+  } catch (error) {
+    throw normalizeUiError(error, '获取首页数据失败');
+  }
+};
+
+export const getCheckinCalendar = async (month = '') => {
+  try {
+    const response = await api.get('/dashboard/checkin-calendar', {
+      params: month ? { month } : undefined,
+      headers: getAuthHeader(),
+    });
+    return response.data;
+  } catch (error) {
+    throw normalizeUiError(error, '获取学习日历失败');
   }
 };
 
@@ -1257,9 +1425,93 @@ export const postChatMessage = async (
   } catch (error) {
     if (error?.response?.status === 401) {
       localStorage.removeItem('user');
+      clearCurrentUserCache();
       throw '登录状态已失效，请重新登录。';
     }
     throw normalizeUiError(error, '请求失败，请稍后重试');
+  }
+};
+
+export const generateTranslationQuestion = async (difficulty = 'medium', direction = 'zh_to_en', topic = 'general') => {
+  try {
+    const response = await api.post('/chat/translation', {
+      action: 'generate',
+      difficulty,
+      direction,
+      topic,
+    }, {
+      headers: getAuthHeader(),
+    });
+    return response.data;
+  } catch (error) {
+    throw normalizeUiError(error, '生成翻译题目失败');
+  }
+};
+
+export const getDifficultyRecommendation = async (module = 'translation') => {
+  try {
+    const response = await api.get('/ability/recommendation', {
+      params: { module },
+      headers: getAuthHeader(),
+    });
+    return response.data;
+  } catch (error) {
+    throw normalizeUiError(error, '获取推荐难度失败');
+  }
+};
+
+export const checkTranslationAnswer = async ({
+  chineseSentence,
+  sourceSentence,
+  userTranslation,
+  direction = 'zh_to_en',
+  topic = 'general',
+  difficulty = 'medium',
+  practiceMode = '',
+  usedHint = false,
+}) => {
+  try {
+    const response = await api.post('/chat/translation', {
+      action: 'check',
+      chinese_sentence: chineseSentence,
+      source_sentence: sourceSentence || chineseSentence,
+      user_translation: userTranslation,
+      direction,
+      topic,
+      difficulty,
+      practice_mode: practiceMode,
+      used_hint: usedHint,
+    }, {
+      headers: getAuthHeader(),
+    });
+    return response.data;
+  } catch (error) {
+    throw normalizeUiError(error, '翻译批改失败');
+  }
+};
+
+export const postDeepSearch = async (
+  query,
+  {
+    sessionId = null,
+    enableAgenticRag = true,
+    ragConfig = null,
+    maxIterations = null,
+  } = {},
+) => {
+  try {
+    const response = await api.post('/chat/deep-search', {
+      query,
+      session_id: sessionId,
+      enable_agentic_rag: enableAgenticRag,
+      rag_config: ragConfig,
+      max_iterations: maxIterations,
+    }, {
+      headers: getAuthHeader(),
+    });
+    return response.data;
+  } catch (error) {
+    throw normalizeUiError(error, '深度搜索失败');
   }
 };
 
@@ -1292,6 +1544,40 @@ export const getChatHistory = async (sessionId, limit = 200) => {
 // 听力模块 API
 export const getListeningLibrary = async () => {
   const response = await api.get('/listening/library', { headers: getAuthHeader() });
+  return response.data;
+};
+
+export const getListeningTTSHealth = async () => {
+  const response = await api.get('/listening/tts/health', { headers: getAuthHeader() });
+  return response.data;
+};
+
+export const renderListeningTTS = async ({ text, lang = 'en', voice = 'M1', speed = 1.0 }) => {
+  const response = await api.post('/listening/tts/render', {
+    text,
+    lang,
+    voice,
+    speed,
+  }, { headers: getAuthHeader() });
+  return response.data;
+};
+
+export const generateListeningMaterial = async ({
+  title,
+  transcript,
+  difficulty = 'intermediate',
+  lang = 'en',
+  voice = 'M1',
+  speed = 1.0,
+}) => {
+  const response = await api.post('/listening/materials/generate', {
+    title,
+    transcript,
+    difficulty,
+    lang,
+    voice,
+    speed,
+  }, { headers: getAuthHeader() });
   return response.data;
 };
 
@@ -1361,6 +1647,32 @@ export const setListeningSpeed = async (speed) => {
   return response.data;
 };
 
+export const getListeningSegment = async (audioId, startTime = 0, endTime = 30) => {
+  const response = await api.get(`/listening/segment/${audioId}`, {
+    params: { start_time: startTime, end_time: endTime },
+    headers: getAuthHeader(),
+  });
+  return response.data;
+};
+
+export const generateListeningIntensive = async ({ count = 5, difficulty = null, audioId = null, mode = 'mixed' } = {}) => {
+  const response = await api.post('/listening/intensive/generate', {
+    count,
+    difficulty,
+    audio_id: audioId,
+    mode,
+  }, { headers: getAuthHeader() });
+  return response.data;
+};
+
+export const submitListeningIntensive = async (sessionId, answers = []) => {
+  const response = await api.post('/listening/intensive/submit', {
+    session_id: sessionId,
+    answers,
+  }, { headers: getAuthHeader() });
+  return response.data;
+};
+
 // 阅读模块 API
 export const analyzeReadingPassage = async (text) => {
   const response = await api.post('/reading/analyze', { text }, { headers: getAuthHeader() });
@@ -1399,6 +1711,23 @@ export const submitReadingQuiz = async (quizId, answers = []) => {
   return response.data;
 };
 
+export const generateReadingStrategyDrill = async ({ mode = 'skim', count = 3, difficulty = null } = {}) => {
+  const response = await api.post('/reading/strategy/drill/generate', {
+    mode,
+    count,
+    difficulty,
+  }, { headers: getAuthHeader() });
+  return response.data;
+};
+
+export const submitReadingStrategyDrill = async (sessionId, answers = []) => {
+  const response = await api.post('/reading/strategy/drill/submit', {
+    session_id: sessionId,
+    answers,
+  }, { headers: getAuthHeader() });
+  return response.data;
+};
+
 // 口语模块 API
 export const createSpeakingSession = async () => {
   const response = await api.post('/speaking/session', {}, { headers: getAuthHeader() });
@@ -1418,8 +1747,13 @@ export const getSpeakingSession = async (sessionId) => {
   return response.data;
 };
 
-export const startSpeakingPart = async (sessionId, partIndex) => {
+export const startSpeakingPart = async (sessionId, partIndex, { withAudio = false, voice = 'F1', lang = 'en' } = {}) => {
   const response = await api.post(`/speaking/session/${sessionId}/part/${partIndex}/start`, {}, {
+    params: {
+      with_audio: withAudio,
+      voice,
+      lang,
+    },
     headers: getAuthHeader(),
   });
   return response.data;
@@ -1434,11 +1768,19 @@ export const uploadSpeakingText = async (sessionId, textPartial) => {
   return response.data;
 };
 
-export const submitSpeakingTurn = async (sessionId, userText, { mode = 'coach', partIndex = null } = {}) => {
+export const submitSpeakingTurn = async (
+  sessionId,
+  userText,
+  { mode = 'coach', partIndex = null, spentSeconds = null, withAudio = false, voice = 'F1', lang = 'en' } = {},
+) => {
   const response = await api.post(`/speaking/session/${sessionId}/turn`, {
     userText,
     mode,
     partIndex,
+    spentSeconds,
+    withAudio,
+    voice,
+    lang,
   }, {
     headers: getAuthHeader(),
   });
@@ -1565,6 +1907,145 @@ export const applyPlanIntervention = async (planId, days = 14, remedialDays = 3)
     { headers: getAuthHeader() },
   );
   return response.data;
+};
+
+export const getPlanReminderSuggestions = async (planId, days = 14, preferredChannel = 'app') => {
+  const response = await api.get('/reminder/plan/suggestions', {
+    params: {
+      plan_id: planId,
+      days,
+      preferred_channel: preferredChannel,
+    },
+    headers: getAuthHeader(),
+  });
+  return response.data;
+};
+
+export const applyPlanExecutionReminders = async (
+  planId,
+  {
+    days = 14,
+    selectedSources = null,
+    preferredChannel = 'app',
+    dedupeLookbackHours = 12,
+  } = {},
+) => {
+  const response = await api.post('/reminder/plan/apply', {
+    plan_id: planId,
+    days,
+    selected_sources: selectedSources,
+    preferred_channel: preferredChannel,
+    dedupe_lookback_hours: dedupeLookbackHours,
+  }, {
+    headers: getAuthHeader(),
+  });
+  return response.data;
+};
+
+export const getReminderPreferences = async () => {
+  const response = await api.get('/reminder/preferences/me', {
+    headers: getAuthHeader(),
+  });
+  return response.data;
+};
+
+export const updateReminderPreferences = async (payload) => {
+  const response = await api.put('/reminder/preferences/me', payload, {
+    headers: getAuthHeader(),
+  });
+  return response.data;
+};
+
+export const getReminderPreferencePresets = async () => {
+  const response = await api.get('/reminder/preferences/presets', {
+    headers: getAuthHeader(),
+  });
+  return response.data || [];
+};
+
+export const getReminderPreferenceHistory = async (limit = 20) => {
+  const response = await api.get('/reminder/preferences/history', {
+    params: { limit },
+    headers: getAuthHeader(),
+  });
+  return response.data || [];
+};
+
+export const applyReminderPreferencePreset = async (presetKey) => {
+  const response = await api.post('/reminder/preferences/apply-preset', {
+    preset_key: presetKey,
+  }, {
+    headers: getAuthHeader(),
+  });
+  return response.data;
+};
+
+export const rollbackReminderPreference = async (historyId) => {
+  const response = await api.post('/reminder/preferences/rollback', {
+    history_id: historyId,
+  }, {
+    headers: getAuthHeader(),
+  });
+  return response.data;
+};
+
+export const getUserReminders = async (status = null) => {
+  const response = await api.get('/reminder', {
+    params: { status },
+    headers: getAuthHeader(),
+  });
+  return response.data || [];
+};
+
+export const updateUserReminderStatus = async (reminderId, status) => {
+  const response = await api.put(`/reminder/${reminderId}/status`, {
+    status,
+  }, {
+    headers: getAuthHeader(),
+  });
+  return response.data;
+};
+
+export const deleteUserReminder = async (reminderId) => {
+  const response = await api.delete(`/reminder/${reminderId}`, {
+    headers: getAuthHeader(),
+  });
+  return response.data;
+};
+
+export const batchUpdateUserReminderStatus = async (reminderIds = [], status = 'pending') => {
+  const response = await api.post('/reminder/batch/status', {
+    reminder_ids: reminderIds,
+    status,
+  }, {
+    headers: getAuthHeader(),
+  });
+  return response.data;
+};
+
+export const batchDeleteUserReminders = async (reminderIds = []) => {
+  const response = await api.post('/reminder/batch/delete', {
+    reminder_ids: reminderIds,
+  }, {
+    headers: getAuthHeader(),
+  });
+  return response.data;
+};
+
+export const getReminderAnalyticsSummary = async (days = 14) => {
+  const response = await api.get('/reminder/analytics/summary', {
+    params: { days },
+    headers: getAuthHeader(),
+  });
+  return response.data;
+};
+
+export const getReminderAuditLogs = async (limit = 100, action = null) => {
+  const response = await api.get('/reminder/audit/logs', {
+    params: { limit, action },
+    headers: getAuthHeader(),
+  });
+  return response.data || [];
 };
 
 // 诊断模块 API

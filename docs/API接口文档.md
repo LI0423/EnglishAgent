@@ -40,6 +40,7 @@
 | 获取会话详情 | /speaking/session/{session_id} | GET | 获取指定会话的详细信息 | 是 |
 | 创建会话 | /speaking/session | POST | 创建新的口语练习会话 | 是 |
 | 开始部分 | /speaking/session/{session_id}/part/{part_index}/start | POST | 开始会话的某个部分 | 是 |
+| 提交口语回合 | /speaking/session/{session_id}/turn | POST | 提交回答并返回追问/反馈，可选生成考官语音 | 是 |
 | 上传音频 | /speaking/session/{session_id}/audio | POST | 上传音频片段 | 是 |
 | 完成会话 | /speaking/session/{session_id}/finish | POST | 完成会话并生成 transcript | 是 |
 
@@ -114,6 +115,9 @@
 | 获取音频库 | /listening/library | GET | 获取音频库列表 | 是 |
 | 获取音频库版本 | /listening/library/version | GET | 获取音频库版本与来源 | 是 |
 | 获取听力题库版本 | /listening/quiz/version | GET | 获取听力题库版本与来源 | 是 |
+| 获取TTS健康状态 | /listening/tts/health | GET | 获取本地TTS/Supertonic可用状态 | 是 |
+| 生成TTS音频 | /listening/tts/render | POST | 从文本生成可播放音频 | 是 |
+| 生成听力素材 | /listening/materials/generate | POST | 从文本生成音频并加入听力素材库 | 是 |
 | 生成听力测验 | /listening/quiz/generate | POST | 生成听力测验题目 | 是 |
 | 提交听力测验 | /listening/quiz/submit | POST | 提交答案并返回正确率，错题自动入库 | 是 |
 | 获取音频文件 | /listening/file/{audio_id} | GET | 获取单个音频文件信息 | 是 |
@@ -140,6 +144,7 @@
 
 | 与智能体对话 | /chat | POST | 与智能体对话接口 | 是 |
 | 翻译练习 | /chat/translation | POST | 翻译练习接口 | 是 |
+| 深度搜索 | /chat/deep-search | POST | 深度搜索专用接口（结构化返回） | 是 |
 
 ### 3.12 诊断测试模块 (Diagnostic)
 
@@ -166,6 +171,18 @@
 | 删除提醒 | /reminder/{reminder_id} | DELETE | 删除提醒 | 是 |
 | 获取提醒偏好设置 | /reminder/preferences/me | GET | 获取当前用户的提醒偏好设置 | 是 |
 | 更新提醒偏好设置 | /reminder/preferences/me | PUT | 更新当前用户的提醒偏好设置 | 是 |
+| 获取提醒偏好预设 | /reminder/preferences/presets | GET | 获取提醒策略预设模板列表 | 是 |
+| 应用提醒偏好预设 | /reminder/preferences/apply-preset | POST | 一键应用策略预设 | 是 |
+| 获取提醒偏好历史 | /reminder/preferences/history | GET | 获取提醒偏好变更历史 | 是 |
+| 回滚提醒偏好配置 | /reminder/preferences/rollback | POST | 回滚到指定历史版本之前 | 是 |
+| 获取计划提醒建议 | /reminder/plan/suggestions | GET | 结合计划执行健康生成提醒建议 | 是 |
+| 应用计划提醒建议 | /reminder/plan/apply | POST | 批量创建计划执行提醒（带去重） | 是 |
+| 批量更新提醒状态 | /reminder/batch/status | POST | 批量将提醒改为 sent/pending | 是 |
+| 批量删除提醒 | /reminder/batch/delete | POST | 批量删除提醒 | 是 |
+| 获取提醒统计概览 | /reminder/analytics/summary | GET | 获取提醒状态/来源分布与趋势 | 是 |
+| 获取提醒操作审计 | /reminder/audit/logs | GET | 获取提醒创建/状态更新/删除等日志 | 是 |
+
+说明：`/reminder/preferences/me` 支持 `strategy_config` 字段（频控窗口、窗口上限、偏好时段容忍、相似提醒合并、高优先级绕过频控）；偏好变更会写入历史并支持回滚。
 
 ### 3.14 统计模块 (Stats)
 
@@ -502,6 +519,78 @@
       "prompt": "How do books influence society?"
     }
   ]
+}
+```
+
+#### 4.2.3 开始部分
+
+**路径**: `/speaking/session/{session_id}/part/{part_index}/start`
+
+**方法**: `POST`
+
+**功能描述**: 开始口语 Part，并可通过 query 参数生成考官题目音频。
+
+**请求参数**:
+
+| 参数名 | 类型 | 必填 | 描述 |
+|------- |------|------|------|
+| with_audio | boolean | 否 | 是否返回题目音频 URL，默认 false |
+| voice | string | 否 | TTS 音色，默认 F1 |
+| lang | string | 否 | TTS 语言，默认 en |
+
+**示例响应**:
+
+```json
+{
+  "ok": true,
+  "partIndex": 1,
+  "prompt": "Do you work or study?",
+  "promptAudioUrl": "/media/tts/demo.wav",
+  "prepSeconds": 0,
+  "targetAnswerSeconds": 45,
+  "examClockStartedAt": 1620000000
+}
+```
+
+#### 4.2.4 提交口语回合
+
+**路径**: `/speaking/session/{session_id}/turn`
+
+**方法**: `POST`
+
+**功能描述**: 提交本轮回答，返回追问、反馈和可选考官语音。
+
+**示例请求**:
+
+```json
+{
+  "userText": "I study computer science because I enjoy solving practical problems.",
+  "mode": "coach",
+  "partIndex": 1,
+  "spentSeconds": 32,
+  "withAudio": true,
+  "voice": "F1",
+  "lang": "en"
+}
+```
+
+**示例响应**:
+
+```json
+{
+  "ok": true,
+  "mode": "coach",
+  "partIndex": 1,
+  "turnIndex": 1,
+  "examinerPrompt": "Do you work or study?",
+  "followUpQuestion": "Could you share a specific personal experience related to this?",
+  "shouldMoveNextPart": false,
+  "feedback": { "content": "观点基本清晰。", "language": "表达基本自然。" },
+  "spentSeconds": 32,
+  "targetSeconds": 45,
+  "pacingFeedback": "节奏合适，继续保持。",
+  "examinerPromptAudioUrl": "/media/tts/prompt.wav",
+  "followUpAudioUrl": "/media/tts/follow-up.wav"
 }
 ```
 
@@ -940,7 +1029,94 @@
 }
 ```
 
-#### 4.9.3 生成听力测验
+#### 4.9.3 获取TTS健康状态
+
+**路径**: `/listening/tts/health`
+
+**方法**: `GET`
+
+**功能描述**: 返回当前 TTS 后端状态，`backend=supertonic` 表示已启用 Supertonic，`wave_fallback` 表示使用本地兜底音频生成。
+
+**示例响应**:
+
+```json
+{
+  "backend": "supertonic",
+  "supertonic_available": true,
+  "output_dir": "backend/generated_tts",
+  "base_url": "/media/tts"
+}
+```
+
+#### 4.9.4 生成TTS音频
+
+**路径**: `/listening/tts/render`
+
+**方法**: `POST`
+
+**功能描述**: 从文本生成一段可播放音频，不写入听力素材库。
+
+**示例请求**:
+
+```json
+{
+  "text": "The lecture starts at nine thirty in Room B.",
+  "lang": "en",
+  "voice": "M1",
+  "speed": 1.0
+}
+```
+
+**示例响应**:
+
+```json
+{
+  "audio_url": "/media/tts/demo.wav",
+  "cached": false,
+  "backend": "supertonic",
+  "duration": 2.5
+}
+```
+
+#### 4.9.5 生成听力素材
+
+**路径**: `/listening/materials/generate`
+
+**方法**: `POST`
+
+**功能描述**: 从文本生成音频并加入听力素材库，后续可在 `/listening/library` 中查询并用于测验/精听播放。
+
+**示例请求**:
+
+```json
+{
+  "title": "Room B lecture notice",
+  "transcript": "The lecture starts at nine thirty in Room B.",
+  "difficulty": "easy",
+  "lang": "en",
+  "voice": "M1",
+  "speed": 1.0
+}
+```
+
+**示例响应**:
+
+```json
+{
+  "audio": {
+    "id": "tts_ab12cd34ef56",
+    "title": "Room B lecture notice",
+    "duration": 2.5,
+    "url": "/media/tts/demo.wav",
+    "transcript": "The lecture starts at nine thirty in Room B.",
+    "difficulty": "easy"
+  },
+  "cached": false,
+  "backend": "supertonic"
+}
+```
+
+#### 4.9.6 生成听力测验
 
 **路径**: `/listening/quiz/generate`
 
@@ -958,7 +1134,7 @@
 }
 ```
 
-#### 4.9.4 提交听力测验
+#### 4.9.7 提交听力测验
 
 **路径**: `/listening/quiz/submit`
 

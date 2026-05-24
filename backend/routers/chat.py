@@ -1,9 +1,12 @@
+import time
+
 from fastapi import APIRouter, HTTPException, Depends
 from pydantic import BaseModel, Field
-from typing import Optional, Dict, Any, List
+from typing import Optional, Dict, Any, List, Literal
 
-from agent_core.agent import ielts_agent
+from agent_core.agent import ielts_agent, translation_agent, deep_search_agent
 from ..deps import get_current_user
+from ..services.ability_service import record_practice_result
 
 router = APIRouter()
 
@@ -23,6 +26,34 @@ class ChatResponse(BaseModel):
     response: str
     routing: dict
     rag: Optional[dict] = None
+
+
+class TranslationPracticeRequest(BaseModel):
+    action: Literal["generate", "check"]
+    difficulty: str = "medium"
+    direction: str = "zh_to_en"
+    topic: str = "general"
+    chinese_sentence: Optional[str] = None
+    source_sentence: Optional[str] = None
+    user_translation: Optional[str] = None
+    practice_mode: Optional[str] = None
+    used_hint: bool = False
+
+
+class DeepSearchRequest(BaseModel):
+    query: str
+    session_id: Optional[str] = None
+    enable_agentic_rag: bool = True
+    rag_config: Optional[Dict[str, Any]] = Field(default=None)
+    max_iterations: Optional[int] = Field(default=None, ge=1, le=6)
+
+
+class DeepSearchResponse(BaseModel):
+    agent: str
+    response: str
+    routing: Dict[str, Any]
+    rag: Optional[Dict[str, Any]] = None
+    search: Dict[str, Any]
 
 
 class ChatHistoryItem(BaseModel):
@@ -85,7 +116,7 @@ async def chat(request: ChatRequest, current_user = Depends(get_current_user)):
 
 
 @router.post("/translation")
-async def translation_practice(request: dict, current_user = Depends(get_current_user)):
+async def translation_practice(request: TranslationPracticeRequest, current_user = Depends(get_current_user)):
     """翻译练习接口
     
     生成翻译题目或检查翻译
@@ -98,29 +129,92 @@ async def translation_practice(request: dict, current_user = Depends(get_current
         翻译题目或检查结果
     """
     try:
-        from agent_core.agent import translation_agent
-        
-        action = request.get("action")
-        
-        if action == "generate":
+        if request.action == "generate":
             # 生成翻译题目
-            difficulty = request.get("difficulty", "medium")
-            result = translation_agent.generate_translation_question(difficulty)
+            difficulty = request.difficulty or "medium"
+            try:
+                result = translation_agent.generate_translation_question(
+                    difficulty=difficulty,
+                    direction=request.direction,
+                    topic=request.topic,
+                )
+            except TypeError:
+                result = translation_agent.generate_translation_question(difficulty=difficulty)
             return result
-        elif action == "check":
+        if request.action == "check":
             # 检查翻译
-            chinese_sentence = request.get("chinese_sentence")
-            user_translation = request.get("user_translation")
+            source_sentence = (request.source_sentence or request.chinese_sentence or "").strip()
+            user_translation = (request.user_translation or "").strip()
             
-            if not chinese_sentence or not user_translation:
+            if not source_sentence or not user_translation:
                 raise HTTPException(status_code=400, detail="缺少必要参数")
             
-            result = translation_agent.check_translation(chinese_sentence, user_translation)
+            try:
+                result = translation_agent.check_translation(
+                    source_sentence=source_sentence,
+                    user_translation=user_translation,
+                    direction=request.direction,
+                    topic=request.topic,
+                )
+            except TypeError:
+                result = translation_agent.check_translation(source_sentence, user_translation)
+            record_practice_result(
+                str(current_user["id"]),
+                "translation",
+                result,
+                difficulty=request.difficulty,
+                topic=request.topic,
+                direction=request.direction,
+                practice_mode=request.practice_mode or "",
+                used_hint=request.used_hint,
+                source="translation_search",
+            )
             return result
-        else:
-            raise HTTPException(status_code=400, detail="无效的action参数")
+        raise HTTPException(status_code=400, detail="无效的action参数")
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"翻译处理失败: {str(e)}")
+
+
+@router.post("/deep-search", response_model=DeepSearchResponse)
+async def deep_search(request: DeepSearchRequest, current_user = Depends(get_current_user)):
+    """深度搜索专用接口：返回对话结论 + 结构化证据结果。"""
+    query = (request.query or "").strip()
+    if not query:
+        raise HTTPException(status_code=400, detail="query不能为空")
+
+    session_id = request.session_id or f"deep_search_{int(time.time() * 1000)}"
+    try:
+        route_result = ielts_agent.route_and_execute(
+            f"深度搜索：{query}",
+            session_id,
+            user_context={
+                "user_id": str(current_user.get("id")),
+                "enable_agentic_rag": bool(request.enable_agentic_rag),
+                "rag_config": request.rag_config or {},
+            },
+        )
+
+        previous_iterations = deep_search_agent.max_iterations
+        if request.max_iterations:
+            deep_search_agent.max_iterations = int(request.max_iterations)
+        try:
+            search_result = deep_search_agent.deep_search(query)
+        finally:
+            deep_search_agent.max_iterations = previous_iterations
+
+        return DeepSearchResponse(
+            agent=route_result.get("agent", "deep_search_agent"),
+            response=route_result.get("response", ""),
+            routing=route_result.get("routing", {}),
+            rag=route_result.get("rag"),
+            search=search_result,
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"深度搜索处理失败: {str(e)}")
 
 
 @router.get("/history/sessions", response_model=List[ChatSessionItem])

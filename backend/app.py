@@ -1,12 +1,16 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 import os
 
-from .routers import auth, speaking, scoring, report, profile, plan, reading, writing, listening, history, chat, diagnostic, reminder, stats, mistakes, vocabulary, gamification, community, study_group, payment, admin, campaign
+from .routers import auth, speaking, scoring, report, profile, plan, reading, writing, listening, history, chat, diagnostic, reminder, stats, mistakes, vocabulary, gamification, community, study_group, payment, admin, campaign, ability, dashboard
 from .db import init_db
+from .services.tts_service import get_tts_service
 
 
 app = FastAPI(title="IELTS-Agent API", version="0.1.0")
+_tts = get_tts_service()
+app.mount("/media/tts", StaticFiles(directory=str(_tts.output_dir)), name="tts-media")
 
 
 def _load_cors_origins() -> list[str]:
@@ -54,6 +58,8 @@ app.include_router(study_group.router, prefix="/study-group", tags=["study-group
 app.include_router(payment.router)  # 支付与权益
 app.include_router(admin.router)  # 运营后台
 app.include_router(campaign.router)  # 活动系统
+app.include_router(ability.router, prefix="/ability", tags=["ability"])  # 能力画像与难度推荐
+app.include_router(dashboard.router, prefix="/dashboard", tags=["dashboard"])  # 首页真实数据聚合
 
 
 @app.get("/")

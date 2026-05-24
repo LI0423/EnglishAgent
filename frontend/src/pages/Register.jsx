@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { register } from '../utils/api';
+import { normalizeUiError, register } from '../utils/api';
 import AuthLayout from '../components/auth/AuthLayout';
 import AuthSocialGrid from '../components/auth/AuthSocialGrid';
 import '../App.css';
@@ -50,7 +50,7 @@ const Register = () => {
       await register(username, email, password);
       navigate('/');
     } catch (err) {
-      setError(err || 'Registration failed. Please try again.');
+      setError(normalizeUiError(err, '注册失败，请稍后重试'));
     } finally {
       setIsLoading(false);
     }

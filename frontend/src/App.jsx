@@ -6,12 +6,14 @@ const Login = lazy(() => import('./pages/Login'))
 const Register = lazy(() => import('./pages/Register'))
 const Home = lazy(() => import('./pages/Home'))
 const Chat = lazy(() => import('./pages/Chat'))
+const TranslationSearch = lazy(() => import('./pages/TranslationSearch'))
 const Writing = lazy(() => import('./pages/Writing'))
 const Listening = lazy(() => import('./pages/Listening'))
 const Reading = lazy(() => import('./pages/Reading'))
 const Speaking = lazy(() => import('./pages/Speaking'))
 const Reports = lazy(() => import('./pages/Reports'))
 const Plans = lazy(() => import('./pages/Plans'))
+const ReminderCenter = lazy(() => import('./pages/ReminderCenter'))
 const Diagnostic = lazy(() => import('./pages/Diagnostic'))
 const Mistakes = lazy(() => import('./pages/Mistakes'))
 const Vocabulary = lazy(() => import('./pages/Vocabulary'))
@@ -59,6 +61,7 @@ function App() {
           <Route path="/register" element={<Register />} />
           <Route path="/" element={<Home />} />
           <Route path="/chat" element={<Chat />} />
+          <Route path="/translation-search" element={<TranslationSearch />} />
           <Route path="/writing" element={<Writing />} />
           <Route path="/mistakes" element={<Mistakes />} />
           <Route path="/vocabulary" element={<Vocabulary />} />
@@ -72,6 +75,7 @@ function App() {
           <Route path="/speaking" element={<Speaking />} />
           <Route path="/reports" element={<Reports />} />
           <Route path="/plans" element={<Plans />} />
+          <Route path="/reminders" element={<ReminderCenter />} />
           <Route path="/achievements" element={<Achievements />} />
           <Route path="/mock-exam" element={<Diagnostic />} />
           <Route path="/profile" element={<ComingSoon />} />

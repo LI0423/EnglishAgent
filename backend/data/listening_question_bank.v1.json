@@ -1,5 +1,5 @@
 {
-  "version": "listening-quiz-v1",
+  "version": "listening-quiz-v2",
   "questions": [
     {
       "id": "lst_q_001",
@@ -9,7 +9,7 @@
       "options": ["library", "cafeteria", "office", "hall"],
       "question_type": "multiple_choice",
       "difficulty": "easy",
-      "explanation": "The location mentioned in the conversation is library."
+      "explanation": "The conversation clearly states they will meet at the library."
     },
     {
       "id": "lst_q_002",
@@ -19,27 +19,167 @@
       "options": ["8", "9", "10", "11"],
       "question_type": "multiple_choice",
       "difficulty": "easy",
-      "explanation": "The correct start time is 9."
+      "explanation": "The start time is mentioned as 9 o'clock."
     },
     {
       "id": "lst_q_003",
+      "audio_id": "audio_001",
+      "prompt": "Complete the form: The student's surname is ____.",
+      "answer": "brown",
+      "options": ["brown", "browne", "brwon", "bran"],
+      "question_type": "form_fill",
+      "difficulty": "easy",
+      "explanation": "The surname is spelled B-R-O-W-N."
+    },
+    {
+      "id": "lst_q_004",
+      "audio_id": "audio_001",
+      "prompt": "Complete the note: The registration fee is ____ dollars.",
+      "answer": "25",
+      "options": ["15", "20", "25", "30"],
+      "question_type": "note_completion",
+      "difficulty": "easy",
+      "explanation": "The speaker says the fee is twenty-five dollars."
+    },
+    {
+      "id": "lst_q_005",
+      "audio_id": "audio_001",
+      "prompt": "Map labeling: Which location is marked as the bus stop?",
+      "answer": "B",
+      "options": ["A", "B", "C", "D"],
+      "question_type": "map_labeling",
+      "difficulty": "easy",
+      "explanation": "The bus stop is identified at point B in the description."
+    },
+    {
+      "id": "lst_q_006",
+      "audio_id": "audio_001",
+      "prompt": "Match the service to the day: Library tour is on ____.",
+      "answer": "monday",
+      "options": ["monday", "tuesday", "wednesday", "thursday"],
+      "question_type": "matching",
+      "difficulty": "easy",
+      "explanation": "The guide says the library tour runs on Monday."
+    },
+    {
+      "id": "lst_q_007",
       "audio_id": "audio_002",
-      "prompt": "Which problem does the speaker mention first?",
+      "prompt": "Which issue does the speaker mention first in the meeting?",
       "answer": "budget",
       "options": ["schedule", "budget", "venue", "staff"],
       "question_type": "multiple_choice",
       "difficulty": "intermediate",
-      "explanation": "Budget pressure is the first issue raised."
+      "explanation": "Budget pressure is introduced before other constraints."
     },
     {
-      "id": "lst_q_004",
+      "id": "lst_q_008",
+      "audio_id": "audio_002",
+      "prompt": "What is the main reason for delaying the launch?",
+      "answer": "supplier delay",
+      "options": ["staff shortage", "supplier delay", "weather", "legal issue"],
+      "question_type": "multiple_choice",
+      "difficulty": "intermediate",
+      "explanation": "The speaker attributes the delay to supplier timing issues."
+    },
+    {
+      "id": "lst_q_009",
+      "audio_id": "audio_002",
+      "prompt": "Complete the form: The project code is ____.",
+      "answer": "k72",
+      "options": ["k27", "k72", "g72", "k79"],
+      "question_type": "form_fill",
+      "difficulty": "intermediate",
+      "explanation": "The code is read out as K-7-2."
+    },
+    {
+      "id": "lst_q_010",
+      "audio_id": "audio_002",
+      "prompt": "Complete the note: The new deadline is ____ May.",
+      "answer": "18",
+      "options": ["15", "16", "18", "19"],
+      "question_type": "note_completion",
+      "difficulty": "intermediate",
+      "explanation": "The speaker confirms the final deadline is May 18."
+    },
+    {
+      "id": "lst_q_011",
+      "audio_id": "audio_002",
+      "prompt": "Map labeling: Which area is assigned for temporary storage?",
+      "answer": "C",
+      "options": ["A", "B", "C", "D"],
+      "question_type": "map_labeling",
+      "difficulty": "intermediate",
+      "explanation": "Temporary storage is positioned at point C."
+    },
+    {
+      "id": "lst_q_012",
+      "audio_id": "audio_002",
+      "prompt": "Matching: Which team handles customer onboarding?",
+      "answer": "support",
+      "options": ["finance", "support", "hr", "legal"],
+      "question_type": "matching",
+      "difficulty": "intermediate",
+      "explanation": "The onboarding task is assigned to the support team."
+    },
+    {
+      "id": "lst_q_013",
       "audio_id": "audio_003",
-      "prompt": "The speaker's tone is best described as ____.",
+      "prompt": "The speaker's tone in the final section is best described as ____.",
       "answer": "cautiously optimistic",
       "options": ["frustrated", "neutral", "cautiously optimistic", "sarcastic"],
       "question_type": "multiple_choice",
       "difficulty": "advanced",
-      "explanation": "The speaker is positive but still cautious."
+      "explanation": "The speaker remains positive while noting remaining risks."
+    },
+    {
+      "id": "lst_q_014",
+      "audio_id": "audio_003",
+      "prompt": "What is implied about the final proposal?",
+      "answer": "needs revision",
+      "options": ["approved", "rejected", "needs revision", "already funded"],
+      "question_type": "multiple_choice",
+      "difficulty": "advanced",
+      "explanation": "The proposal is promising but still requires revisions."
+    },
+    {
+      "id": "lst_q_015",
+      "audio_id": "audio_003",
+      "prompt": "Complete the form: The keynote speaker's institution is ____ University.",
+      "answer": "harper",
+      "options": ["harper", "harbor", "harperton", "harbert"],
+      "question_type": "form_fill",
+      "difficulty": "advanced",
+      "explanation": "The institution is named Harper University."
+    },
+    {
+      "id": "lst_q_016",
+      "audio_id": "audio_003",
+      "prompt": "Complete the note: The estimated variance is ____ percent.",
+      "answer": "12",
+      "options": ["8", "10", "12", "15"],
+      "question_type": "note_completion",
+      "difficulty": "advanced",
+      "explanation": "The reported variance is twelve percent."
+    },
+    {
+      "id": "lst_q_017",
+      "audio_id": "audio_003",
+      "prompt": "Map labeling: Which zone is designated as the observation deck?",
+      "answer": "D",
+      "options": ["A", "B", "C", "D"],
+      "question_type": "map_labeling",
+      "difficulty": "advanced",
+      "explanation": "The observation deck is assigned to point D."
+    },
+    {
+      "id": "lst_q_018",
+      "audio_id": "audio_003",
+      "prompt": "Matching: Which method is paired with longitudinal tracking?",
+      "answer": "cohort analysis",
+      "options": ["spot survey", "cohort analysis", "manual audit", "focus group"],
+      "question_type": "matching",
+      "difficulty": "advanced",
+      "explanation": "Longitudinal tracking is linked to cohort analysis."
     }
   ]
 }

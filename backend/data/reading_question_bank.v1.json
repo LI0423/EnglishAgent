@@ -1,5 +1,5 @@
 {
-  "version": "reading-quiz-v1",
+  "version": "reading-quiz-v2",
   "questions": [
     {
       "id": "rd_q_001",
@@ -8,34 +8,160 @@
       "options": ["true", "false", "not given"],
       "question_type": "tfng",
       "difficulty": "basic",
-      "explanation": "The text does not claim all cities reduced pollution."
+      "explanation": "The passage mentions only some cities, not all."
     },
     {
       "id": "rd_q_002",
+      "prompt": "Which heading best matches paragraph 2?",
+      "answer": "public transport reform",
+      "options": ["agricultural change", "public transport reform", "digital privacy", "housing shortage"],
+      "question_type": "heading_matching",
+      "difficulty": "basic",
+      "explanation": "Paragraph 2 focuses on transit policy reform."
+    },
+    {
+      "id": "rd_q_003",
+      "prompt": "The author's attitude toward community pilots is mostly:",
+      "answer": "supportive",
+      "options": ["critical", "supportive", "uncertain", "dismissive"],
+      "question_type": "attitude",
+      "difficulty": "basic",
+      "explanation": "The wording is positive about pilot outcomes."
+    },
+    {
+      "id": "rd_q_004",
+      "prompt": "Which inference is best supported by paragraph 5?",
+      "answer": "small trials can guide policy",
+      "options": ["trials are unnecessary", "small trials can guide policy", "data is unreliable", "funding should stop"],
+      "question_type": "inference",
+      "difficulty": "basic",
+      "explanation": "The paragraph argues pilot evidence can inform wider adoption."
+    },
+    {
+      "id": "rd_q_005",
+      "prompt": "Matching: Which researcher is linked to the 2018 field study?",
+      "answer": "Dr. Lane",
+      "options": ["Dr. Lane", "Prof. Wu", "Dr. Nolan", "Prof. Kim"],
+      "question_type": "matching",
+      "difficulty": "basic",
+      "explanation": "The 2018 field study is attributed to Dr. Lane."
+    },
+    {
+      "id": "rd_q_006",
+      "prompt": "Summary completion: The policy improved ____ access in rural districts.",
+      "answer": "healthcare",
+      "options": ["housing", "healthcare", "tourism", "banking"],
+      "question_type": "summary_completion",
+      "difficulty": "basic",
+      "explanation": "The summary states improved healthcare access."
+    },
+    {
+      "id": "rd_q_007",
+      "prompt": "T/F/NG: The report claims AI adoption lowered costs in every sector.",
+      "answer": "not given",
+      "options": ["true", "false", "not given"],
+      "question_type": "tfng",
+      "difficulty": "intermediate",
+      "explanation": "No universal claim across every sector is made."
+    },
+    {
+      "id": "rd_q_008",
       "prompt": "Which heading best matches paragraph 4?",
       "answer": "technology adoption",
       "options": ["economic decline", "technology adoption", "policy failure", "population ageing"],
       "question_type": "heading_matching",
       "difficulty": "intermediate",
-      "explanation": "Paragraph 4 mainly discusses technology adoption."
+      "explanation": "Paragraph 4 discusses adoption barriers and progress."
     },
     {
-      "id": "rd_q_003",
-      "prompt": "The author's attitude to the study is mostly:",
-      "answer": "supportive",
-      "options": ["critical", "supportive", "uncertain", "dismissive"],
+      "id": "rd_q_009",
+      "prompt": "The author's attitude to the long-term study is mostly:",
+      "answer": "cautiously positive",
+      "options": ["hostile", "cautiously positive", "indifferent", "mocking"],
       "question_type": "attitude",
       "difficulty": "intermediate",
-      "explanation": "The author presents the study in a supportive tone."
+      "explanation": "The tone recognizes value while noting limitations."
     },
     {
-      "id": "rd_q_004",
+      "id": "rd_q_010",
       "prompt": "Which inference is best supported by the final paragraph?",
       "answer": "long-term monitoring is required",
       "options": ["current data is sufficient", "policy is unnecessary", "long-term monitoring is required", "technology solved all issues"],
       "question_type": "inference",
+      "difficulty": "intermediate",
+      "explanation": "The final paragraph stresses continued observation."
+    },
+    {
+      "id": "rd_q_011",
+      "prompt": "Matching: Which city is associated with congestion-pricing success?",
+      "answer": "Harbridge",
+      "options": ["Northport", "Harbridge", "Westhaven", "Stoneford"],
+      "question_type": "matching",
+      "difficulty": "intermediate",
+      "explanation": "Harbridge is cited as the successful case."
+    },
+    {
+      "id": "rd_q_012",
+      "prompt": "Summary completion: The committee requested further ____ before scaling.",
+      "answer": "evidence",
+      "options": ["marketing", "evidence", "outsourcing", "automation"],
+      "question_type": "summary_completion",
+      "difficulty": "intermediate",
+      "explanation": "The committee asks for more evidence before expansion."
+    },
+    {
+      "id": "rd_q_013",
+      "prompt": "T/F/NG: The text proves causation rather than correlation.",
+      "answer": "not given",
+      "options": ["true", "false", "not given"],
+      "question_type": "tfng",
       "difficulty": "advanced",
-      "explanation": "The final paragraph stresses long-term monitoring."
+      "explanation": "The article does not definitively prove causation."
+    },
+    {
+      "id": "rd_q_014",
+      "prompt": "Which heading best matches paragraph 7?",
+      "answer": "methodological constraints",
+      "options": ["instant success", "methodological constraints", "public backlash", "historical overview"],
+      "question_type": "heading_matching",
+      "difficulty": "advanced",
+      "explanation": "Paragraph 7 addresses limits in methodology."
+    },
+    {
+      "id": "rd_q_015",
+      "prompt": "The author's attitude toward the meta-analysis is:",
+      "answer": "skeptically balanced",
+      "options": ["enthusiastic", "skeptically balanced", "dismissive", "angry"],
+      "question_type": "attitude",
+      "difficulty": "advanced",
+      "explanation": "The author values findings but questions overreach."
+    },
+    {
+      "id": "rd_q_016",
+      "prompt": "Which inference is most supported by the conclusion?",
+      "answer": "policy transfer needs local adaptation",
+      "options": ["one model fits all", "policy transfer needs local adaptation", "evidence quality is irrelevant", "implementation is easy"],
+      "question_type": "inference",
+      "difficulty": "advanced",
+      "explanation": "The conclusion emphasizes contextual adaptation."
+    },
+    {
+      "id": "rd_q_017",
+      "prompt": "Matching: Which framework is linked to equity-first planning?",
+      "answer": "Framework C",
+      "options": ["Framework A", "Framework B", "Framework C", "Framework D"],
+      "question_type": "matching",
+      "difficulty": "advanced",
+      "explanation": "Equity-first planning is explicitly mapped to Framework C."
+    },
+    {
+      "id": "rd_q_018",
+      "prompt": "Summary completion: The paper warns against over-reliance on short-term ____.",
+      "answer": "metrics",
+      "options": ["metrics", "budgets", "partnerships", "committees"],
+      "question_type": "summary_completion",
+      "difficulty": "advanced",
+      "explanation": "The warning concerns short-term metrics without longitudinal evidence."
     }
   ]
 }

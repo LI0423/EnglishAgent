@@ -2,6 +2,7 @@ import os
 import sqlite3
 import time
 import json
+from datetime import datetime, timedelta
 from uuid import uuid4
 from typing import Optional, Tuple, Any, Dict
 
@@ -278,11 +279,29 @@ def init_db():
               channels TEXT,
               preferred_times TEXT,
               quiet_hours TEXT,
+              strategy_config TEXT,
               created_at INTEGER,
               updated_at INTEGER
             );
             """
         )
+            conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS reminder_audit_logs (
+              id TEXT PRIMARY KEY,
+              user_id TEXT,
+              reminder_id TEXT,
+              action TEXT,
+              detail TEXT,
+              created_at INTEGER
+            );
+            """
+        )
+        # backward-compatible column add for existing DBs
+        try:
+            conn.execute("ALTER TABLE reminder_preferences ADD COLUMN strategy_config TEXT")
+        except sqlite3.OperationalError:
+            pass
             conn.execute(
             """
             CREATE TABLE IF NOT EXISTS learning_events (
@@ -3542,6 +3561,202 @@ def create_reminder(reminder_id: str, user_id: str, reminder_data: Dict[str, Any
         conn.close()
 
 
+def create_reminder_audit_log(
+    log_id: str,
+    *,
+    user_id: str,
+    reminder_id: str,
+    action: str,
+    detail: Dict[str, Any],
+    created_at: Optional[int] = None,
+) -> None:
+    conn = get_conn()
+    try:
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS reminder_audit_logs (
+              id TEXT PRIMARY KEY,
+              user_id TEXT,
+              reminder_id TEXT,
+              action TEXT,
+              detail TEXT,
+              created_at INTEGER
+            );
+            """
+        )
+        conn.execute(
+            """
+            INSERT INTO reminder_audit_logs (
+              id, user_id, reminder_id, action, detail, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (
+                str(log_id),
+                str(user_id),
+                str(reminder_id),
+                str(action),
+                json.dumps(detail or {}),
+                int(created_at or time.time()),
+            ),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def get_user_reminder_audit_logs(
+    user_id: str,
+    *,
+    limit: int = 100,
+    action: Optional[str] = None,
+) -> list[Dict[str, Any]]:
+    conn = get_conn()
+    try:
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS reminder_audit_logs (
+              id TEXT PRIMARY KEY,
+              user_id TEXT,
+              reminder_id TEXT,
+              action TEXT,
+              detail TEXT,
+              created_at INTEGER
+            );
+            """
+        )
+        if action:
+            cur = conn.execute(
+                """
+                SELECT *
+                FROM reminder_audit_logs
+                WHERE user_id = ? AND action = ?
+                ORDER BY created_at DESC
+                LIMIT ?
+                """,
+                (str(user_id), str(action), max(1, int(limit))),
+            )
+        else:
+            cur = conn.execute(
+                """
+                SELECT *
+                FROM reminder_audit_logs
+                WHERE user_id = ?
+                ORDER BY created_at DESC
+                LIMIT ?
+                """,
+                (str(user_id), max(1, int(limit))),
+            )
+        rows = []
+        for row in cur.fetchall():
+            item = dict(row)
+            item["detail"] = json.loads(item["detail"]) if item.get("detail") else {}
+            rows.append(item)
+        return rows
+    finally:
+        conn.close()
+
+
+def get_user_reminder_analytics(
+    user_id: str,
+    *,
+    days: int = 14,
+    now_ts: Optional[int] = None,
+) -> Dict[str, Any]:
+    conn = get_conn()
+    try:
+        now = int(now_ts or time.time())
+        safe_days = max(1, min(90, int(days)))
+        since = now - safe_days * 24 * 3600
+
+        rows_cur = conn.execute(
+            """
+            SELECT status, type, metadata, created_at, sent_at
+            FROM reminders
+            WHERE user_id = ? AND created_at >= ?
+            ORDER BY created_at ASC
+            """,
+            (str(user_id), int(since)),
+        )
+        rows = [dict(x) for x in rows_cur.fetchall()]
+
+        status_counts: Dict[str, int] = {}
+        type_counts: Dict[str, int] = {}
+        source_counts: Dict[str, int] = {}
+        by_day: Dict[str, Dict[str, int]] = {}
+
+        def _day_key(ts: int) -> str:
+            return datetime.fromtimestamp(int(ts)).strftime("%Y-%m-%d")
+
+        for item in rows:
+            status = str(item.get("status") or "pending")
+            rtype = str(item.get("type") or "task")
+            status_counts[status] = status_counts.get(status, 0) + 1
+            type_counts[rtype] = type_counts.get(rtype, 0) + 1
+
+            metadata_raw = item.get("metadata")
+            metadata = {}
+            if metadata_raw:
+                try:
+                    metadata = json.loads(metadata_raw)
+                except Exception:
+                    metadata = {}
+            source = str(metadata.get("source") or "")
+            if source:
+                source_counts[source] = source_counts.get(source, 0) + 1
+
+            created_at = int(item.get("created_at") or 0)
+            day = _day_key(created_at if created_at > 0 else now)
+            if day not in by_day:
+                by_day[day] = {"created": 0, "sent": 0, "failed": 0, "merged": 0}
+            by_day[day]["created"] += 1
+            if status == "sent":
+                by_day[day]["sent"] += 1
+            elif status == "failed":
+                by_day[day]["failed"] += 1
+            elif status == "merged":
+                by_day[day]["merged"] += 1
+
+        trend = []
+        start_day = datetime.fromtimestamp(int(since)).date()
+        for offset in range(safe_days + 1):
+            current_day = start_day + timedelta(days=offset)
+            day_key = current_day.strftime("%Y-%m-%d")
+            stats = by_day.get(day_key, {"created": 0, "sent": 0, "failed": 0, "merged": 0})
+            trend.append(
+                {
+                    "day": day_key,
+                    "created": int(stats["created"]),
+                    "sent": int(stats["sent"]),
+                    "failed": int(stats["failed"]),
+                    "merged": int(stats["merged"]),
+                }
+            )
+
+        top_sources = sorted(
+            [{"source": k, "count": v} for k, v in source_counts.items()],
+            key=lambda x: (-int(x["count"]), str(x["source"])),
+        )[:10]
+        top_types = sorted(
+            [{"type": k, "count": v} for k, v in type_counts.items()],
+            key=lambda x: (-int(x["count"]), str(x["type"])),
+        )
+        top_status = sorted(
+            [{"status": k, "count": v} for k, v in status_counts.items()],
+            key=lambda x: (-int(x["count"]), str(x["status"])),
+        )
+
+        return {
+            "days": safe_days,
+            "total": len(rows),
+            "status_counts": top_status,
+            "type_counts": top_types,
+            "source_counts": top_sources,
+            "trend": trend,
+        }
+    finally:
+        conn.close()
+
+
 def has_recent_reminder(
     user_id: str,
     reminder_type: str,
@@ -3705,6 +3920,61 @@ def mark_reminder_retry(
         conn.close()
 
 
+def reschedule_reminder(reminder_id: str, scheduled_at: int, reason: str = "") -> Dict[str, Any]:
+    """重排提醒发送时间，并在 metadata 中记录原因。"""
+    conn = get_conn()
+    try:
+        cur = conn.execute("SELECT metadata FROM reminders WHERE id = ?", (str(reminder_id),))
+        row = cur.fetchone()
+        if not row:
+            return {"updated": False, "reason": "not_found"}
+
+        metadata_raw = row["metadata"] if row["metadata"] else "{}"
+        try:
+            metadata = json.loads(metadata_raw)
+        except Exception:
+            metadata = {}
+        metadata["rescheduled_at"] = int(time.time())
+        metadata["reschedule_reason"] = str(reason or "")
+        metadata["next_scheduled_at"] = int(scheduled_at)
+
+        conn.execute(
+            "UPDATE reminders SET status = ?, scheduled_at = ?, metadata = ? WHERE id = ?",
+            ("pending", int(scheduled_at), json.dumps(metadata), str(reminder_id)),
+        )
+        conn.commit()
+        return {"updated": True, "status": "pending", "next_scheduled_at": int(scheduled_at)}
+    finally:
+        conn.close()
+
+
+def count_recent_user_reminders(
+    user_id: str,
+    *,
+    since_ts: int,
+    statuses: Optional[list[str]] = None,
+) -> int:
+    """统计用户在时间窗口内的提醒条数（按状态过滤）。"""
+    conn = get_conn()
+    try:
+        states = statuses or ["sent"]
+        placeholders = ",".join("?" for _ in states)
+        cur = conn.execute(
+            f"""
+            SELECT COUNT(*) AS cnt
+            FROM reminders
+            WHERE user_id = ?
+              AND created_at >= ?
+              AND status IN ({placeholders})
+            """,
+            (str(user_id), int(since_ts), *states),
+        )
+        row = cur.fetchone()
+        return int(row["cnt"] if row else 0)
+    finally:
+        conn.close()
+
+
 def delete_reminder(reminder_id: str) -> None:
     conn = get_conn()
     try:
@@ -3726,6 +3996,7 @@ def get_reminder_preferences(user_id: str) -> Optional[Dict[str, Any]]:
         preferences['channels'] = json.loads(preferences['channels']) if preferences['channels'] else []
         preferences['preferred_times'] = json.loads(preferences['preferred_times']) if preferences['preferred_times'] else []
         preferences['quiet_hours'] = json.loads(preferences['quiet_hours']) if preferences['quiet_hours'] else {}
+        preferences['strategy_config'] = json.loads(preferences['strategy_config']) if preferences.get('strategy_config') else {}
         return preferences
     finally:
         conn.close()
@@ -3744,7 +4015,7 @@ def set_reminder_preferences(user_id: str, preferences: Dict[str, Any]) -> None:
                 """
                 UPDATE reminder_preferences 
                 SET enabled = ?, channels = ?, preferred_times = ?, 
-                    quiet_hours = ?, updated_at = ? 
+                    quiet_hours = ?, strategy_config = ?, updated_at = ? 
                 WHERE user_id = ?
                 """,
                 (
@@ -3752,6 +4023,7 @@ def set_reminder_preferences(user_id: str, preferences: Dict[str, Any]) -> None:
                     json.dumps(preferences.get('channels', ['app'])),
                     json.dumps(preferences.get('preferred_times', [])),
                     json.dumps(preferences.get('quiet_hours', {})),
+                    json.dumps(preferences.get('strategy_config', {})),
                     now,
                     user_id
                 )
@@ -3762,8 +4034,8 @@ def set_reminder_preferences(user_id: str, preferences: Dict[str, Any]) -> None:
                 """
                 INSERT INTO reminder_preferences (
                   user_id, enabled, channels, preferred_times, 
-                  quiet_hours, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                  quiet_hours, strategy_config, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     user_id,
@@ -3771,11 +4043,141 @@ def set_reminder_preferences(user_id: str, preferences: Dict[str, Any]) -> None:
                     json.dumps(preferences.get('channels', ['app'])),
                     json.dumps(preferences.get('preferred_times', [])),
                     json.dumps(preferences.get('quiet_hours', {})),
+                    json.dumps(preferences.get('strategy_config', {})),
                     now,
                     now
                 )
             )
         conn.commit()
+    finally:
+        conn.close()
+
+
+def create_reminder_preference_history(
+    history_id: str,
+    *,
+    user_id: str,
+    source: str,
+    before_config: Dict[str, Any],
+    after_config: Dict[str, Any],
+    meta: Optional[Dict[str, Any]] = None,
+    created_at: Optional[int] = None,
+) -> None:
+    conn = get_conn()
+    try:
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS reminder_preference_history (
+              id TEXT PRIMARY KEY,
+              user_id TEXT,
+              source TEXT,
+              before_config TEXT,
+              after_config TEXT,
+              meta TEXT,
+              created_at INTEGER
+            );
+            """
+        )
+        conn.execute(
+            """
+            INSERT INTO reminder_preference_history (
+              id, user_id, source, before_config, after_config, meta, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                str(history_id),
+                str(user_id),
+                str(source),
+                json.dumps(before_config or {}),
+                json.dumps(after_config or {}),
+                json.dumps(meta or {}),
+                int(created_at or time.time()),
+            ),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def get_user_reminder_preference_history(
+    user_id: str,
+    *,
+    limit: int = 30,
+) -> list[Dict[str, Any]]:
+    conn = get_conn()
+    try:
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS reminder_preference_history (
+              id TEXT PRIMARY KEY,
+              user_id TEXT,
+              source TEXT,
+              before_config TEXT,
+              after_config TEXT,
+              meta TEXT,
+              created_at INTEGER
+            );
+            """
+        )
+        cur = conn.execute(
+            """
+            SELECT *
+            FROM reminder_preference_history
+            WHERE user_id = ?
+            ORDER BY created_at DESC
+            LIMIT ?
+            """,
+            (str(user_id), max(1, int(limit))),
+        )
+        rows = []
+        for row in cur.fetchall():
+            item = dict(row)
+            item["before_config"] = json.loads(item["before_config"]) if item.get("before_config") else {}
+            item["after_config"] = json.loads(item["after_config"]) if item.get("after_config") else {}
+            item["meta"] = json.loads(item["meta"]) if item.get("meta") else {}
+            rows.append(item)
+        return rows
+    finally:
+        conn.close()
+
+
+def get_reminder_preference_history_by_id(
+    history_id: str,
+    *,
+    user_id: str,
+) -> Optional[Dict[str, Any]]:
+    conn = get_conn()
+    try:
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS reminder_preference_history (
+              id TEXT PRIMARY KEY,
+              user_id TEXT,
+              source TEXT,
+              before_config TEXT,
+              after_config TEXT,
+              meta TEXT,
+              created_at INTEGER
+            );
+            """
+        )
+        cur = conn.execute(
+            """
+            SELECT *
+            FROM reminder_preference_history
+            WHERE id = ? AND user_id = ?
+            LIMIT 1
+            """,
+            (str(history_id), str(user_id)),
+        )
+        row = cur.fetchone()
+        if not row:
+            return None
+        item = dict(row)
+        item["before_config"] = json.loads(item["before_config"]) if item.get("before_config") else {}
+        item["after_config"] = json.loads(item["after_config"]) if item.get("after_config") else {}
+        item["meta"] = json.loads(item["meta"]) if item.get("meta") else {}
+        return item
     finally:
         conn.close()
 

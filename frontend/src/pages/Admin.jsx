@@ -1,5 +1,4 @@
 import { useEffect, useState } from 'react';
-import { NavLink } from 'react-router-dom';
 import {
   getAdminCampaignConversionReport,
   getAdminEntitlementLedger,
@@ -14,7 +13,9 @@ import {
   moderateAdminComment,
   moderateAdminPost,
 } from '../utils/api';
+import SidebarMenu from '../components/layout/SidebarMenu';
 
+import TopNav from "../components/layout/TopNav";
 const TABS = [
   { key: 'overview', label: '总览' },
   { key: 'reports', label: '报表' },
@@ -24,12 +25,6 @@ const TABS = [
 ];
 
 const Admin = () => {
-  const navItems = [
-    { to: '/', label: '🏠 首页' },
-    { to: '/payment', label: '💳 支付中心' },
-    { to: '/community', label: '👥 学习社区' },
-    { to: '/admin', label: '🛠️ 运营后台' },
-  ];
 
   const [userData, setUserData] = useState({ username: '管理员' });
   const [tab, setTab] = useState('overview');
@@ -108,35 +103,19 @@ const Admin = () => {
   };
 
   return (
-    <div className="dashboard-page">
-      <header className="top-nav">
-        <div className="nav-content">
-          <div className="nav-left"><h1>🎓 IELTS Agent</h1></div>
-          <div className="nav-right">
-            <div className="user-profile"><span className="avatar">👤</span><span className="username">{userData.username}</span></div>
-          </div>
-        </div>
-      </header>
+    <div className="home-page web-dashboard dashboard-page">
+      <TopNav username={userData.username} />
       <div className="main-layout">
         <div className="sidebar">
-          <div className="sidebar-header"><h2>🎓 IELTS Agent</h2></div>
-          <nav className="sidebar-nav">
-            <ul>
-              {navItems.map((item) => (
-                <li key={item.to}>
-                  <NavLink to={item.to} end={item.to === '/'} className={({ isActive }) => `sidebar-nav-link${isActive ? ' active' : ''}`}>
-                    {item.label}
-                  </NavLink>
-                </li>
-              ))}
-            </ul>
-          </nav>
+          <SidebarMenu />
         </div>
-        <div className="content-area">
+        <div className="content-area content-shell">
           <main className="reports-content">
-            <div className="page-header">
-              <div className="breadcrumb"><span>首页</span> &gt; <span>运营后台</span></div>
-              <h1 className="page-title">🛠️ 运营后台</h1>
+            <div className="web-page-head">
+              <div>
+                <h2>运营后台</h2>
+                <p>运营总览、审核、订单、权益与报表管理。</p>
+              </div>
             </div>
             {message && <div className="card"><p>{message}</p></div>}
 

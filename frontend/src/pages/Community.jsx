@@ -1,5 +1,4 @@
 import { useEffect, useState } from 'react';
-import { NavLink } from 'react-router-dom';
 import {
   createCommunityComment,
   createCommunityPost,
@@ -10,21 +9,10 @@ import {
   voteCommunityComment,
   voteCommunityPost,
 } from '../utils/api';
+import SidebarMenu from '../components/layout/SidebarMenu';
 
+import TopNav from "../components/layout/TopNav";
 const Community = () => {
-  const navItems = [
-    { to: '/', label: '🏠 首页' },
-    { to: '/chat', label: '🤖 智能对话' },
-    { to: '/listening', label: '🎧 听力练习' },
-    { to: '/reading', label: '📚 阅读练习' },
-    { to: '/writing', label: '📝 写作练习' },
-    { to: '/speaking', label: '💬 口语练习' },
-    { to: '/vocabulary', label: '📋 词汇学习' },
-    { to: '/mistakes', label: '🔖 错题本' },
-    { to: '/community', label: '👥 学习社区' },
-    { to: '/reports', label: '📊 学习报告' },
-    { to: '/achievements', label: '🏆 成就中心' },
-  ];
 
   const [userData, setUserData] = useState({ username: '李同学' });
   const [summary, setSummary] = useState({ post_count: 0, comment_count: 0, vote_count: 0 });
@@ -164,38 +152,21 @@ const Community = () => {
   };
 
   return (
-    <div className="dashboard-page">
-      <header className="top-nav">
-        <div className="nav-content">
-          <div className="nav-left"><h1>🎓 IELTS Agent</h1></div>
-          <div className="nav-right">
-            <div className="notification"><span className="icon">🔔</span><span className="badge">3</span></div>
-            <div className="user-profile"><span className="avatar">👤</span><span className="username">{userData.username}</span></div>
-          </div>
-        </div>
-      </header>
+    <div className="home-page web-dashboard dashboard-page">
+      <TopNav username={userData.username} />
 
       <div className="main-layout">
         <div className="sidebar">
-          <div className="sidebar-header"><h2>🎓 IELTS Agent</h2></div>
-          <nav className="sidebar-nav">
-            <ul>
-              {navItems.map((item) => (
-                <li key={item.to}>
-                  <NavLink to={item.to} end={item.to === '/'} className={({ isActive }) => `sidebar-nav-link${isActive ? ' active' : ''}`}>
-                    {item.label}
-                  </NavLink>
-                </li>
-              ))}
-            </ul>
-          </nav>
+          <SidebarMenu />
         </div>
 
-        <div className="content-area">
+        <div className="content-area content-shell">
           <main className="reports-content">
-            <div className="page-header">
-              <div className="breadcrumb"><span>首页</span> &gt; <span>学习社区</span></div>
-              <h1 className="page-title">👥 学习社区</h1>
+            <div className="web-page-head">
+              <div>
+                <h2>学习社区</h2>
+                <p>发布讨论、查看帖子并参与学习互动。</p>
+              </div>
             </div>
 
             <div className="overview-cards" style={{ marginBottom: 16 }}>

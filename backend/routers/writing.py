@@ -37,6 +37,14 @@ class Task1WritingRequest(BaseModel):
     topic: str = Field(..., description="写作主题")
     keywords: Optional[List[str]] = Field(None, description="关键词列表")
 
+
+class Task2WritingRequest(BaseModel):
+    """Task 2 写作请求模型"""
+    text: str = Field(..., min_length=30, description="写作内容")
+    topic: str = Field(..., description="写作题目")
+    keywords: Optional[List[str]] = Field(None, description="关键词列表")
+    stance: Optional[str] = Field(None, description="立场（agree/disagree/balanced）")
+
 class Task1FeedbackItem(BaseModel):
     """写作反馈项"""
     category: str  # structure/content/vocabulary/grammar
@@ -55,6 +63,22 @@ class Task1Analysis(BaseModel):
     feedback: List[Task1FeedbackItem]
     common_mistakes: List[str]
     improvement_tips: List[str]
+
+
+class Task2BrainstormResponse(BaseModel):
+    topic: str
+    thesis_options: List[str]
+    arguments_for: List[str]
+    arguments_against: List[str]
+    example_angles: List[str]
+    paragraph_outline: List[str]
+    conclusion_frame: str
+
+
+class Task2BrainstormRequest(BaseModel):
+    topic: str
+    keywords: Optional[List[str]] = None
+    stance: Optional[str] = None
 
 class Task1Practice(BaseModel):
     """Task 1 练习记录"""
@@ -105,6 +129,13 @@ task1_vocabulary = {
     "quantity": ["approximately", "around", "about", "just over", "slightly under"],
     "time": ["over the period", "between...and...", "from...to...", "by the end of", "during"]
 }
+
+task2_structures = [
+    "开头段：改写题目 + 明确立场（thesis）",
+    "主体段1：主论点 + 解释 + 具体例子",
+    "主体段2：次论点/反驳段 + 解释 + 具体例子",
+    "结尾段：重申立场 + 总结影响",
+]
 
 
 def _calc_overall_band(tr_score: float, cc_score: float, lr_score: float, gra_score: float) -> float:
@@ -243,7 +274,13 @@ def _ai_assist_for_peer_review(content: str, task_type: str = "task1") -> Dict[s
     }
 
 
-def _guard_and_consume_writing_review_entitlement(user_id: str, request_id: str) -> None:
+def _guard_and_consume_writing_review_entitlement(
+    user_id: str,
+    request_id: str,
+    *,
+    endpoint: str = "task1_analyze",
+    note: str = "写作Task1 AI批改扣减1次",
+) -> None:
     strict = str(os.environ.get("PAYMENT_REQUIRE_WRITING_REVIEW", "0")).strip() in {"1", "true", "yes"}
     balance = get_user_entitlement_balance(str(user_id), "writing_ai_review")
     if balance is None:
@@ -258,8 +295,8 @@ def _guard_and_consume_writing_review_entitlement(user_id: str, request_id: str)
         amount=1,
         source_type="writing_analyze",
         source_id=str(request_id),
-        note="写作Task1 AI批改扣减1次",
-        metadata={"module": "writing", "endpoint": "task1_analyze"},
+        note=note,
+        metadata={"module": "writing", "endpoint": endpoint},
     )
     if not ok:
         raise HTTPException(status_code=402, detail="写作AI批改权益扣减失败，请稍后重试")
@@ -338,7 +375,12 @@ async def analyze_task1_writing(req: Task1WritingRequest, current_user: dict = D
     """分析Task 1 (Academic)写作内容"""
     if not req.text:
         raise HTTPException(status_code=400, detail="写作内容不能为空")
-    _guard_and_consume_writing_review_entitlement(str(current_user["id"]), str(uuid4()))
+    _guard_and_consume_writing_review_entitlement(
+        str(current_user["id"]),
+        str(uuid4()),
+        endpoint="task1_analyze",
+        note="写作Task1 AI批改扣减1次",
+    )
 
     # 简单的结构分析
     sentences = [s.strip() for s in req.text.split('.') if s.strip()]
@@ -473,6 +515,226 @@ async def analyze_task1_writing(req: Task1WritingRequest, current_user: dict = D
         improvement_tips=improvement_tips
     )
 
+
+@router.post("/task2/analyze", response_model=Task1Analysis)
+async def analyze_task2_writing(req: Task2WritingRequest, current_user: dict = Depends(get_current_user)):
+    """分析Task 2写作内容（独立链路）"""
+    if not req.text:
+        raise HTTPException(status_code=400, detail="写作内容不能为空")
+
+    _guard_and_consume_writing_review_entitlement(
+        str(current_user["id"]),
+        str(uuid4()),
+        endpoint="task2_analyze",
+        note="写作Task2 AI批改扣减1次",
+    )
+
+    text = str(req.text or "").strip()
+    text_lower = text.lower()
+    words = re.findall(r"[A-Za-z]+", text)
+    word_count = len(words)
+    paragraphs = [x.strip() for x in text.split("\n") if x.strip()]
+    sentences = [s.strip() for s in re.split(r"[.!?]+", text) if s.strip()]
+
+    grammar_errors, grammar_score = check_basic_grammar(text)
+
+    thesis_markers = ["i agree", "i disagree", "i believe", "in my opinion", "this essay will"]
+    logic_markers = ["firstly", "secondly", "however", "therefore", "moreover", "for example", "in conclusion"]
+    evidence_markers = ["for example", "for instance", "data", "study", "research", "evidence"]
+    counter_markers = ["although", "while", "opponents", "on the other hand", "admittedly"]
+
+    has_thesis = any(k in text_lower for k in thesis_markers)
+    logic_hits = sum(1 for k in logic_markers if k in text_lower)
+    evidence_hits = sum(1 for k in evidence_markers if k in text_lower)
+    counter_hits = sum(1 for k in counter_markers if k in text_lower)
+    unique_ratio = (len(set(w.lower() for w in words)) / word_count) if word_count > 0 else 0.0
+
+    structure_score = 5
+    if has_thesis:
+        structure_score += 2
+    if len(paragraphs) >= 4:
+        structure_score += 2
+    if any("in conclusion" in s.lower() or "to conclude" in s.lower() for s in sentences):
+        structure_score += 1
+    structure_score = max(0, min(9, structure_score))
+
+    content_score = 5
+    if word_count >= 250:
+        content_score += 1
+    if evidence_hits >= 2:
+        content_score += 2
+    if counter_hits >= 1:
+        content_score += 1
+    if req.keywords:
+        keyword_hits = sum(1 for k in req.keywords if str(k).lower() in text_lower)
+        if keyword_hits >= max(1, len(req.keywords) // 2):
+            content_score += 1
+    content_score = max(0, min(9, content_score))
+
+    vocabulary_score = 5
+    if unique_ratio >= 0.58:
+        vocabulary_score += 2
+    elif unique_ratio >= 0.50:
+        vocabulary_score += 1
+    if any(x in text_lower for x in ["significant", "sustainable", "substantial", "consequence", "policy"]):
+        vocabulary_score += 1
+    if any(x in text_lower for x in ["beneficial", "detrimental", "feasible", "equitable"]):
+        vocabulary_score += 1
+    vocabulary_score = max(0, min(9, vocabulary_score))
+
+    grammar_score = max(0, min(9, int(round(grammar_score))))
+    if len(sentences) >= 8:
+        grammar_score = min(9, grammar_score + 1)
+    if len(grammar_errors) >= 5:
+        grammar_score = max(0, grammar_score - 1)
+
+    total_score = (structure_score + content_score + vocabulary_score + grammar_score) * 2
+
+    feedback: List[Task1FeedbackItem] = []
+    for error in grammar_errors:
+        feedback.append(Task1FeedbackItem(**error))
+    if not has_thesis:
+        feedback.append(
+            Task1FeedbackItem(
+                category="structure",
+                severity="high",
+                message="立场表达不够明确",
+                suggestion="在开头用一句 thesis 明确你的观点（同意/不同意/折中）。",
+                position=0,
+            )
+        )
+    if len(paragraphs) < 4:
+        feedback.append(
+            Task1FeedbackItem(
+                category="structure",
+                severity="medium",
+                message="段落组织偏少",
+                suggestion="建议使用四段式：引言、主体1、主体2、结论。",
+                position=0,
+            )
+        )
+    if evidence_hits < 2:
+        feedback.append(
+            Task1FeedbackItem(
+                category="content",
+                severity="medium",
+                message="论据支撑偏弱",
+                suggestion="每个主体段补充具体例子或数据支撑论点。",
+                position=0,
+            )
+        )
+    if logic_hits < 3:
+        feedback.append(
+            Task1FeedbackItem(
+                category="content",
+                severity="medium",
+                message="逻辑衔接不足",
+                suggestion="增加逻辑连接词（however/therefore/moreover）并明确因果关系。",
+                position=0,
+            )
+        )
+
+    common_mistakes: List[str] = []
+    if not has_thesis:
+        common_mistakes.append("thesis_missing")
+    if evidence_hits < 2:
+        common_mistakes.append("weak_supporting_examples")
+    if len(paragraphs) < 4:
+        common_mistakes.append("paragraph_structure_weak")
+    if logic_hits < 3:
+        common_mistakes.append("cohesion_markers_insufficient")
+    if len(grammar_errors) >= 2:
+        common_mistakes.append("grammar_surface_errors")
+
+    improvement_tips = [
+        "先写 thesis 再展开两个主体段，每段只讲一个核心论点。",
+        "每个主体段使用“观点-解释-例子”三步结构。",
+        "结尾段避免新观点，聚焦总结与立场重申。",
+    ]
+
+    learning_tracker = get_learning_tracker()
+    exercise_data = {
+        "exercise_id": f"writing_task2_{current_user['id']}_{int(time.time())}",
+        "type": "writing_task2",
+        "difficulty": "medium",
+        "completed": True,
+        "correct": False,
+        "attempts": 1,
+        "time_spent": 0,
+        "feedback": len(feedback),
+        "score": total_score,
+        "metadata": {
+            "topic": req.topic,
+            "keyword_count": len(req.keywords or []),
+            "word_count": word_count,
+            "paragraph_count": len(paragraphs),
+        },
+    }
+    learning_tracker.track_exercise(current_user["id"], exercise_data)
+    learning_tracker.track_feature_usage(
+        current_user["id"],
+        "writing_task2_analysis",
+        {"topic": req.topic, "stance": req.stance or ""},
+    )
+
+    for item in feedback:
+        if item.severity not in {"medium", "high"}:
+            continue
+        normalized_error_type = normalize_writing_feedback_error_type(item.category)
+        save_mistake(
+            str(uuid4()),
+            str(current_user["id"]),
+            {
+                "module": "writing",
+                "question_id": f"task2_{int(time.time())}",
+                "question_type": "writing_task2",
+                "error_type": normalized_error_type,
+                "content": item.message,
+                "user_answer": "",
+                "correct_answer": "",
+                "explanation": item.suggestion,
+                "difficulty": "intermediate",
+                "tags": ["writing_task2", item.category, f"error_type:{normalized_error_type}", "taxonomy:v1"],
+            },
+        )
+
+    dim_scores = {
+        "structure": structure_score,
+        "content": content_score,
+        "vocabulary": vocabulary_score,
+        "grammar": grammar_score,
+    }
+    for dim, score in dim_scores.items():
+        if int(score) < 6:
+            normalized_error_type = normalize_writing_dim_error_type(dim)
+            save_mistake(
+                str(uuid4()),
+                str(current_user["id"]),
+                {
+                    "module": "writing",
+                    "question_id": f"task2_dim_{dim}_{int(time.time())}",
+                    "question_type": "writing_task2",
+                    "error_type": normalized_error_type,
+                    "content": f"Task 2 {dim} score below target.",
+                    "user_answer": str(score),
+                    "correct_answer": ">=6",
+                    "explanation": f"Current {dim} score is {score}. Follow feedback suggestions for improvement.",
+                    "difficulty": "intermediate",
+                    "tags": ["writing_task2", f"low_{dim}", f"error_type:{normalized_error_type}", "taxonomy:v1"],
+                },
+            )
+
+    return Task1Analysis(
+        structure_score=structure_score,
+        content_score=content_score,
+        vocabulary_score=vocabulary_score,
+        grammar_score=grammar_score,
+        total_score=total_score,
+        feedback=feedback,
+        common_mistakes=common_mistakes,
+        improvement_tips=improvement_tips,
+    )
+
 @router.post("/task1/practice")
 async def save_task1_practice(req: Task1WritingRequest, current_user: dict = Depends(get_current_user)):
     """保存Task 1 写作练习"""
@@ -514,6 +776,42 @@ async def save_task1_practice(req: Task1WritingRequest, current_user: dict = Dep
             "task_id": f"writing_task1_{current_user['id']}_{int(time.time())}",
             "created_at": time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime())
         }
+    }
+
+
+@router.post("/task2/practice")
+async def save_task2_practice(req: Task2WritingRequest, current_user: dict = Depends(get_current_user)):
+    """保存Task 2 写作练习"""
+    learning_tracker = get_learning_tracker()
+    exercise_data = {
+        "exercise_id": f"writing_task2_save_{current_user['id']}_{int(time.time())}",
+        "type": "writing_task2_save",
+        "difficulty": "medium",
+        "completed": True,
+        "correct": False,
+        "attempts": 1,
+        "time_spent": 0,
+        "feedback": 0,
+        "score": 0,
+        "metadata": {
+            "topic": req.topic,
+            "keywords": req.keywords,
+            "text_length": len(req.text),
+        },
+    }
+    learning_tracker.track_exercise(current_user["id"], exercise_data)
+    learning_tracker.track_feature_usage(
+        current_user["id"],
+        "writing_task2_save",
+        {"topic": req.topic},
+    )
+    return {
+        "id": f"writing_task2_{current_user['id']}_{int(time.time())}",
+        "message": "练习已保存",
+        "data": {
+            "task_id": f"writing_task2_{current_user['id']}_{int(time.time())}",
+            "created_at": time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime()),
+        },
     }
 
 @router.get("/task1/practices")
@@ -577,6 +875,66 @@ async def get_common_task1_vocabulary(category: Optional[str] = None, current_us
     return {
         "vocabulary": filtered_vocab
     }
+
+
+@router.get("/task2/common-structures")
+async def get_common_task2_structures(current_user: dict = Depends(get_current_user)):
+    learning_tracker = get_learning_tracker()
+    learning_tracker.track_feature_usage(
+        current_user["id"],
+        "writing_task2_structures",
+        {},
+    )
+    return {"structures": task2_structures}
+
+
+@router.post("/task2/brainstorm", response_model=Task2BrainstormResponse)
+async def brainstorm_task2(req: Task2BrainstormRequest, current_user: dict = Depends(get_current_user)):
+    topic = str(req.topic or "").strip() or "Task 2 Topic"
+    keywords = [str(x).strip() for x in (req.keywords or []) if str(x).strip()]
+    kw_text = ", ".join(keywords[:4]) if keywords else "cost, fairness, long-term impact"
+    thesis_options = [
+        f"I largely agree that {topic.lower()} should be prioritized because long-term social benefits outweigh short-term costs.",
+        f"While {topic.lower()} has merits, a balanced approach is more practical for different stakeholder groups.",
+        f"I disagree that {topic.lower()} is always effective; outcomes depend heavily on policy design and local context.",
+    ]
+    arguments_for = [
+        "可提升长期社会收益与系统效率。",
+        "能减少结构性不平等，扩大机会可及性。",
+        "在政策连续性下，边际收益会逐步放大。",
+    ]
+    arguments_against = [
+        "短期财政或执行成本较高。",
+        "若缺乏配套制度，可能产生实施偏差。",
+        "不同地区条件差异大，统一政策效果不稳。",
+    ]
+    example_angles = [
+        f"公共政策案例：围绕 {kw_text} 展开对比。",
+        "教育/就业场景中的群体差异案例。",
+        "短期收益与长期影响冲突的反例。",
+    ]
+    paragraph_outline = [
+        "引言：改写题目并给出明确立场。",
+        "主体段1：主论点 + 原因解释 + 具体例子。",
+        "主体段2：反方观点或限制条件 + 反驳/让步。",
+        "结论：重申立场并给出可执行建议。",
+    ]
+    conclusion_frame = "In conclusion, although there are valid concerns, a carefully designed approach can maximize benefits while minimizing trade-offs."
+    learning_tracker = get_learning_tracker()
+    learning_tracker.track_feature_usage(
+        current_user["id"],
+        "writing_task2_brainstorm",
+        {"topic": topic, "keyword_count": len(keywords)},
+    )
+    return Task2BrainstormResponse(
+        topic=topic,
+        thesis_options=thesis_options,
+        arguments_for=arguments_for,
+        arguments_against=arguments_against,
+        example_angles=example_angles,
+        paragraph_outline=paragraph_outline,
+        conclusion_frame=conclusion_frame,
+    )
 
 
 class PeerSubmissionCreateRequest(BaseModel):

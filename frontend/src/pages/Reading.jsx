@@ -1,28 +1,24 @@
-import { useEffect, useState } from 'react';
-import { NavLink, useNavigate } from 'react-router-dom';
+import { useEffect, useRef, useState } from 'react';
+import { useLocation, useNavigate } from 'react-router-dom';
 import {
+  autoCollectVocabulary,
   analyzeReadingLongSentences,
   analyzeReadingPassage,
   detectReadingSynonyms,
+  generateContextReplay,
   generateReadingQuiz,
+  generateReadingStrategyDrill,
   getReadingQuizVersion,
+  submitReadingStrategyDrill,
   submitReadingQuiz,
 } from '../utils/api';
+import { PageSection, ToolbarRow } from '../components/layout/DesktopUI';
+import SidebarMenu from '../components/layout/SidebarMenu';
 
+import TopNav from "../components/layout/TopNav";
 function Reading() {
   const navigate = useNavigate();
-  const navItems = [
-    { to: '/', label: '🏠 首页' },
-    { to: '/chat', label: '🤖 智能对话' },
-    { to: '/listening', label: '🎧 听力练习' },
-    { to: '/reading', label: '📚 阅读练习' },
-    { to: '/writing', label: '📝 写作练习' },
-    { to: '/speaking', label: '💬 口语练习' },
-    { to: '/vocabulary', label: '📋 词汇学习' },
-    { to: '/mistakes', label: '🔖 错题本' },
-    { to: '/reports', label: '📊 学习报告' },
-    { to: '/plans', label: '🎯 个性化计划' },
-  ];
+  const location = useLocation();
 
   const [text, setText] = useState('');
   const [analysis, setAnalysis] = useState(null);
@@ -33,7 +29,16 @@ function Reading() {
   const [quiz, setQuiz] = useState(null);
   const [quizAnswers, setQuizAnswers] = useState({});
   const [quizResult, setQuizResult] = useState(null);
+  const [strategyConfig, setStrategyConfig] = useState({ mode: 'skim', count: 3, difficulty: '' });
+  const [strategySession, setStrategySession] = useState(null);
+  const [strategyAnswers, setStrategyAnswers] = useState({});
+  const [strategySpent, setStrategySpent] = useState({});
+  const [strategyStartAt, setStrategyStartAt] = useState({});
+  const [strategyResult, setStrategyResult] = useState(null);
+  const [autoCollectSummary, setAutoCollectSummary] = useState(null);
+  const [replayNotice, setReplayNotice] = useState('');
   const [error, setError] = useState('');
+  const quizCardRef = useRef(null);
 
   const runAll = async () => {
     if (!text.trim()) return;
@@ -78,6 +83,7 @@ function Reading() {
   const handleSubmitQuiz = async () => {
     if (!quiz?.quiz_id) return;
     setError('');
+    setAutoCollectSummary(null);
     try {
       const answers = (quiz.questions || []).map((q) => ({
         question_id: q.id,
@@ -85,8 +91,77 @@ function Reading() {
       }));
       const result = await submitReadingQuiz(quiz.quiz_id, answers);
       setQuizResult(result || null);
+      const wrongDetails = (result?.details || []).filter((d) => !d.is_correct);
+      if (wrongDetails.length > 0) {
+        const promptById = new Map((quiz.questions || []).map((q) => [q.id, q.prompt]));
+        const corpus = wrongDetails
+          .map((d) => {
+            const prompt = promptById.get(d.question_id) || '';
+            return `${prompt} Expected: ${d.expected_answer || ''}`;
+          })
+          .join('\n');
+        const collectRes = await autoCollectVocabulary(corpus, 'reading', 'quiz_wrong', 20);
+        setAutoCollectSummary(collectRes || null);
+        const wordIds = Array.isArray(collectRes?.word_ids) ? collectRes.word_ids.filter(Boolean) : [];
+        if (wordIds.length > 0) {
+          const replay = await generateContextReplay({
+            count: Math.min(8, wordIds.length),
+            sourceModule: 'reading',
+            topic: 'quiz_wrong',
+            mode: 'cloze',
+            wordIds,
+          });
+          if (replay?.session_id) {
+            localStorage.setItem('vocab_context_replay_prefill', JSON.stringify(replay));
+          }
+        }
+      }
     } catch (e) {
       setError(typeof e === 'string' ? e : '提交阅读测验失败');
+    }
+  };
+
+  const handleGenerateStrategy = async () => {
+    setError('');
+    setStrategyResult(null);
+    try {
+      const data = await generateReadingStrategyDrill({
+        mode: strategyConfig.mode || 'skim',
+        count: Number(strategyConfig.count) || 3,
+        difficulty: strategyConfig.difficulty || null,
+      });
+      setStrategySession(data || null);
+      setStrategyAnswers({});
+      setStrategySpent({});
+      const now = Date.now();
+      const nextStartAt = {};
+      (data?.questions || []).forEach((q) => {
+        nextStartAt[q.id] = now;
+      });
+      setStrategyStartAt(nextStartAt);
+    } catch (e) {
+      setError(typeof e === 'string' ? e : '生成阅读策略训练失败');
+    }
+  };
+
+  const handleSubmitStrategy = async () => {
+    if (!strategySession?.session_id) return;
+    setError('');
+    try {
+      const now = Date.now();
+      const answers = (strategySession.questions || []).map((q) => {
+        const stored = Number(strategySpent[q.id] || 0);
+        const fallback = Math.max(1, Math.round((now - Number(strategyStartAt[q.id] || now)) / 1000));
+        return {
+          question_id: q.id,
+          answer: strategyAnswers[q.id] || '',
+          spent_seconds: stored > 0 ? stored : fallback,
+        };
+      });
+      const result = await submitReadingStrategyDrill(strategySession.session_id, answers);
+      setStrategyResult(result || null);
+    } catch (e) {
+      setError(typeof e === 'string' ? e : '提交阅读策略训练失败');
     }
   };
 
@@ -94,32 +169,43 @@ function Reading() {
     loadQuizVersion();
   }, []);
 
+  useEffect(() => {
+    const params = new URLSearchParams(location.search || '');
+    if (params.get('replay') !== '1') return;
+    const questionId = params.get('questionId') || '';
+    setReplayNotice(questionId ? `来自错题重练：题目 ${questionId}` : '来自错题重练：请优先完成一次阅读测验');
+    const timer = window.setTimeout(() => {
+      quizCardRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }, 80);
+    return () => window.clearTimeout(timer);
+  }, [location.search]);
+
   return (
-    <div className="home-page">
-      <header className="top-nav">
-        <div className="nav-content">
-          <div className="nav-left"><h1>📚 阅读练习</h1></div>
-        </div>
-      </header>
+    <div className="home-page web-dashboard reading-page">
+      <TopNav />
       <div className="main-layout">
         <div className="sidebar">
-          <div className="sidebar-header"><h2>🎓 IELTS Agent</h2></div>
-          <nav className="sidebar-nav">
-            <ul>
-              {navItems.map((item) => (
-                <li key={item.to}>
-                  <NavLink to={item.to} end={item.to === '/'} className={({ isActive }) => `sidebar-nav-link${isActive ? ' active' : ''}`}>
-                    {item.label}
-                  </NavLink>
-                </li>
-              ))}
-            </ul>
-          </nav>
+          <SidebarMenu />
         </div>
 
         <div className="content-area content-shell">
-          <div className="card" style={{ marginBottom: 16 }}>
-            <h3>阅读文本输入</h3>
+          <div className="web-page-head">
+            <div>
+              <h2>阅读练习</h2>
+              <p>阅读分析、策略训练与测验结果在同一页面闭环。</p>
+            </div>
+            <div className="web-page-head-actions">
+              <button onClick={loadQuizVersion}>刷新题库</button>
+            </div>
+          </div>
+          {replayNotice && (
+            <div className="card" style={{ marginBottom: 16, borderColor: '#7bb5ff', background: '#f3f8ff' }}>
+              <h3>错题重练指引</h3>
+              <p>{replayNotice}</p>
+              <button onClick={() => navigate('/mistakes?module=reading&questionType=reading_quiz')}>返回错题本</button>
+            </div>
+          )}
+          <PageSection title="阅读文本输入">
             <textarea
               value={text}
               onChange={(e) => setText(e.target.value)}
@@ -127,10 +213,10 @@ function Reading() {
               rows={10}
               style={{ width: '100%' }}
             />
-            <div style={{ marginTop: 8 }}>
+            <ToolbarRow>
               <button onClick={runAll} disabled={!text.trim()}>一键分析</button>
-            </div>
-          </div>
+            </ToolbarRow>
+          </PageSection>
 
           {analysis && (
             <div className="card" style={{ marginBottom: 16 }}>
@@ -170,7 +256,7 @@ function Reading() {
             {error && <p style={{ color: 'red' }}>{error}</p>}
           </div>
 
-          <div className="card" style={{ marginTop: 16 }}>
+          <div className="card" style={{ marginTop: 16 }} ref={quizCardRef}>
             <h3>阅读测验</h3>
             <p style={{ fontSize: 12, color: '#666' }}>
               题库版本: {quizVersion?.version || '-'} ({quizVersion?.source || '-'})
@@ -269,6 +355,130 @@ function Reading() {
                 >
                   查看本次阅读错题
                 </button>
+                {autoCollectSummary && (
+                  <div style={{ marginBottom: 10 }}>
+                    <p>
+                      已自动收录词汇：{autoCollectSummary.imported}，跳过已存在：{autoCollectSummary.skipped_existing}
+                    </p>
+                    <button onClick={() => navigate('/vocabulary')}>
+                      去词汇页直接开练语境复现
+                    </button>
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+
+          <div className="card" style={{ marginTop: 16 }}>
+            <h3>阅读策略训练（略读/扫读）</h3>
+            <p style={{ fontSize: 12, color: '#666' }}>skim：主旨提炼 | scan：定位信息 | mixed：组合训练</p>
+            <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 12, flexWrap: 'wrap' }}>
+              <label>
+                模式
+                <select
+                  value={strategyConfig.mode}
+                  onChange={(e) => setStrategyConfig((prev) => ({ ...prev, mode: e.target.value }))}
+                  style={{ marginLeft: 6 }}
+                >
+                  <option value="skim">skim</option>
+                  <option value="scan">scan</option>
+                  <option value="mixed">mixed</option>
+                </select>
+              </label>
+              <label>
+                题数
+                <input
+                  type="number"
+                  min={1}
+                  max={10}
+                  value={strategyConfig.count}
+                  onChange={(e) => setStrategyConfig((prev) => ({ ...prev, count: e.target.value }))}
+                  style={{ marginLeft: 6, width: 80 }}
+                />
+              </label>
+              <label>
+                难度
+                <select
+                  value={strategyConfig.difficulty}
+                  onChange={(e) => setStrategyConfig((prev) => ({ ...prev, difficulty: e.target.value }))}
+                  style={{ marginLeft: 6 }}
+                >
+                  <option value="">全部</option>
+                  <option value="basic">basic</option>
+                  <option value="intermediate">intermediate</option>
+                  <option value="advanced">advanced</option>
+                </select>
+              </label>
+              <button onClick={handleGenerateStrategy}>生成策略训练</button>
+            </div>
+
+            {strategySession?.questions?.length > 0 && (
+              <div>
+                {(strategySession.questions || []).map((q, idx) => (
+                  <div key={q.id} style={{ border: '1px solid #eee', borderRadius: 8, padding: 10, marginBottom: 10 }}>
+                    <p style={{ marginBottom: 6 }}>
+                      {idx + 1}. [{q.mode}] {q.title} | 限时 {q.time_limit_seconds}s
+                    </p>
+                    <p style={{ marginBottom: 8 }}>{q.prompt}</p>
+                    <p style={{ fontSize: 12, color: '#666', marginBottom: 8 }}>{q.passage}</p>
+                    {q.hint && <p style={{ fontSize: 12, color: '#666' }}>提示：{q.hint}</p>}
+                    <input
+                      type="text"
+                      value={strategyAnswers[q.id] || ''}
+                      onChange={(e) => setStrategyAnswers((prev) => ({ ...prev, [q.id]: e.target.value }))}
+                      placeholder="输入你的答案"
+                      style={{ width: '100%', marginTop: 6, marginBottom: 6 }}
+                    />
+                    <label style={{ fontSize: 12 }}>
+                      用时(秒)
+                      <input
+                        type="number"
+                        min={0}
+                        value={strategySpent[q.id] || ''}
+                        onChange={(e) => setStrategySpent((prev) => ({ ...prev, [q.id]: e.target.value }))}
+                        placeholder="不填则自动按页面停留时间估算"
+                        style={{ marginLeft: 6, width: 130 }}
+                      />
+                    </label>
+                  </div>
+                ))}
+                <button onClick={handleSubmitStrategy}>提交策略训练</button>
+              </div>
+            )}
+
+            {strategyResult && (
+              <div style={{ marginTop: 12 }}>
+                <h4>策略训练结果</h4>
+                <p>
+                  正确率: {strategyResult.correct}/{strategyResult.total}
+                  {' '}({Math.round((strategyResult.accuracy || 0) * 100)}%) |
+                  限时完成率：{Math.round((strategyResult.on_time_rate || 0) * 100)}%
+                </p>
+                <p>建议：{strategyResult.recommended_focus}</p>
+                <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                  <thead>
+                    <tr>
+                      <th align="left">question_id</th>
+                      <th align="left">模式</th>
+                      <th align="left">结果</th>
+                      <th align="left">限时</th>
+                      <th align="left">得分</th>
+                      <th align="left">答案</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {(strategyResult.details || []).map((d) => (
+                      <tr key={d.question_id}>
+                        <td>{d.question_id}</td>
+                        <td>{d.mode}</td>
+                        <td>{d.is_correct ? '✅' : '❌'}</td>
+                        <td>{d.spent_seconds}/{d.time_limit_seconds}s {d.is_on_time ? '✅' : '⏰'}</td>
+                        <td>{d.score}</td>
+                        <td>{d.user_answer || '-'}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
               </div>
             )}
           </div>

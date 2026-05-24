@@ -3,6 +3,7 @@ import time
 import uuid
 import sys
 import types
+from datetime import datetime, timedelta, time as dtime
 
 import pytest
 from starlette.responses import Response
@@ -68,7 +69,44 @@ if "agent_core" not in sys.modules:
             "highlights": [],
         }
     )
+    agent_module_stub = types.ModuleType("agent_core.agent")
+    agent_module_stub.ielts_agent = types.SimpleNamespace(
+        route_and_execute=lambda query, session_id, user_context=None: {
+            "agent": "common_agent",
+            "response": "stub response",
+            "routing": {"reason": "stub"},
+            "rag": {},
+        }
+    )
+    agent_module_stub.translation_agent = types.SimpleNamespace(
+        generate_translation_question=lambda difficulty="medium": {
+            "chinese_sentence": "测试句子",
+            "difficulty": difficulty,
+            "topic": "General",
+        },
+        check_translation=lambda chinese_sentence, user_translation: {
+            "accuracy": 6.0,
+            "fluency": 6.0,
+            "grammar": 6.0,
+            "vocabulary": 6.0,
+            "overall": 6.0,
+            "evaluation": "stub",
+            "suggestions": [],
+            "correct_translation": "stub",
+        },
+    )
+    agent_module_stub.deep_search_agent = types.SimpleNamespace(
+        max_iterations=3,
+        deep_search=lambda query: {
+            "original_query": query,
+            "iterations": [],
+            "final_summary": "stub",
+            "sources": [],
+            "citations": [],
+        },
+    )
     sys.modules["agent_core"] = agent_core_stub
+    sys.modules["agent_core.agent"] = agent_module_stub
 
 from backend import db as db_module
 from backend.routers import auth as auth_router
@@ -89,6 +127,8 @@ from backend.routers import study_group as study_group_router
 from backend.routers import payment as payment_router
 from backend.routers import admin as admin_router
 from backend.routers import campaign as campaign_router
+from backend.routers import chat as chat_router
+from backend.routers import reminder as reminder_router
 from backend.services import reminder_service
 from backend.tasks import reminder_tasks
 from backend.tasks import intelligent_reminder_tasks
@@ -221,6 +261,72 @@ def test_listening_library_version_endpoint(isolated_db):
     assert info.source in {"file", "builtin"}
 
 
+def test_listening_tts_render_endpoint(isolated_db, monkeypatch):
+    class _StubTTS:
+        @staticmethod
+        def health():
+            return {"backend": "stub", "supertonic_available": True}
+
+        @staticmethod
+        def synthesize(text, lang="en", voice="M1", speed=1.0):
+            assert "test" in text.lower()
+            return {
+                "audio_url": "/media/tts/stub.wav",
+                "cached": False,
+                "backend": "stub",
+                "duration": 1.2,
+            }
+
+    monkeypatch.setattr(listening_router, "_tts_service", _StubTTS())
+    out = asyncio.run(
+        listening_router.render_listening_tts(
+            listening_router.ListeningTTSRenderRequest(
+                text="This is a test sentence.",
+                lang="en",
+                voice="M1",
+                speed=1.0,
+            ),
+            current_user={"id": "u1", "username": "u1"},
+        )
+    )
+    assert out.audio_url.endswith("stub.wav")
+    assert out.backend == "stub"
+
+
+def test_listening_tts_material_generates_library_item(isolated_db, tmp_path, monkeypatch):
+    generated_path = tmp_path / "generated_listening.json"
+    monkeypatch.setenv("LISTENING_GENERATED_LIBRARY_PATH", str(generated_path))
+
+    class _StubTTS:
+        @staticmethod
+        def synthesize(text, lang="en", voice="M1", speed=1.0):
+            return {
+                "audio_url": "/media/tts/material.wav",
+                "cached": False,
+                "backend": "stub",
+                "duration": 2.5,
+            }
+
+    monkeypatch.setattr(listening_router, "_tts_service", _StubTTS())
+    out = asyncio.run(
+        listening_router.generate_listening_material(
+            listening_router.ListeningMaterialGenerateRequest(
+                title="Generated listening material",
+                transcript="The lecture starts at nine thirty in Room B.",
+                difficulty="easy",
+                lang="en",
+                voice="M1",
+                speed=1.0,
+            ),
+            current_user={"id": "u1", "username": "u1"},
+        )
+    )
+    assert out.audio.id.startswith("tts_")
+    assert out.audio.url == "/media/tts/material.wav"
+    assert listening_router.AUDIO_LIBRARY[out.audio.id]["transcript"].startswith("The lecture")
+    assert generated_path.exists()
+
+
 def test_listening_library_fallback_when_file_missing(isolated_db, monkeypatch):
     monkeypatch.setenv("LISTENING_AUDIO_LIBRARY_PATH", "/tmp/non-existent-listening-library.json")
     listening_router._load_audio_library()
@@ -282,6 +388,57 @@ def test_listening_question_bank_fallback_when_file_missing(isolated_db, monkeyp
     listening_router._load_listening_question_bank()
 
 
+def test_listening_reading_bank_scale_and_type_distribution(isolated_db):
+    listening_router._load_listening_question_bank()
+    reading_router._load_reading_question_bank()
+
+    assert len(listening_router.LISTENING_QUESTION_BANK) >= 15
+    listening_types = {str(q.get("question_type") or "") for q in listening_router.LISTENING_QUESTION_BANK}
+    assert {"multiple_choice", "form_fill", "note_completion", "map_labeling", "matching"}.issubset(listening_types)
+
+    assert len(reading_router.READING_QUESTION_BANK) >= 15
+    reading_types = {str(q.get("question_type") or "") for q in reading_router.READING_QUESTION_BANK}
+    assert {"tfng", "heading_matching", "attitude", "inference", "matching", "summary_completion"}.issubset(reading_types)
+
+
+def test_listening_intensive_generate_and_submit(isolated_db):
+    listening_router.LISTENING_INTENSIVE_RUNTIME.clear()
+    listening_router._load_listening_question_bank()
+
+    generated = asyncio.run(
+        listening_router.generate_listening_intensive(
+            listening_router.ListeningIntensiveGenerateRequest(
+                count=3,
+                mode="dictation",
+            ),
+            current_user={"id": "u1", "username": "u1"},
+        )
+    )
+    assert generated.session_id
+    assert generated.mode == "dictation"
+    assert len(generated.questions) >= 1
+
+    wrong_answers = [
+        listening_router.ListeningIntensiveAnswer(question_id=q.id, answer="wrong")
+        for q in generated.questions
+    ]
+    submitted = asyncio.run(
+        listening_router.submit_listening_intensive(
+            listening_router.ListeningIntensiveSubmitRequest(
+                session_id=generated.session_id,
+                answers=wrong_answers,
+            ),
+            current_user={"id": "u1", "username": "u1"},
+        )
+    )
+    assert submitted.total == len(generated.questions)
+    assert submitted.correct == 0
+    assert submitted.recommended_speed in {0.8, 1.0, 1.25}
+
+    mistakes = db_module.get_user_mistakes("u1", module="listening", limit=30, question_type="listening_intensive")
+    assert len(mistakes) >= len(generated.questions)
+
+
 def test_reading_quiz_generate_submit_and_mistake_sink(isolated_db):
     reading_router.READING_QUIZ_RUNTIME.clear()
     reading_router._load_reading_question_bank()
@@ -335,6 +492,45 @@ def test_reading_question_bank_fallback_when_file_missing(isolated_db, monkeypat
     reading_router._load_reading_question_bank()
 
 
+def test_reading_strategy_drill_generate_and_submit(isolated_db):
+    reading_router.READING_STRATEGY_RUNTIME.clear()
+
+    generated = asyncio.run(
+        reading_router.generate_reading_strategy_drill(
+            reading_router.ReadingStrategyGenerateRequest(
+                mode="mixed",
+                count=3,
+            ),
+            current_user={"id": "u1", "username": "u1"},
+        )
+    )
+    assert generated.session_id
+    assert len(generated.questions) >= 1
+    assert all(int(q.time_limit_seconds) > 0 for q in generated.questions)
+
+    wrong_answers = [
+        reading_router.ReadingStrategyAnswer(question_id=q.id, answer="wrong answer", spent_seconds=q.time_limit_seconds + 10)
+        for q in generated.questions
+    ]
+    submitted = asyncio.run(
+        reading_router.submit_reading_strategy_drill(
+            reading_router.ReadingStrategySubmitRequest(
+                session_id=generated.session_id,
+                answers=wrong_answers,
+            ),
+            current_user={"id": "u1", "username": "u1"},
+        )
+    )
+    assert submitted.total == len(generated.questions)
+    assert submitted.correct == 0
+    assert submitted.on_time_rate == 0.0
+    assert isinstance(submitted.recommended_focus, str)
+    assert submitted.recommended_focus
+
+    mistakes = db_module.get_user_mistakes("u1", module="reading", limit=30, question_type="reading_strategy")
+    assert len(mistakes) >= len(generated.questions)
+
+
 def test_speaking_session_user_isolation(isolated_db):
     created_u1 = asyncio.run(
         speaking_router.create_session(current_user={"id": "u1", "username": "u1"})
@@ -377,6 +573,7 @@ def test_speaking_turn_and_summary_flow(isolated_db):
     )
     assert started.ok is True
     assert started.partIndex == 1
+    assert started.targetAnswerSeconds > 0
 
     turn = asyncio.run(
         speaking_router.submit_turn(
@@ -385,6 +582,7 @@ def test_speaking_turn_and_summary_flow(isolated_db):
                 userText="I study computer science because I enjoy solving real problems in teams.",
                 mode="coach",
                 partIndex=1,
+                spentSeconds=40,
             ),
             current_user={"id": "u1", "username": "u1"},
         )
@@ -395,6 +593,9 @@ def test_speaking_turn_and_summary_flow(isolated_db):
     assert turn.followUpQuestion
     assert isinstance(turn.feedback, dict)
     assert "content" in turn.feedback
+    assert turn.spentSeconds >= 1
+    assert turn.targetSeconds >= 1
+    assert isinstance(turn.pacingFeedback, str)
 
     summary = asyncio.run(
         speaking_router.summarize_session(
@@ -406,6 +607,51 @@ def test_speaking_turn_and_summary_flow(isolated_db):
     assert summary.transcriptWordCount >= 1
     assert len(summary.highlights) >= 1
     assert len(summary.drills) >= 1
+    assert isinstance(summary.partStats, list)
+    assert isinstance(summary.timingSummary, dict)
+    assert isinstance(summary.bandHints, dict)
+
+
+def test_speaking_turn_with_audio_urls(isolated_db, monkeypatch):
+    class _StubTTS:
+        @staticmethod
+        def synthesize(text, lang="en", voice="F1", speed=1.0):
+            return {"audio_url": f"/media/tts/{hash(text) % 1000}.wav"}
+
+    monkeypatch.setattr(speaking_router, "_tts_service", _StubTTS())
+    created = asyncio.run(
+        speaking_router.create_session(current_user={"id": "u1", "username": "u1"})
+    )
+    sid = created.sessionId
+
+    started = asyncio.run(
+        speaking_router.start_part(
+            sid,
+            1,
+            with_audio=True,
+            voice="F1",
+            lang="en",
+            current_user={"id": "u1", "username": "u1"},
+        )
+    )
+    assert str(started.promptAudioUrl or "").startswith("/media/tts/")
+
+    turn = asyncio.run(
+        speaking_router.submit_turn(
+            sid,
+            speaking_router.SpeakingTurnRequest(
+                userText="I study engineering because I enjoy solving practical problems.",
+                mode="coach",
+                partIndex=1,
+                withAudio=True,
+                voice="F1",
+                lang="en",
+            ),
+            current_user={"id": "u1", "username": "u1"},
+        )
+    )
+    assert str(turn.examinerPromptAudioUrl or "").startswith("/media/tts/")
+    assert str(turn.followUpAudioUrl or "").startswith("/media/tts/")
 
 
 def test_history_sessions_user_isolation(isolated_db):
@@ -520,6 +766,51 @@ def test_writing_analysis_sinks_medium_high_feedback_to_mistakes(isolated_db):
     }
     assert all((m.get("error_type") in allowed_writing_error_types) for m in mistakes)
     assert all("taxonomy:v1" in (m.get("tags") or []) for m in mistakes)
+
+
+def test_writing_task2_analysis_and_brainstorm(isolated_db):
+    req = writing_router.Task2WritingRequest(
+        text=(
+            "I agree that higher education should be more affordable, but full free access "
+            "requires careful policy design. Firstly, lower tuition can widen access for "
+            "students from low-income families. For example, public funding pilots in some "
+            "cities improved enrolment. However, governments should pair subsidies with quality "
+            "controls to avoid overcrowding and declining standards. In conclusion, a balanced "
+            "model can combine fairness with long-term sustainability."
+        ),
+        topic="Should university education be free for everyone?",
+        keywords=["education", "policy", "equity", "funding"],
+        stance="balanced",
+    )
+    analysis = asyncio.run(
+        writing_router.analyze_task2_writing(
+            req,
+            current_user={"id": "u1", "username": "u1"},
+        )
+    )
+    assert analysis.total_score >= 0
+    assert analysis.structure_score >= 0
+    assert analysis.content_score >= 0
+    assert analysis.vocabulary_score >= 0
+    assert analysis.grammar_score >= 0
+
+    mistakes = db_module.get_user_mistakes("u1", module="writing", limit=80, question_type="writing_task2")
+    assert len(mistakes) >= 1
+    assert all("taxonomy:v1" in (m.get("tags") or []) for m in mistakes)
+
+    brainstorm = asyncio.run(
+        writing_router.brainstorm_task2(
+            writing_router.Task2BrainstormRequest(
+                topic="Should university education be free for everyone?",
+                keywords=["funding", "equity"],
+                stance="balanced",
+            ),
+            current_user={"id": "u1", "username": "u1"},
+        )
+    )
+    assert brainstorm.topic
+    assert len(brainstorm.thesis_options) >= 1
+    assert len(brainstorm.paragraph_outline) >= 1
 
 
 def test_writing_peer_review_flow(isolated_db):
@@ -1321,6 +1612,264 @@ def test_reminder_retry_backoff_and_failover(isolated_db, monkeypatch):
     assert r2["status"] == "failed"
 
 
+def test_reminder_preferences_strategy_config_roundtrip(isolated_db):
+    updated = asyncio.run(
+        reminder_router.update_preferences(
+            reminder_router.ReminderPreferences(
+                enabled=True,
+                channels=["app"],
+                preferred_times=["09:30"],
+                quiet_hours=reminder_router.QuietHours(start="23:00", end="07:00"),
+                strategy_config={
+                    "frequency_window_hours": 4,
+                    "max_reminders_per_window": 3,
+                    "preferred_tolerance_minutes": 120,
+                    "merge_similar_enabled": False,
+                    "high_priority_bypass_cap": True,
+                },
+            ),
+            current_user={"id": "u1", "username": "u1"},
+        )
+    )
+    assert updated.enabled is True
+    assert updated.preferred_times == ["09:30"]
+    assert int(updated.strategy_config.get("frequency_window_hours") or 0) == 4
+    assert int(updated.strategy_config.get("max_reminders_per_window") or 0) == 3
+    assert bool(updated.strategy_config.get("merge_similar_enabled")) is False
+
+    fetched = asyncio.run(
+        reminder_router.get_preferences(
+            current_user={"id": "u1", "username": "u1"},
+        )
+    )
+    assert int(fetched.strategy_config.get("preferred_tolerance_minutes") or 0) == 120
+    assert bool(fetched.strategy_config.get("high_priority_bypass_cap")) is True
+
+
+def test_reminder_preference_presets_history_and_rollback(isolated_db):
+    presets = asyncio.run(
+        reminder_router.get_preference_presets(
+            current_user={"id": "u1", "username": "u1"},
+        )
+    )
+    assert len(presets) >= 2
+    assert any(p.key == "balanced" for p in presets)
+
+    applied = asyncio.run(
+        reminder_router.apply_preference_preset(
+            reminder_router.ReminderPreferencePresetApplyRequest(preset_key="high_focus"),
+            current_user={"id": "u1", "username": "u1"},
+        )
+    )
+    assert int(applied.strategy_config.get("frequency_window_hours") or 0) == 2
+    assert int(applied.strategy_config.get("max_reminders_per_window") or 0) == 3
+
+    updated = asyncio.run(
+        reminder_router.update_preferences(
+            reminder_router.ReminderPreferences(
+                enabled=True,
+                channels=["app", "email"],
+                preferred_times=["09:00", "21:30"],
+                quiet_hours=reminder_router.QuietHours(start="23:30", end="07:30"),
+                strategy_config={
+                    "frequency_window_hours": 5,
+                    "max_reminders_per_window": 1,
+                    "preferred_tolerance_minutes": 120,
+                    "merge_similar_enabled": True,
+                    "high_priority_bypass_cap": False,
+                },
+            ),
+            current_user={"id": "u1", "username": "u1"},
+        )
+    )
+    assert int(updated.strategy_config.get("frequency_window_hours") or 0) == 5
+
+    history = asyncio.run(
+        reminder_router.get_preferences_history(
+            limit=20,
+            current_user={"id": "u1", "username": "u1"},
+        )
+    )
+    assert len(history) >= 2
+    manual_entry = next((x for x in history if x.source == "manual_update"), None)
+    assert manual_entry is not None
+    assert int((manual_entry.before or {}).get("strategy_config", {}).get("frequency_window_hours") or 0) == 2
+    assert int((manual_entry.after or {}).get("strategy_config", {}).get("frequency_window_hours") or 0) == 5
+
+    rolled_back = asyncio.run(
+        reminder_router.rollback_preferences(
+            reminder_router.ReminderPreferenceRollbackRequest(history_id=manual_entry.id),
+            current_user={"id": "u1", "username": "u1"},
+        )
+    )
+    assert int(rolled_back.strategy_config.get("frequency_window_hours") or 0) == 2
+    assert int(rolled_back.strategy_config.get("max_reminders_per_window") or 0) == 3
+
+
+def test_reminder_analytics_and_audit_logs(isolated_db):
+    now = int(time.time())
+    r1 = asyncio.run(
+        reminder_router.create_reminder_endpoint(
+            reminder_router.ReminderCreate(
+                type="plan_execution",
+                title="提醒A",
+                content="内容A",
+                scheduled_at=now - 60,
+                channel="app",
+                metadata={"source": "plan:test:today_pending"},
+            ),
+            current_user={"id": "u1", "username": "u1"},
+        )
+    )
+    r2 = asyncio.run(
+        reminder_router.create_reminder_endpoint(
+            reminder_router.ReminderCreate(
+                type="review",
+                title="提醒B",
+                content="内容B",
+                scheduled_at=now - 30,
+                channel="app",
+                metadata={"source": "mistake_due_daily"},
+            ),
+            current_user={"id": "u1", "username": "u1"},
+        )
+    )
+
+    asyncio.run(
+        reminder_router.update_status(
+            r1.id,
+            reminder_router.ReminderStatusUpdate(status="sent"),
+            current_user={"id": "u1", "username": "u1"},
+        )
+    )
+    asyncio.run(
+        reminder_router.update_status(
+            r2.id,
+            reminder_router.ReminderStatusUpdate(status="failed"),
+            current_user={"id": "u1", "username": "u1"},
+        )
+    )
+
+    analytics = asyncio.run(
+        reminder_router.get_reminder_analytics_summary(
+            days=14,
+            current_user={"id": "u1", "username": "u1"},
+        )
+    )
+    assert analytics.total >= 2
+    assert any(x.key == "sent" and x.count >= 1 for x in analytics.status_counts)
+    assert any(x.key == "failed" and x.count >= 1 for x in analytics.status_counts)
+    assert any(x.key == "plan:test:today_pending" for x in analytics.source_counts)
+    assert len(analytics.trend) >= 1
+
+    logs = asyncio.run(
+        reminder_router.get_reminder_audit_logs(
+            limit=20,
+            action=None,
+            current_user={"id": "u1", "username": "u1"},
+        )
+    )
+    assert len(logs) >= 4
+    actions = {x.action for x in logs}
+    assert "create" in actions
+    assert "status_update" in actions
+
+
+def test_reminder_batch_status_and_delete(isolated_db):
+    now = int(time.time())
+    r1 = asyncio.run(
+        reminder_router.create_reminder_endpoint(
+            reminder_router.ReminderCreate(
+                type="plan_execution",
+                title="批量提醒A",
+                content="内容A",
+                scheduled_at=now + 60,
+                channel="app",
+                metadata={"source": "batch_test"},
+            ),
+            current_user={"id": "u1", "username": "u1"},
+        )
+    )
+    r2 = asyncio.run(
+        reminder_router.create_reminder_endpoint(
+            reminder_router.ReminderCreate(
+                type="review",
+                title="批量提醒B",
+                content="内容B",
+                scheduled_at=now + 120,
+                channel="app",
+                metadata={"source": "batch_test"},
+            ),
+            current_user={"id": "u1", "username": "u1"},
+        )
+    )
+    r3 = asyncio.run(
+        reminder_router.create_reminder_endpoint(
+            reminder_router.ReminderCreate(
+                type="review",
+                title="其他用户提醒",
+                content="内容C",
+                scheduled_at=now + 180,
+                channel="app",
+                metadata={"source": "batch_test_u2"},
+            ),
+            current_user={"id": "u2", "username": "u2"},
+        )
+    )
+
+    status_result = asyncio.run(
+        reminder_router.batch_update_status(
+            reminder_router.ReminderBatchStatusUpdateRequest(
+                reminder_ids=[r1.id, r2.id, r3.id, "non-exist-id"],
+                status="sent",
+            ),
+            current_user={"id": "u1", "username": "u1"},
+        )
+    )
+    assert status_result.total == 4
+    assert status_result.updated == 2
+    assert status_result.failed == 0
+    assert status_result.skipped == 2
+    assert r1.id in status_result.updated_ids
+    assert r2.id in status_result.updated_ids
+    assert r3.id in status_result.skipped_ids
+
+    d1 = db_module.get_reminder(r1.id)
+    d2 = db_module.get_reminder(r2.id)
+    assert d1 and d1.get("status") == "sent"
+    assert d2 and d2.get("status") == "sent"
+
+    delete_result = asyncio.run(
+        reminder_router.batch_delete_reminders(
+            reminder_router.ReminderBatchDeleteRequest(
+                reminder_ids=[r1.id, r3.id, "non-exist-id"],
+            ),
+            current_user={"id": "u1", "username": "u1"},
+        )
+    )
+    assert delete_result.total == 3
+    assert delete_result.deleted == 1
+    assert delete_result.failed == 0
+    assert delete_result.skipped == 2
+    assert r1.id in delete_result.deleted_ids
+    assert r3.id in delete_result.skipped_ids
+
+    assert db_module.get_reminder(r1.id) is None
+    assert db_module.get_reminder(r2.id) is not None
+    assert db_module.get_reminder(r3.id) is not None
+
+    logs = asyncio.run(
+        reminder_router.get_reminder_audit_logs(
+            limit=50,
+            action=None,
+            current_user={"id": "u1", "username": "u1"},
+        )
+    )
+    actions = [x.action for x in logs]
+    assert "batch_status_update" in actions
+    assert "batch_delete" in actions
+
+
 def test_intelligent_reminder_reads_real_learning_data(isolated_db):
     db_module.save_user_activity(
         str(uuid.uuid4()),
@@ -1336,6 +1885,294 @@ def test_intelligent_reminder_reads_real_learning_data(isolated_db):
     sessions = intelligent_reminder_tasks._get_user_learning_sessions("u1")
     assert len(sessions) >= 1
     assert any(str(s.get("type")) in {"listening", "practice"} for s in sessions)
+
+
+def test_check_pending_reminders_respects_custom_frequency_cap(isolated_db):
+    now = int(time.time())
+    db_module.set_reminder_preferences(
+        "u1",
+        {
+            "enabled": 1,
+            "channels": ["app"],
+            "preferred_times": [],
+            "quiet_hours": {},
+            "strategy_config": {
+                "frequency_window_hours": 3,
+                "max_reminders_per_window": 5,
+                "preferred_tolerance_minutes": 90,
+                "merge_similar_enabled": False,
+                "high_priority_bypass_cap": True,
+            },
+        },
+    )
+
+    for idx in range(2):
+        db_module.create_reminder(
+            str(uuid.uuid4()),
+            "u1",
+            {
+                "type": "task",
+                "title": f"历史已发送{idx}",
+                "content": "history",
+                "scheduled_at": now - 100,
+                "status": "sent",
+                "channel": "app",
+                "metadata": {"source": f"history_sent_{idx}"},
+            },
+        )
+
+    candidate_id = str(uuid.uuid4())
+    db_module.create_reminder(
+        candidate_id,
+        "u1",
+        {
+            "type": "task",
+            "title": "普通提醒",
+            "content": "待发送",
+            "scheduled_at": now - 20,
+            "status": "pending",
+            "channel": "app",
+            "metadata": {"source": "candidate", "priority": "medium"},
+        },
+    )
+
+    sent_ids = []
+    original_send = reminder_tasks.send_reminder
+    reminder_tasks.send_reminder = types.SimpleNamespace(delay=lambda reminder_id: sent_ids.append(reminder_id))
+    try:
+        reminder_tasks.check_pending_reminders()
+    finally:
+        reminder_tasks.send_reminder = original_send
+
+    assert candidate_id in sent_ids
+
+
+def test_check_pending_reminders_respects_preferred_time_window(isolated_db):
+    now = int(time.time())
+    # 将偏好时间设置为距离当前 6 小时，确保不在容忍窗口内
+    target_dt = datetime.fromtimestamp(now) + timedelta(hours=6)
+    preferred = f"{target_dt.hour:02d}:{target_dt.minute:02d}"
+    db_module.set_reminder_preferences(
+        "u1",
+        {
+            "enabled": 1,
+            "channels": ["app"],
+            "preferred_times": [preferred],
+            "quiet_hours": {},
+        },
+    )
+
+    rid = str(uuid.uuid4())
+    db_module.create_reminder(
+        rid,
+        "u1",
+        {
+            "type": "plan_execution",
+            "title": "计划提醒",
+            "content": "请完成今日任务",
+            "scheduled_at": now - 10,
+            "status": "pending",
+            "channel": "app",
+            "metadata": {"source": "plan:test:today_pending", "priority": "medium"},
+        },
+    )
+
+    sent_ids = []
+    monkey = types.SimpleNamespace(delay=lambda reminder_id: sent_ids.append(reminder_id))
+    original_send = reminder_tasks.send_reminder
+    reminder_tasks.send_reminder = monkey
+    try:
+        reminder_tasks.check_pending_reminders()
+    finally:
+        reminder_tasks.send_reminder = original_send
+
+    assert sent_ids == []
+    updated = db_module.get_reminder(rid)
+    assert int(updated["scheduled_at"]) > now
+    assert str((updated.get("metadata") or {}).get("reschedule_reason")) == "preferred_time"
+
+
+def test_check_pending_reminders_merges_and_frequency_caps(isolated_db):
+    now = int(time.time())
+    db_module.set_reminder_preferences(
+        "u1",
+        {
+            "enabled": 1,
+            "channels": ["app"],
+            "preferred_times": [],
+            "quiet_hours": {},
+        },
+    )
+
+    # 模拟近期已发送 2 条，触发非高优先级频控
+    for idx in range(2):
+        db_module.create_reminder(
+            str(uuid.uuid4()),
+            "u1",
+            {
+                "type": "plan_execution",
+                "title": f"已发送提醒{idx}",
+                "content": "历史提醒",
+                "scheduled_at": now - 120,
+                "status": "sent",
+                "channel": "app",
+                "metadata": {"source": f"history_{idx}"},
+            },
+        )
+
+    reminder_ids = []
+    for idx in range(3):
+        rid = str(uuid.uuid4())
+        reminder_ids.append(rid)
+        db_module.create_reminder(
+            rid,
+            "u1",
+            {
+                "type": "plan_execution",
+                "title": f"待发送提醒{idx}",
+                "content": f"内容{idx}",
+                "scheduled_at": now - 30 - idx,
+                "status": "pending",
+                "channel": "app",
+                "metadata": {"source": f"plan:test:{idx}", "priority": "medium"},
+            },
+        )
+
+    high_id = str(uuid.uuid4())
+    db_module.create_reminder(
+        high_id,
+        "u1",
+        {
+            "type": "plan_execution",
+            "title": "高优提醒",
+            "content": "高优先级内容",
+            "scheduled_at": now - 20,
+            "status": "pending",
+            "channel": "app",
+            "metadata": {"source": "plan:test:high", "priority": "high"},
+        },
+    )
+
+    sent_ids = []
+    monkey = types.SimpleNamespace(delay=lambda reminder_id: sent_ids.append(reminder_id))
+    original_send = reminder_tasks.send_reminder
+    reminder_tasks.send_reminder = monkey
+    try:
+        reminder_tasks.check_pending_reminders()
+    finally:
+        reminder_tasks.send_reminder = original_send
+
+    # 高频窗口下仅高优先级允许发送
+    assert high_id in sent_ids
+    assert len(sent_ids) == 1
+
+    # 3 条普通提醒应被合并为 1 主提醒 + 2 merged
+    rows = [db_module.get_reminder(rid) for rid in reminder_ids]
+    merged_rows = [x for x in rows if x and x.get("status") == "merged"]
+    assert len(merged_rows) >= 2
+    primary = [x for x in rows if x and (x.get("metadata") or {}).get("merged_count", 0) >= 2]
+    assert len(primary) >= 1
+
+
+def test_plan_execution_reminder_suggestion_and_apply_dedup(isolated_db):
+    created = asyncio.run(
+        plan_router.create_plan(
+            plan_router.LearningPlanCreate(
+                target_band=6.5,
+                daily_minutes=90,
+                focus_modules=["reading", "writing"],
+                duration_weeks=2,
+            ),
+            current_user={"id": "u1", "username": "u1"},
+        )
+    )
+    plan_id = created.plan_id
+
+    today = datetime.now().date()
+    today_start = int(datetime.combine(today, dtime.min).timestamp())
+    yesterday_start = int(datetime.combine(today - timedelta(days=1), dtime.min).timestamp())
+
+    db_module.create_daily_task(
+        str(uuid.uuid4()),
+        plan_id,
+        yesterday_start,
+        [
+            {
+                "id": str(uuid.uuid4()),
+                "module": "reading",
+                "title": "阅读定位训练",
+                "description": "逾期任务",
+                "time_required": 30,
+                "completed": False,
+                "progress": 0,
+                "time_spent": 0,
+            }
+        ],
+    )
+    db_module.create_daily_task(
+        str(uuid.uuid4()),
+        plan_id,
+        today_start,
+        [
+            {
+                "id": str(uuid.uuid4()),
+                "module": "writing",
+                "title": "写作结构演练",
+                "description": "今日任务",
+                "time_required": 35,
+                "completed": False,
+                "progress": 0,
+                "time_spent": 0,
+            },
+            {
+                "id": str(uuid.uuid4()),
+                "module": "writing",
+                "kind": "intervention",
+                "title": "干预 · 写作表达升级",
+                "description": "补救任务",
+                "time_required": 20,
+                "completed": False,
+                "progress": 0,
+                "time_spent": 0,
+            },
+        ],
+    )
+
+    suggestions = asyncio.run(
+        reminder_router.get_plan_reminder_suggestions(
+            plan_id=plan_id,
+            days=14,
+            preferred_channel="app",
+            current_user={"id": "u1", "username": "u1"},
+        )
+    )
+    assert suggestions.plan_id == plan_id
+    assert suggestions.recommended_count >= 2
+    assert suggestions.overdue_count >= 1
+    assert suggestions.pending_today_count >= 1
+    sources = [item.source for item in suggestions.items]
+    assert any("overdue_backlog" in s for s in sources)
+    assert any("today_pending" in s for s in sources)
+
+    first_apply = asyncio.run(
+        reminder_router.apply_plan_reminders(
+            reminder_router.PlanReminderApplyRequest(plan_id=plan_id, days=14),
+            current_user={"id": "u1", "username": "u1"},
+        )
+    )
+    assert first_apply.created >= 1
+    reminders = db_module.get_user_reminders("u1")
+    created_plan_reminders = [r for r in reminders if r.get("type") == "plan_execution"]
+    assert len(created_plan_reminders) >= first_apply.created
+
+    second_apply = asyncio.run(
+        reminder_router.apply_plan_reminders(
+            reminder_router.PlanReminderApplyRequest(plan_id=plan_id, days=14),
+            current_user={"id": "u1", "username": "u1"},
+        )
+    )
+    assert second_apply.created == 0
+    assert second_apply.skipped >= first_apply.created
 
 
 def test_diagnostic_session_owner_and_pending_guard_errors(isolated_db):
@@ -1396,6 +2233,8 @@ def test_diagnostic_bank_health_and_reload(isolated_db):
     )
     assert health["total_questions"] >= 1
     assert "last_loaded_at" in health
+    assert health.get("coverage_status") in {"starter", "standard", "strong"}
+    assert health.get("recommended_total_questions") == 160
 
     reloaded = asyncio.run(
         diagnostic_router.reload_diagnostic_bank(current_user={"id": "u1", "username": "u1"})
@@ -1915,6 +2754,53 @@ def test_diagnostic_history_summary_trend(isolated_db):
     assert len(summary.history) >= 2
 
 
+def test_diagnostic_report_explainability_fields(isolated_db):
+    start = asyncio.run(
+        diagnostic_router.start_diagnostic(
+            diagnostic_router.DiagnosticStart(modules=["listening", "reading"]),
+            current_user={"id": "u1", "username": "u1"},
+        )
+    )
+    sid = start.id
+    next_q = start.next_question
+    assert next_q is not None
+
+    answered = 0
+    current = next_q
+    while current is not None and answered < 4:
+        expected = str((diagnostic_router.QUESTION_INDEX.get(current.question_id) or {}).get("answer") or "")
+        submit_value = expected if answered % 2 == 0 else "wrong"
+        resp = asyncio.run(
+            diagnostic_router.submit_answer(
+                sid,
+                diagnostic_router.DiagnosticAnswers(
+                    answers=[diagnostic_router.DiagnosticAnswer(question_id=current.question_id, answer=submit_value)]
+                ),
+                current_user={"id": "u1", "username": "u1"},
+            )
+        )
+        answered += 1
+        current = resp.next_question
+
+    report = asyncio.run(
+        diagnostic_router.get_report(
+            session_id=sid,
+            current_user={"id": "u1", "username": "u1"},
+        )
+    )
+    assert len(report.recommendations) >= 1
+    assert len(report.module_scores) >= 1
+
+    for rec in report.recommendations:
+        assert isinstance(rec.evidence_summary, str)
+        assert rec.evidence_summary
+    for weak in report.weaknesses:
+        assert weak.total_questions >= 0
+        assert weak.correct_count >= 0
+        assert weak.wrong_count >= 0
+        assert isinstance(weak.difficulty_breakdown, dict)
+
+
 def test_mistake_csv_export_contains_header(isolated_db):
     asyncio.run(
         mistakes_router.create_mistake(
@@ -2198,3 +3084,102 @@ def test_plan_intervention_preview_and_apply(isolated_db):
     assert intervention_status.plan_id == plan_id
     assert intervention_status.intervention_total >= 3
     assert intervention_status.batch_count >= 1
+
+
+def test_chat_translation_generate_and_check(isolated_db, monkeypatch):
+    fake_translation = types.SimpleNamespace(
+        generate_translation_question=lambda difficulty="medium": {
+            "chinese_sentence": "随着科技发展，学习方式发生了变化。",
+            "difficulty": difficulty,
+            "topic": "Technology",
+        },
+        check_translation=lambda chinese_sentence, user_translation: {
+            "accuracy": 7.0,
+            "fluency": 6.5,
+            "grammar": 6.5,
+            "vocabulary": 7.0,
+            "overall": 6.8,
+            "evaluation": "表达自然，个别搭配可优化。",
+            "suggestions": ["注意冠词使用。"],
+            "correct_translation": "With technological advances, learning styles have changed.",
+        },
+    )
+    monkeypatch.setattr(chat_router, "translation_agent", fake_translation)
+
+    generated = asyncio.run(
+        chat_router.translation_practice(
+            chat_router.TranslationPracticeRequest(action="generate", difficulty="hard"),
+            current_user={"id": "u1", "username": "u1"},
+        )
+    )
+    assert generated["difficulty"] == "hard"
+    assert generated["topic"] == "Technology"
+
+    checked = asyncio.run(
+        chat_router.translation_practice(
+            chat_router.TranslationPracticeRequest(
+                action="check",
+                chinese_sentence=generated["chinese_sentence"],
+                user_translation="Learning styles have changed with technology.",
+            ),
+            current_user={"id": "u1", "username": "u1"},
+        )
+    )
+    assert checked["overall"] == 6.8
+    assert "correct_translation" in checked
+
+    with pytest.raises(Exception) as e:
+        asyncio.run(
+            chat_router.translation_practice(
+                chat_router.TranslationPracticeRequest(action="check"),
+                current_user={"id": "u1", "username": "u1"},
+            )
+        )
+    status = getattr(e.value, "status_code", None)
+    assert status == 400
+
+
+def test_chat_deep_search_endpoint_structured_response(isolated_db, monkeypatch):
+    route_called = {}
+
+    class FakeIeltsAgent:
+        def route_and_execute(self, query, session_id, user_context=None):
+            route_called["query"] = query
+            route_called["session_id"] = session_id
+            route_called["user_context"] = dict(user_context or {})
+            return {
+                "agent": "deep_search_agent",
+                "response": "这是深度搜索总结。",
+                "routing": {"reason": "deep_search"},
+                "rag": {"accepted": True, "iterations": 2},
+            }
+
+    class FakeDeepSearchAgent:
+        def __init__(self):
+            self.max_iterations = 5
+
+        def deep_search(self, query):
+            return {
+                "original_query": query,
+                "iterations": [{"iteration": i + 1, "query": query} for i in range(self.max_iterations)],
+                "final_summary": "结构化总结",
+                "sources": [],
+                "citations": [{"id": 1, "title": "来源A", "url": "https://example.com"}],
+            }
+
+    fake_deep = FakeDeepSearchAgent()
+    monkeypatch.setattr(chat_router, "ielts_agent", FakeIeltsAgent())
+    monkeypatch.setattr(chat_router, "deep_search_agent", fake_deep)
+
+    response = asyncio.run(
+        chat_router.deep_search(
+            chat_router.DeepSearchRequest(query="雅思写作教育类趋势", max_iterations=2),
+            current_user={"id": "u1", "username": "u1"},
+        )
+    )
+    assert response.agent == "deep_search_agent"
+    assert response.search["final_summary"] == "结构化总结"
+    assert len(response.search["iterations"]) == 2
+    assert route_called["query"].startswith("深度搜索：")
+    assert route_called["user_context"]["enable_agentic_rag"] is True
+    assert fake_deep.max_iterations == 5

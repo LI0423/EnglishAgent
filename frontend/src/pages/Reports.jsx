@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { NavLink, useNavigate } from 'react-router-dom';
+import { useNavigate } from 'react-router-dom';
 import { Bar, BarChart, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis, CartesianGrid, Legend } from 'recharts';
 import {
   getMistakeHotspots,
@@ -17,21 +17,11 @@ import {
   applyPlanIntervention,
   getVocabularyStrategyInsights,
 } from '../utils/api';
+import SidebarMenu from '../components/layout/SidebarMenu';
 
+import TopNav from "../components/layout/TopNav";
 function Reports() {
   const navigate = useNavigate();
-  const navItems = [
-    { to: '/', label: '🏠 首页' },
-    { to: '/chat', label: '🤖 智能对话' },
-    { to: '/listening', label: '🎧 听力练习' },
-    { to: '/reading', label: '📚 阅读练习' },
-    { to: '/writing', label: '📝 写作练习' },
-    { to: '/speaking', label: '💬 口语练习' },
-    { to: '/vocabulary', label: '📋 词汇学习' },
-    { to: '/mistakes', label: '🔖 错题本' },
-    { to: '/reports', label: '📊 学习报告' },
-    { to: '/plans', label: '🎯 个性化计划' },
-  ];
 
   const [sessionId, setSessionId] = useState('');
   const [report, setReport] = useState(null);
@@ -229,28 +219,22 @@ function Reports() {
   };
 
   return (
-    <div className="home-page">
-      <header className="top-nav">
-        <div className="nav-content">
-          <div className="nav-left"><h1>📊 学习报告</h1></div>
-        </div>
-      </header>
+    <div className="home-page web-dashboard reports-page">
+      <TopNav />
       <div className="main-layout">
         <div className="sidebar">
-          <div className="sidebar-header"><h2>🎓 IELTS Agent</h2></div>
-          <nav className="sidebar-nav">
-            <ul>
-              {navItems.map((item) => (
-                <li key={item.to}>
-                  <NavLink to={item.to} end={item.to === '/'} className={({ isActive }) => `sidebar-nav-link${isActive ? ' active' : ''}`}>
-                    {item.label}
-                  </NavLink>
-                </li>
-              ))}
-            </ul>
-          </nav>
+          <SidebarMenu />
         </div>
         <div className="content-area content-shell">
+          <div className="web-page-head">
+            <div>
+              <h2>学习报告</h2>
+              <p>趋势、热区、计划健康度与策略效果的统一分析视图。</p>
+            </div>
+            <div className="web-page-head-actions">
+              <button onClick={() => { loadMistakeTrends(trendDays); loadReviewEffectiveness(trendDays); }}>刷新分析</button>
+            </div>
+          </div>
           <div className="card" style={{ marginBottom: 16 }}>
             <h3>计划执行健康度（{planHealthDays}天）</h3>
             <div style={{ display: 'flex', gap: 8, marginBottom: 8, flexWrap: 'wrap' }}>
