@@ -1153,6 +1153,60 @@ p {
   background: linear-gradient(180deg, var(--dashboard-primary), var(--dashboard-primary-dark));
 }
 
+.content-area.vocab-page > .web-page-head {
+  order: 0;
+}
+
+.content-area.vocab-page > .vocab-card {
+  order: 5;
+}
+
+.vocab-overview-card {
+  order: 1;
+}
+
+.vocab-card-primary-learning {
+  order: 2;
+  border-color: color-mix(in srgb, #0f766e 34%, var(--dashboard-border));
+  background: linear-gradient(180deg, #ffffff 0%, #f4fffc 100%);
+}
+
+.vocab-learning-hero {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 14px;
+  border: 1px solid #b9ebcd;
+  border-radius: 12px;
+  background: #f0fdf7;
+}
+
+.vocab-learning-hero p {
+  margin: 4px 0 0;
+  color: #14603b;
+}
+
+.vocab-learning-hero-steps {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  justify-content: flex-end;
+}
+
+.vocab-learning-hero-steps span {
+  display: inline-flex;
+  align-items: center;
+  min-height: 28px;
+  padding: 3px 9px;
+  border-radius: 999px;
+  background: #ffffff;
+  border: 1px solid #b9ebcd;
+  color: #0f766e;
+  font-size: 12px;
+  font-weight: 700;
+}
+
 .vocab-overview-grid {
   display: grid;
   grid-template-columns: repeat(5, minmax(120px, 1fr));
@@ -1393,6 +1447,43 @@ p {
   color: var(--dashboard-primary-dark);
   background: #edf4ff;
   border: 1px solid #d7e5ff;
+}
+
+.vocab-step-chip {
+  display: inline-flex;
+  align-items: center;
+  min-height: 30px;
+  padding: 4px 10px;
+  border: 1px solid #cbd8ef;
+  border-radius: 999px;
+  background: #ffffff;
+  color: var(--dashboard-text-secondary);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.vocab-step-chip.active {
+  border-color: #0f766e;
+  background: #0f766e;
+  color: #ffffff;
+}
+
+.vocab-learning-result {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  margin-top: 14px;
+  padding: 14px;
+  border: 1px solid #b9ebcd;
+  border-radius: 12px;
+  background: #f0fdf7;
+}
+
+.vocab-learning-result p {
+  margin: 4px 0 0;
+  color: #14603b;
 }
 
 @keyframes vocabStatusAppear {

@@ -140,14 +140,23 @@ const TranslationSearch = () => {
 
   const splitFocusPoints = () => {
     const points = getFocusPoints();
-    const vocab = [];
+    const coreWords = Array.isArray(question?.core_words)
+      ? question.core_words
+        .map((item) => {
+          const word = item?.word || item?.head_word || '';
+          const definition = item?.definition || item?.definition_cn || item?.definition_en || '';
+          return word ? `${word}${definition ? `：${definition}` : ''}` : '';
+        })
+        .filter(Boolean)
+      : [];
+    const vocab = [...coreWords];
     const patterns = [];
     points.forEach((item) => {
       const text = String(item || '').trim();
       if (!text) return;
       if (/句|从句|结构|语法|时态|主语|谓语|宾语|clause|sentence|grammar|structure/i.test(text)) {
         patterns.push(text);
-      } else {
+      } else if (!vocab.includes(text)) {
         vocab.push(text);
       }
     });

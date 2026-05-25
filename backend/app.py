@@ -5,6 +5,7 @@ import os
 
 from .routers import auth, speaking, scoring, report, profile, plan, reading, writing, listening, history, chat, diagnostic, reminder, stats, mistakes, vocabulary, gamification, community, study_group, payment, admin, campaign, ability, dashboard
 from .db import init_db
+from .postgres import init_ielts_vocabulary_bank
 from .services.tts_service import get_tts_service
 
 
@@ -70,3 +71,4 @@ async def root():
 @app.on_event("startup")
 async def on_startup():
     init_db()
+    init_ielts_vocabulary_bank()

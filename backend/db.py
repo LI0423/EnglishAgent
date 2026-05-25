@@ -5431,7 +5431,11 @@ def get_vocabulary_by_id(vocab_id: str) -> Optional[Dict[str, Any]]:
         conn.close()
 
 
-def review_vocabulary(vocab_id: str, mastery_delta: float = 0.15) -> Optional[Dict[str, Any]]:
+def review_vocabulary(
+    vocab_id: str,
+    mastery_delta: float = 0.15,
+    review_interval_seconds: Optional[int] = None,
+) -> Optional[Dict[str, Any]]:
     conn = get_conn()
     try:
         cur = conn.execute("SELECT user_id, mastery_level FROM vocabulary WHERE id = ?", (vocab_id,))
@@ -5442,8 +5446,12 @@ def review_vocabulary(vocab_id: str, mastery_delta: float = 0.15) -> Optional[Di
         current_mastery = float(row["mastery_level"] or 0.0)
         new_mastery = max(0.0, min(1.0, current_mastery + mastery_delta))
         now = int(time.time())
-        interval_days = 1 if new_mastery < 0.35 else (3 if new_mastery < 0.6 else (7 if new_mastery < 0.85 else 14))
-        next_review_date = now + interval_days * 24 * 3600
+        if review_interval_seconds is not None:
+            interval_seconds = max(15 * 60, int(review_interval_seconds))
+        else:
+            interval_days = 1 if new_mastery < 0.35 else (3 if new_mastery < 0.6 else (7 if new_mastery < 0.85 else 14))
+            interval_seconds = interval_days * 24 * 3600
+        next_review_date = now + interval_seconds
         conn.execute(
             "UPDATE vocabulary SET last_reviewed_at = ?, next_review_date = ?, mastery_level = ? WHERE id = ?",
             (now, next_review_date, new_mastery, vocab_id),
@@ -5474,6 +5482,85 @@ def review_vocabulary(vocab_id: str, mastery_delta: float = 0.15) -> Optional[Di
             "next_review_date": next_review_date,
             "mastery_level": new_mastery,
         }
+    finally:
+        conn.close()
+
+
+def save_vocabulary_learning_attempt(
+    attempt_id: str,
+    user_id: str,
+    vocab_id: str,
+    attempt_data: Dict[str, Any],
+) -> None:
+    conn = get_conn()
+    try:
+        now = int(attempt_data.get("created_at") or time.time())
+        conn.execute(
+            """
+            INSERT INTO vocabulary_learning_attempts (
+              id, vocab_id, user_id, session_id, strategy,
+              recall_text, cloze_answer, output_sentence, self_rating,
+              recall_completed, cloze_correct, output_uses_word,
+              quality_score, mastery_delta, mastery_after,
+              next_review_date, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                attempt_id,
+                vocab_id,
+                user_id,
+                str(attempt_data.get("session_id") or ""),
+                str(attempt_data.get("strategy") or ""),
+                str(attempt_data.get("recall_text") or ""),
+                str(attempt_data.get("cloze_answer") or ""),
+                str(attempt_data.get("output_sentence") or ""),
+                str(attempt_data.get("self_rating") or ""),
+                1 if attempt_data.get("recall_completed") else 0,
+                1 if attempt_data.get("cloze_correct") else 0,
+                1 if attempt_data.get("output_uses_word") else 0,
+                round(float(attempt_data.get("quality_score") or 0.0), 4),
+                round(float(attempt_data.get("mastery_delta") or 0.0), 4),
+                round(float(attempt_data.get("mastery_after") or 0.0), 4),
+                int(attempt_data.get("next_review_date") or 0),
+                now,
+            ),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def get_vocabulary_learning_attempts(
+    user_id: str,
+    vocab_id: Optional[str] = None,
+    limit: int = 50,
+) -> list[Dict[str, Any]]:
+    conn = get_conn()
+    try:
+        safe_limit = max(1, min(int(limit or 50), 200))
+        if vocab_id:
+            cur = conn.execute(
+                """
+                SELECT *
+                FROM vocabulary_learning_attempts
+                WHERE user_id = ? AND vocab_id = ?
+                ORDER BY created_at DESC
+                LIMIT ?
+                """,
+                (user_id, vocab_id, safe_limit),
+            )
+        else:
+            cur = conn.execute(
+                """
+                SELECT *
+                FROM vocabulary_learning_attempts
+                WHERE user_id = ?
+                ORDER BY created_at DESC
+                LIMIT ?
+                """,
+                (user_id, safe_limit),
+            )
+        return [dict(row) for row in cur.fetchall()]
     finally:
         conn.close()
 

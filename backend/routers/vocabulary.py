@@ -17,14 +17,26 @@ from ..db import (
     get_vocabulary_stats,
     save_vocabulary_strategy_session,
     get_vocabulary_strategy_insights,
+    save_vocabulary_learning_attempt,
     save_mistake,
     get_user_mistakes,
 )
+from ..services.ielts_vocabulary_bank_service import (
+    get_ielts_vocabulary_bank_by_ids,
+    get_ielts_vocabulary_bank_summary,
+    list_ielts_vocabulary_bank,
+)
+
+try:
+    from models.generator_model import GeneratorModel
+except Exception:  # pragma: no cover - keeps vocabulary routes usable without LLM deps
+    GeneratorModel = None
 
 
 router = APIRouter()
 test_runtime: Dict[str, Dict[str, Any]] = {}
 context_replay_runtime: Dict[str, Dict[str, Any]] = {}
+_vocab_llm = None
 
 
 def _model_dump(payload: BaseModel) -> dict:
@@ -62,6 +74,12 @@ class LearnSessionRequest(BaseModel):
     count: int = 10
 
 
+class TodayLearnSessionRequest(BaseModel):
+    count: int = 10
+    topic: str = ""
+    difficulty: str = ""
+
+
 class LearnSessionWordItem(WordItem):
     scheduler_score: float = 0.0
     scheduler_reason: str = ""
@@ -76,6 +94,39 @@ class LearnSessionResponse(BaseModel):
 class WordReviewResponse(BaseModel):
     next_review_date: int
     mastery_level: float
+
+
+class LearningAttemptSubmitRequest(BaseModel):
+    vocab_id: str
+    session_id: str = ""
+    strategy: str = "today_active_recall"
+    recall_text: str = ""
+    cloze_answer: str = ""
+    output_sentence: str = ""
+    self_rating: str = "fuzzy"  # unknown | fuzzy | known
+
+
+class LearningAttemptSubmitResponse(BaseModel):
+    next_review_date: int
+    next_review_label: str = ""
+    mastery_level: float
+    mastery_delta: float
+    quality_score: float
+    recall_completed: bool
+    cloze_correct: bool
+    output_uses_word: bool
+    feedback: str
+    output_feedback: str = ""
+    output_suggestion: str = ""
+
+
+class OutputPromptRequest(BaseModel):
+    vocab_id: str
+    topic: str = ""
+
+
+class OutputPromptResponse(BaseModel):
+    chinese_sentence: str
 
 
 class VocabularyStatsResponse(BaseModel):
@@ -225,6 +276,38 @@ class VocabularyAutoCollectRequest(BaseModel):
 
 
 class VocabularyAutoCollectResponse(BaseModel):
+    imported: int
+    skipped_existing: int
+    words: List[str]
+    word_ids: List[str]
+
+
+class VocabularyBankItem(BaseModel):
+    word_id: str
+    word: str
+    definition: str = ""
+    definition_en: str = ""
+    examples: List[str] = []
+    phrases: List[str] = []
+    pronunciation: str = ""
+    part_of_speech: str = ""
+    difficulty: str = "medium"
+    topics: List[str] = []
+    imported: bool = False
+
+
+class VocabularyBankSummaryResponse(BaseModel):
+    total: int
+    difficulties: List[Dict[str, Any]]
+    topics: List[Dict[str, Any]]
+
+
+class VocabularyBankImportRequest(BaseModel):
+    word_ids: List[str]
+    source_module: str = "ielts_bank"
+
+
+class VocabularyBankImportResponse(BaseModel):
     imported: int
     skipped_existing: int
     words: List[str]
@@ -477,6 +560,388 @@ def _build_context_prompt(word_row: Dict[str, Any]) -> str:
     return f"Fill in the blank with one suitable IELTS word: ____ ({word})"
 
 
+def _word_matches_learning_filters(word_row: Dict[str, Any], topic: str = "", difficulty: str = "") -> bool:
+    tags = {str(t or "").strip().lower() for t in (word_row.get("tags") or [])}
+    safe_topic = str(topic or "").strip().lower()
+    safe_difficulty = str(difficulty or "").strip().lower()
+    if safe_topic:
+        topic_tags = {safe_topic, f"topic:{safe_topic}"}
+        if tags.isdisjoint(topic_tags):
+            return False
+    if safe_difficulty:
+        difficulty_tags = {safe_difficulty, f"difficulty:{safe_difficulty}"}
+        if tags.isdisjoint(difficulty_tags):
+            return False
+    return True
+
+
+def _contains_word(text: str, word: str) -> bool:
+    target = str(word or "").strip()
+    if not target:
+        return False
+    return bool(re.search(rf"\b{re.escape(target)}\b", str(text or ""), flags=re.IGNORECASE))
+
+
+def _primary_chinese_definition(definition: str, word: str) -> str:
+    raw = str(definition or "").strip()
+    if not raw:
+        return "这个概念"
+    first = re.split(r"[;；,，、/]", raw)[0].strip()
+    candidate = first or raw
+    if re.search(r"[A-Za-z]", candidate):
+        chinese_parts = re.findall(r"[\u4e00-\u9fff]+", raw)
+        if chinese_parts:
+            return chinese_parts[0]
+        return "这个概念"
+    return candidate
+
+
+def _topic_zh(topic: str) -> str:
+    mapping = {
+        "accommodation": "住宿",
+        "education": "教育",
+        "environment": "环境",
+        "technology": "科技",
+        "health": "健康",
+        "economy": "经济",
+        "culture": "文化",
+        "transport": "交通",
+        "tourism": "旅游",
+        "work": "工作",
+        "career": "职业",
+        "family": "家庭",
+        "food": "饮食",
+        "media": "媒体",
+        "crime": "犯罪",
+        "government": "政府",
+        "housing": "住房",
+        "general": "日常学习",
+    }
+    return mapping.get(str(topic or "").strip().lower(), str(topic or "").strip() or "日常学习")
+
+
+def _fallback_output_prompt(word: str, definition: str, topic: str = "") -> str:
+    meaning = _primary_chinese_definition(definition, word)
+    topic_name = _topic_zh(topic)
+    templates = [
+        f"学校可以通过技术手段{meaning}真实的考试场景。",
+        f"在{topic_name}话题中，学生需要学会准确表达“{meaning}”这个意思。",
+        f"这项训练可以帮助学习者更自然地使用“{meaning}”相关表达。",
+    ]
+    return random.choice(templates)
+
+
+def _extract_chinese_sentence(text: str) -> str:
+    cleaned = str(text or "").strip()
+    cleaned = re.sub(r"^```(?:json)?|```$", "", cleaned, flags=re.IGNORECASE).strip()
+    cleaned = cleaned.strip("\"'“” \n")
+    for line in cleaned.splitlines():
+        line = line.strip().strip("\"'“”")
+        if line and not re.search(r"[A-Za-z]", line):
+            return line
+    return cleaned
+
+
+def _get_vocab_llm():
+    global _vocab_llm
+    if _vocab_llm is not None:
+        return _vocab_llm
+    if GeneratorModel is None:
+        return None
+    try:
+        _vocab_llm = GeneratorModel()
+        return _vocab_llm
+    except Exception:
+        return None
+
+
+def _generate_output_prompt_sentence(word_row: Dict[str, Any], topic: str = "") -> str:
+    word = str(word_row.get("word") or "").strip()
+    definition = str(word_row.get("definition") or "").strip()
+    topic_name = _topic_zh(topic)
+    fallback = _fallback_output_prompt(word, definition, topic)
+    llm = _get_vocab_llm()
+    if llm is None:
+        return fallback
+    prompt = f"""
+你是雅思词汇训练题目生成器。请为用户生成一句完整中文句子，用于让用户翻译成英文。
+
+要求：
+- 必须是纯中文句子，不要出现任何英文单词、拼音、引号中的英文、解释、编号或 Markdown。
+- 句子要自然，适合雅思或英语学习场景。
+- 句子语义要能引导用户在英文翻译中使用目标词。
+- 只输出一句中文，长度 12 到 35 个汉字。
+
+目标英文词：{word}
+中文含义：{definition or word}
+话题：{topic_name}
+"""
+    try:
+        _, raw = llm.communicate(prompt, temperature=0.7, max_tokens=80)
+        sentence = _extract_chinese_sentence(raw)
+        if sentence and not re.search(r"[A-Za-z]", sentence):
+            return sentence
+    except Exception:
+        return fallback
+    return fallback
+
+
+def _assess_output_sentence(sentence: str, word: str) -> Dict[str, str]:
+    lines = [x.strip() for x in str(sentence or "").splitlines() if x.strip()]
+    text = lines[-1] if lines else ""
+    if not text:
+        return {"output_feedback": "", "output_suggestion": ""}
+
+    issues: List[str] = []
+    tokens = re.findall(r"[A-Za-z][A-Za-z'-]*", text)
+    if not _contains_word(text, word):
+        issues.append(f"句子里还没有自然使用 {word}")
+    if len(tokens) < 5:
+        issues.append("句子偏短，可以补充主语、动作或原因")
+    if text and text[0].isalpha() and not text[0].isupper():
+        issues.append("句首建议大写")
+    if text and text[-1] not in ".!?":
+        issues.append("句末建议补上标点")
+    if re.search(r"\byours\s+[A-Za-z]", text, flags=re.IGNORECASE):
+        issues.append("yours 后不能直接接名词，这里通常用 your")
+    if re.search(r"\ba\s+[aeiouAEIOU]", text):
+        issues.append("元音开头的单词前通常用 an")
+    if re.search(r"\b(can|should|must|will|would|could|may|might)\s+to\s+", text, flags=re.IGNORECASE):
+        issues.append("情态动词后直接接动词原形，不加 to")
+
+    suggestion = ""
+    if _contains_word(text, word):
+        suggestion = text
+    else:
+        suggestion = f"It is important to use {word} accurately in IELTS writing."
+    suggestion = suggestion[:1].upper() + suggestion[1:] if suggestion else ""
+    if suggestion and suggestion[-1] not in ".!?":
+        suggestion = f"{suggestion}."
+
+    if not issues:
+        return {
+            "output_feedback": "句子基本通顺，目标词使用到位。",
+            "output_suggestion": suggestion,
+        }
+    return {
+        "output_feedback": "；".join(issues[:3]),
+        "output_suggestion": suggestion,
+    }
+
+
+def _score_learning_attempt(word_row: Dict[str, Any], payload: LearningAttemptSubmitRequest) -> Dict[str, Any]:
+    word = str(word_row.get("word") or "").strip()
+    recall_text = str(payload.recall_text or "").strip()
+    cloze_answer = str(payload.cloze_answer or "").strip()
+    output_sentence = str(payload.output_sentence or "").strip()
+    self_rating = str(payload.self_rating or "fuzzy").strip().lower()
+    if self_rating not in {"unknown", "fuzzy", "known"}:
+        self_rating = "fuzzy"
+
+    recall_completed = len(recall_text) >= 2
+    cloze_correct = bool(cloze_answer) and cloze_answer.lower() == word.lower()
+    output_uses_word = _contains_word(output_sentence, word)
+    output_assessment = _assess_output_sentence(output_sentence, word)
+
+    rating_score = {"unknown": 0.0, "fuzzy": 0.5, "known": 1.0}[self_rating]
+    quality_score = (
+        (0.22 if recall_completed else 0.0)
+        + (0.28 if cloze_correct else 0.0)
+        + (0.25 if output_uses_word else 0.0)
+        + rating_score * 0.25
+    )
+    delta = {"unknown": -0.14, "fuzzy": 0.04, "known": 0.14}[self_rating]
+    delta += 0.03 if recall_completed else -0.03
+    if cloze_answer:
+        delta += 0.06 if cloze_correct else -0.05
+    if output_sentence:
+        delta += 0.06 if output_uses_word else -0.04
+    delta = max(-0.22, min(0.26, delta))
+
+    feedback_bits = []
+    if not recall_completed:
+        feedback_bits.append("下次先尝试写出释义或搭配")
+    if cloze_answer and not cloze_correct:
+        feedback_bits.append("填空未命中目标词")
+    if output_sentence and not output_uses_word:
+        feedback_bits.append("造句中还没有自然使用目标词")
+    if quality_score >= 0.75:
+        feedback_bits.append("本轮掌握较好，复习间隔会适当拉长")
+    elif quality_score <= 0.35:
+        feedback_bits.append("本轮记忆较弱，会更快进入复习")
+    else:
+        feedback_bits.append("本轮处于巩固阶段")
+
+    current_mastery = max(0.0, min(1.0, float(word_row.get("mastery_level") or 0.0)))
+    projected_mastery = max(0.0, min(1.0, current_mastery + delta))
+    if quality_score <= 0.25:
+        interval_seconds = 4 * 3600
+        next_review_label = "约4小时后复习"
+    elif quality_score <= 0.45:
+        interval_seconds = 12 * 3600
+        next_review_label = "约12小时后复习"
+    elif quality_score <= 0.65:
+        interval_seconds = 24 * 3600
+        next_review_label = "明天复习"
+    elif quality_score <= 0.82:
+        interval_seconds = 3 * 24 * 3600
+        next_review_label = "约3天后复习"
+    elif projected_mastery >= 0.85:
+        interval_seconds = 14 * 24 * 3600
+        next_review_label = "约14天后复习"
+    else:
+        interval_seconds = 7 * 24 * 3600
+        next_review_label = "约7天后复习"
+
+    return {
+        "recall_completed": recall_completed,
+        "cloze_correct": cloze_correct,
+        "output_uses_word": output_uses_word,
+        "quality_score": round(quality_score, 4),
+        "mastery_delta": round(delta, 4),
+        "review_interval_seconds": interval_seconds,
+        "next_review_label": next_review_label,
+        "self_rating": self_rating,
+        "feedback": "；".join(feedback_bits),
+        **output_assessment,
+    }
+
+
+def _bank_row_to_item(row: Dict[str, Any], imported_words: set[str] | None = None) -> VocabularyBankItem:
+    examples = row.get("examples") or []
+    phrases = row.get("phrases") or []
+    example_texts: List[str] = []
+    if isinstance(examples, list):
+        for item in examples[:3]:
+            if isinstance(item, dict):
+                english = str(item.get("english") or "").strip()
+                chinese = str(item.get("chinese") or "").strip()
+                text = " / ".join([x for x in [english, chinese] if x])
+            else:
+                text = str(item or "").strip()
+            if text:
+                example_texts.append(text)
+    phrase_texts: List[str] = []
+    if isinstance(phrases, list):
+        for item in phrases[:5]:
+            if isinstance(item, dict):
+                phrase = str(item.get("phrase") or "").strip()
+                chinese = str(item.get("chinese") or "").strip()
+                text = " / ".join([x for x in [phrase, chinese] if x])
+            else:
+                text = str(item or "").strip()
+            if text:
+                phrase_texts.append(text)
+    word = str(row.get("head_word") or "").strip()
+    definition = str(row.get("definition_cn") or row.get("definition_en") or "").strip()
+    topics = [str(x).strip() for x in (row.get("topics") or []) if str(x).strip()]
+    imported = word.lower() in (imported_words or set())
+    return VocabularyBankItem(
+        word_id=str(row.get("word_id") or ""),
+        word=word,
+        definition=definition,
+        definition_en=str(row.get("definition_en") or "").strip(),
+        examples=example_texts,
+        phrases=phrase_texts,
+        pronunciation=str(row.get("uk_phone") or row.get("us_phone") or "").strip(),
+        part_of_speech=str(row.get("part_of_speech") or "").strip(),
+        difficulty=str(row.get("difficulty") or "medium").strip(),
+        topics=topics,
+        imported=imported,
+    )
+
+
+def _bank_row_to_vocab_data(row: Dict[str, Any], source_module: str = "ielts_bank") -> Dict[str, Any]:
+    item = _bank_row_to_item(row)
+    tags = [
+        "ielts_bank",
+        f"difficulty:{item.difficulty}",
+        *(f"topic:{topic}" for topic in item.topics),
+    ]
+    if row.get("book_id"):
+        tags.append(f"book:{row.get('book_id')}")
+    if row.get("word_id"):
+        tags.append(f"bank_word_id:{row.get('word_id')}")
+    return {
+        "word": item.word,
+        "definition": item.definition,
+        "examples": item.examples,
+        "pronunciation": item.pronunciation,
+        "part_of_speech": item.part_of_speech,
+        "tags": tags,
+        "source_module": source_module or "ielts_bank",
+        "mastery_level": 0.0,
+    }
+
+
+@router.get("/bank", response_model=List[VocabularyBankItem])
+async def list_bank_vocabulary(
+    difficulty: Optional[str] = None,
+    topic: Optional[str] = None,
+    keyword: Optional[str] = None,
+    limit: int = 30,
+    current_user: dict = Depends(get_current_user),
+):
+    imported_rows = get_user_vocabulary(current_user["id"], 5000)
+    imported_words = {str(x.get("word") or "").strip().lower() for x in imported_rows}
+    rows = list_ielts_vocabulary_bank(
+        difficulty=difficulty or "",
+        topic=topic or "",
+        keyword=keyword or "",
+        limit=limit,
+    )
+    return [_bank_row_to_item(row, imported_words=imported_words) for row in rows]
+
+
+@router.get("/bank/summary", response_model=VocabularyBankSummaryResponse)
+async def bank_vocabulary_summary(current_user: dict = Depends(get_current_user)):
+    return VocabularyBankSummaryResponse(**get_ielts_vocabulary_bank_summary())
+
+
+@router.post("/bank/import", response_model=VocabularyBankImportResponse)
+async def import_bank_vocabulary(
+    payload: VocabularyBankImportRequest,
+    current_user: dict = Depends(get_current_user),
+):
+    requested_ids = list(dict.fromkeys(str(x or "").strip() for x in payload.word_ids if str(x or "").strip()))
+    if not requested_ids:
+        raise HTTPException(status_code=400, detail="No bank words selected")
+
+    rows = get_ielts_vocabulary_bank_by_ids(requested_ids[:200])
+    if not rows:
+        raise HTTPException(status_code=404, detail="Vocabulary bank words not found")
+
+    existing = get_user_vocabulary(current_user["id"], 5000)
+    existing_by_word = {str(w.get("word", "")).strip().lower() for w in existing}
+
+    imported_words: List[str] = []
+    imported_ids: List[str] = []
+    skipped_existing = 0
+    for row in rows:
+        word = str(row.get("head_word") or "").strip()
+        if not word:
+            continue
+        if word.lower() in existing_by_word:
+            skipped_existing += 1
+            continue
+        vocab_id = str(uuid4())
+        save_vocabulary(
+            vocab_id,
+            current_user["id"],
+            _bank_row_to_vocab_data(row, source_module=payload.source_module or "ielts_bank"),
+        )
+        existing_by_word.add(word.lower())
+        imported_words.append(word)
+        imported_ids.append(vocab_id)
+
+    return VocabularyBankImportResponse(
+        imported=len(imported_words),
+        skipped_existing=skipped_existing,
+        words=imported_words,
+        word_ids=imported_ids,
+    )
+
+
 @router.get("/", response_model=List[WordItem])
 async def list_vocabulary(
     limit: int = 100,
@@ -546,6 +1011,60 @@ async def start_learning_session(
     )
 
 
+@router.post("/learn/today", response_model=LearnSessionResponse)
+async def start_today_learning_session(
+    payload: TodayLearnSessionRequest,
+    current_user: dict = Depends(get_current_user),
+):
+    user_id = current_user["id"]
+    count = max(1, min(int(payload.count or 10), 30))
+    all_words = get_user_vocabulary(user_id, 5000)
+    filtered_words = [
+        word for word in all_words
+        if _word_matches_learning_filters(word, topic=payload.topic, difficulty=payload.difficulty)
+    ]
+    selected_pool = filtered_words if (payload.topic or payload.difficulty) else all_words
+    selected = _pick_words_by_strategy(selected_pool, "mixed", count)
+
+    if len(selected) < count:
+        existing_words = {str(w.get("word", "")).strip().lower() for w in all_words}
+        bank_rows = list_ielts_vocabulary_bank(
+            difficulty=payload.difficulty or "",
+            topic=payload.topic or "",
+            keyword="",
+            limit=max(20, (count - len(selected)) * 6),
+        )
+        imported = 0
+        for row in bank_rows:
+            word = str(row.get("head_word") or "").strip()
+            if not word or word.lower() in existing_words:
+                continue
+            save_vocabulary(
+                str(uuid4()),
+                user_id,
+                _bank_row_to_vocab_data(row, source_module="ielts_bank"),
+            )
+            existing_words.add(word.lower())
+            imported += 1
+            if imported >= count - len(selected):
+                break
+        if imported:
+            all_words = get_user_vocabulary(user_id, 5000)
+            filtered_words = [
+                word for word in all_words
+                if _word_matches_learning_filters(word, topic=payload.topic, difficulty=payload.difficulty)
+            ]
+            selected_pool = filtered_words if (payload.topic or payload.difficulty) else all_words
+            selected = _pick_words_by_strategy(selected_pool, "mixed", count)
+
+    save_vocabulary_strategy_session(user_id, "today_active_recall", selected)
+    return LearnSessionResponse(
+        session_id=str(uuid4()),
+        strategy="today_active_recall",
+        words=[LearnSessionWordItem(**w) for w in selected],
+    )
+
+
 @router.post("/{vocab_id}/review", response_model=WordReviewResponse)
 async def mark_word_reviewed(
     vocab_id: str,
@@ -564,6 +1083,71 @@ async def mark_word_reviewed(
         next_review_date=reviewed["next_review_date"],
         mastery_level=reviewed["mastery_level"],
     )
+
+
+@router.post("/learn/submit", response_model=LearningAttemptSubmitResponse)
+async def submit_learning_attempt(
+    payload: LearningAttemptSubmitRequest,
+    current_user: dict = Depends(get_current_user),
+):
+    row = get_vocabulary_by_id(payload.vocab_id)
+    if not row:
+        raise HTTPException(status_code=404, detail="Vocabulary not found")
+    if str(row["user_id"]) != str(current_user["id"]):
+        raise HTTPException(status_code=403, detail="Access denied")
+
+    scoring = _score_learning_attempt(row, payload)
+    reviewed = review_vocabulary(
+        payload.vocab_id,
+        scoring["mastery_delta"],
+        review_interval_seconds=scoring["review_interval_seconds"],
+    )
+    if not reviewed:
+        raise HTTPException(status_code=500, detail="Failed to review vocabulary")
+
+    attempt_id = str(uuid4())
+    save_vocabulary_learning_attempt(
+        attempt_id,
+        str(current_user["id"]),
+        payload.vocab_id,
+        {
+            **scoring,
+            "session_id": payload.session_id,
+            "strategy": payload.strategy,
+            "recall_text": payload.recall_text,
+            "cloze_answer": payload.cloze_answer,
+            "output_sentence": payload.output_sentence,
+            "mastery_after": reviewed["mastery_level"],
+            "next_review_date": reviewed["next_review_date"],
+        },
+    )
+    return LearningAttemptSubmitResponse(
+        next_review_date=reviewed["next_review_date"],
+        next_review_label=scoring["next_review_label"],
+        mastery_level=reviewed["mastery_level"],
+        mastery_delta=scoring["mastery_delta"],
+        quality_score=scoring["quality_score"],
+        recall_completed=scoring["recall_completed"],
+        cloze_correct=scoring["cloze_correct"],
+        output_uses_word=scoring["output_uses_word"],
+        feedback=scoring["feedback"],
+        output_feedback=scoring["output_feedback"],
+        output_suggestion=scoring["output_suggestion"],
+    )
+
+
+@router.post("/learn/output-prompt", response_model=OutputPromptResponse)
+async def generate_output_prompt(
+    payload: OutputPromptRequest,
+    current_user: dict = Depends(get_current_user),
+):
+    row = get_vocabulary_by_id(payload.vocab_id)
+    if not row:
+        raise HTTPException(status_code=404, detail="Vocabulary not found")
+    if str(row["user_id"]) != str(current_user["id"]):
+        raise HTTPException(status_code=403, detail="Access denied")
+    sentence = _generate_output_prompt_sentence(row, payload.topic)
+    return OutputPromptResponse(chinese_sentence=sentence)
 
 
 @router.get("/stats/summary", response_model=VocabularyStatsResponse)

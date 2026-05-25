@@ -19,23 +19,32 @@ class TranslationAgent(BaseAgent):
         difficulty: str = "medium",
         direction: str = "zh_to_en",
         topic: str = "general",
+        core_words: List[Dict[str, Any]] | None = None,
+        word_context: str = "",
     ) -> Dict[str, Any]:
         """生成翻译练习题"""
         safe_direction = direction if direction in {"zh_to_en", "en_to_zh"} else "zh_to_en"
         safe_topic = (topic or "general").strip() or "general"
         source_language = "中文" if safe_direction == "zh_to_en" else "英文"
         target_language = "英文" if safe_direction == "zh_to_en" else "中文"
+        safe_core_words = core_words or []
+        core_word_names = [str(item.get("head_word") or item.get("word") or "").strip() for item in safe_core_words if str(item.get("head_word") or item.get("word") or "").strip()]
+        core_word_block = word_context.strip() if word_context else ""
         prompt = f"""请作为专业的英语翻译教练，生成一个{source_language}句子作为{source_language}译{target_language}练习题目。
 
         难度级别：{difficulty}（easy/medium/hard）
         主题：{safe_topic}
         翻译方向：{safe_direction}
+        核心考察词汇：{", ".join(core_word_names) if core_word_names else "无指定"}
+        核心词汇上下文：
+        {core_word_block or "无"}
 
         请生成一个符合以下要求的{source_language}句子：
         1. 符合指定难度级别
         2. 适合英语学习者练习翻译
         3. 贴合指定主题
         4. 句子长度适中
+        5. 如果给出了核心考察词汇，题目必须自然地考察这些词或其常见搭配；不要生硬堆砌。
 
         请使用JSON格式输出，包含以下字段：
         - source_sentence: str
@@ -44,6 +53,7 @@ class TranslationAgent(BaseAgent):
         - difficulty: str
         - topic: str
         - focus_points: [str]（本题重点）
+        - core_words: [{{word: str, definition: str, part_of_speech: str}}]
         """
         
         try:
@@ -56,7 +66,16 @@ class TranslationAgent(BaseAgent):
             "direction": safe_direction,
             "difficulty": difficulty,
             "topic": safe_topic,
-            "focus_points": [],
+            "focus_points": core_word_names,
+            "core_words": [
+                {
+                    "word": str(item.get("head_word") or item.get("word") or ""),
+                    "definition": str(item.get("definition_cn") or item.get("definition_en") or ""),
+                    "part_of_speech": str(item.get("part_of_speech") or ""),
+                    "word_id": str(item.get("word_id") or ""),
+                }
+                for item in safe_core_words
+            ],
         })
     
     def check_translation(
@@ -149,6 +168,7 @@ class TranslationAgent(BaseAgent):
         parsed["difficulty"] = parsed.get("difficulty") or default.get("difficulty", "medium")
         parsed["topic"] = parsed.get("topic") or "General"
         parsed["focus_points"] = parsed.get("focus_points") or []
+        parsed["core_words"] = parsed.get("core_words") or default.get("core_words", [])
         return parsed
 
     @staticmethod

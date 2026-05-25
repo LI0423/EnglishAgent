@@ -75,19 +75,34 @@ const api = axios.create({
   },
 });
 
+const isPublicAuthRequest = (url = '') => {
+  const path = String(url || '');
+  return (
+    path.includes('/auth/login')
+    || path.includes('/auth/register')
+    || path.includes('/auth/password/reset')
+  );
+};
+
+const expireAuthSession = (message = '登录状态已失效，请重新登录') => {
+  localStorage.removeItem('user');
+  clearCurrentUserCache();
+  if (typeof window !== 'undefined') {
+    window.dispatchEvent(new CustomEvent('auth:expired', { detail: { message } }));
+  }
+};
+
 api.interceptors.response.use(
   (response) => response,
   (error) => {
     const status = error?.response?.status;
     const detail = String(error?.response?.data?.detail || '');
-    if (status === 401 && /invalid token|missing token|token subject|user not found/i.test(detail)) {
-      localStorage.removeItem('user');
-      clearCurrentUserCache();
+    if (status === 401 && !isPublicAuthRequest(error?.config?.url)) {
       const message = '登录状态已失效，请重新登录';
       error.userMessage = message;
-      if (typeof window !== 'undefined') {
-        window.dispatchEvent(new CustomEvent('auth:expired', { detail: { message } }));
-      }
+      expireAuthSession(message);
+    } else if (status === 401 && /invalid token|missing token|token subject|user not found|expired/i.test(detail)) {
+      error.userMessage = '登录状态已失效，请重新登录';
     }
     return Promise.reject(error);
   },
@@ -226,8 +241,7 @@ export const getCurrentUser = async () => {
     currentUserCache = response.data;
     return currentUserCache;
   }).catch(() => {
-    localStorage.removeItem('user');
-    clearCurrentUserCache();
+    expireAuthSession();
     return null;
   }).finally(() => {
     currentUserRequest = null;
@@ -256,8 +270,7 @@ export const getCurrentUserUncached = async () => {
     });
     return response.data;
   } catch {
-    localStorage.removeItem('user');
-    clearCurrentUserCache();
+    expireAuthSession();
     return null;
   }
 };
@@ -972,6 +985,7 @@ export const getCheckinCalendar = async (month = '') => {
 const getAuthHeader = () => {
   const token = getStoredToken();
   if (!token) {
+    expireAuthSession();
     throw new Error('登录状态已失效，请重新登录');
   }
   return { Authorization: `Bearer ${token}` };
@@ -1248,6 +1262,17 @@ export const startVocabularySession = async (strategy = 'spaced', count = 10) =>
   return response.data;
 };
 
+export const startTodayVocabularySession = async ({ count = 10, topic = '', difficulty = '' } = {}) => {
+  const response = await api.post('/vocabulary/learn/today', {
+    count,
+    topic,
+    difficulty,
+  }, {
+    headers: getAuthHeader(),
+  });
+  return response.data;
+};
+
 export const getDueVocabulary = async (limit = 100) => {
   try {
     const response = await api.get('/vocabulary/due', {
@@ -1264,6 +1289,23 @@ export const getDueVocabulary = async (limit = 100) => {
 export const reviewVocabularyWord = async (vocabId, masteryDelta = 0.15) => {
   const response = await api.post(`/vocabulary/${vocabId}/review`, null, {
     params: { mastery_delta: masteryDelta },
+    headers: getAuthHeader(),
+  });
+  return response.data;
+};
+
+export const submitVocabularyLearningAttempt = async (payload) => {
+  const response = await api.post('/vocabulary/learn/submit', payload, {
+    headers: getAuthHeader(),
+  });
+  return response.data;
+};
+
+export const generateVocabularyOutputPrompt = async (vocabId, topic = '') => {
+  const response = await api.post('/vocabulary/learn/output-prompt', {
+    vocab_id: vocabId,
+    topic,
+  }, {
     headers: getAuthHeader(),
   });
   return response.data;
@@ -1291,6 +1333,45 @@ export const getVocabularyStrategyInsights = async (days = 14) => {
   } catch (error) {
     console.error('Failed to get vocabulary strategy insights:', error);
     return [];
+  }
+};
+
+export const getVocabularyBankSummary = async () => {
+  try {
+    const response = await api.get('/vocabulary/bank/summary', {
+      headers: getAuthHeader(),
+    });
+    return response.data || { total: 0, difficulties: [], topics: [] };
+  } catch (error) {
+    console.error('Failed to get vocabulary bank summary:', error);
+    return { total: 0, difficulties: [], topics: [] };
+  }
+};
+
+export const getVocabularyBank = async ({ difficulty = '', topic = '', keyword = '', limit = 30 } = {}) => {
+  try {
+    const response = await api.get('/vocabulary/bank', {
+      params: { difficulty, topic, keyword, limit },
+      headers: getAuthHeader(),
+    });
+    return response.data || [];
+  } catch (error) {
+    console.error('Failed to get vocabulary bank:', error);
+    return [];
+  }
+};
+
+export const importVocabularyBankWords = async (wordIds = [], sourceModule = 'ielts_bank') => {
+  try {
+    const response = await api.post('/vocabulary/bank/import', {
+      word_ids: wordIds,
+      source_module: sourceModule,
+    }, {
+      headers: getAuthHeader(),
+    });
+    return response.data;
+  } catch (error) {
+    throw getErrorDetail(error, '导入 IELTS 词库失败');
   }
 };
 

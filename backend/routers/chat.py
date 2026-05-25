@@ -7,6 +7,7 @@ from typing import Optional, Dict, Any, List, Literal
 from agent_core.agent import ielts_agent, translation_agent, deep_search_agent
 from ..deps import get_current_user
 from ..services.ability_service import record_practice_result
+from ..services.ielts_vocabulary_bank_service import format_core_words_for_prompt, select_translation_core_words
 
 router = APIRouter()
 
@@ -132,14 +133,35 @@ async def translation_practice(request: TranslationPracticeRequest, current_user
         if request.action == "generate":
             # 生成翻译题目
             difficulty = request.difficulty or "medium"
+            core_words = select_translation_core_words(difficulty=difficulty, topic=request.topic, limit=3)
+            word_context = format_core_words_for_prompt(core_words)
             try:
                 result = translation_agent.generate_translation_question(
                     difficulty=difficulty,
                     direction=request.direction,
                     topic=request.topic,
+                    core_words=core_words,
+                    word_context=word_context,
                 )
             except TypeError:
                 result = translation_agent.generate_translation_question(difficulty=difficulty)
+            if core_words and not result.get("core_words"):
+                result["core_words"] = [
+                    {
+                        "word": item.get("head_word"),
+                        "definition": item.get("definition_cn") or item.get("definition_en") or "",
+                        "part_of_speech": item.get("part_of_speech") or "",
+                        "word_id": item.get("word_id") or "",
+                    }
+                    for item in core_words
+                ]
+            if core_words:
+                focus = list(result.get("focus_points") or [])
+                for item in core_words:
+                    label = f"{item.get('head_word')}：{item.get('definition_cn') or item.get('definition_en') or ''}".strip("：")
+                    if label and label not in focus:
+                        focus.append(label)
+                result["focus_points"] = focus
             return result
         if request.action == "check":
             # 检查翻译

@@ -150,7 +150,7 @@ const Home = () => {
             <section className="welcome-section">
               <div className="welcome-content">
                 <h2>你好，{username}</h2>
-                <p>今天是你学习的第{summary.learning_days || 0}天，已连续学习{summary.streak_days || 0}天</p>
+                <p>加入学习第{summary.learning_days || 0}天，当前连续打卡{summary.streak_days || 0}天</p>
                 <p>{summary.has_plan ? '保持当前进度，继续推进本周目标。' : '完成练习或创建学习计划后，首页会生成更完整的学习数据。'}</p>
               </div>
             </section>

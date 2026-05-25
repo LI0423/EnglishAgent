@@ -1,5 +1,5 @@
 import { Suspense, lazy, useEffect } from 'react'
-import { BrowserRouter as Router, Routes, Route, useLocation, useNavigate } from 'react-router-dom'
+import { BrowserRouter as Router, Navigate, Routes, Route, useLocation, useNavigate } from 'react-router-dom'
 import './App.css'
 
 const Login = lazy(() => import('./pages/Login'))
@@ -51,6 +51,29 @@ function AuthSessionWatcher() {
   return null
 }
 
+function hasStoredToken() {
+  try {
+    const user = JSON.parse(localStorage.getItem('user') || '{}')
+    return Boolean(user?.access_token || user?.token || user?.data?.access_token)
+  } catch {
+    return false
+  }
+}
+
+function RequireAuth({ children }) {
+  const location = useLocation()
+  if (!hasStoredToken()) {
+    return <Navigate to="/login" replace state={{ from: location.pathname }} />
+  }
+  return children
+}
+
+const protectedRoute = (element) => (
+  <RequireAuth>
+    {element}
+  </RequireAuth>
+)
+
 function App() {
   return (
     <Router>
@@ -59,26 +82,26 @@ function App() {
         <Routes>
           <Route path="/login" element={<Login />} />
           <Route path="/register" element={<Register />} />
-          <Route path="/" element={<Home />} />
-          <Route path="/chat" element={<Chat />} />
-          <Route path="/translation-search" element={<TranslationSearch />} />
-          <Route path="/writing" element={<Writing />} />
-          <Route path="/mistakes" element={<Mistakes />} />
-          <Route path="/vocabulary" element={<Vocabulary />} />
-          <Route path="/community" element={<Community />} />
-          <Route path="/groups" element={<StudyGroups />} />
-          <Route path="/payment" element={<PaymentCenter />} />
-          <Route path="/admin" element={<Admin />} />
-          <Route path="/campaigns" element={<Campaigns />} />
-          <Route path="/listening" element={<Listening />} />
-          <Route path="/reading" element={<Reading />} />
-          <Route path="/speaking" element={<Speaking />} />
-          <Route path="/reports" element={<Reports />} />
-          <Route path="/plans" element={<Plans />} />
-          <Route path="/reminders" element={<ReminderCenter />} />
-          <Route path="/achievements" element={<Achievements />} />
-          <Route path="/mock-exam" element={<Diagnostic />} />
-          <Route path="/profile" element={<ComingSoon />} />
+          <Route path="/" element={protectedRoute(<Home />)} />
+          <Route path="/chat" element={protectedRoute(<Chat />)} />
+          <Route path="/translation-search" element={protectedRoute(<TranslationSearch />)} />
+          <Route path="/writing" element={protectedRoute(<Writing />)} />
+          <Route path="/mistakes" element={protectedRoute(<Mistakes />)} />
+          <Route path="/vocabulary" element={protectedRoute(<Vocabulary />)} />
+          <Route path="/community" element={protectedRoute(<Community />)} />
+          <Route path="/groups" element={protectedRoute(<StudyGroups />)} />
+          <Route path="/payment" element={protectedRoute(<PaymentCenter />)} />
+          <Route path="/admin" element={protectedRoute(<Admin />)} />
+          <Route path="/campaigns" element={protectedRoute(<Campaigns />)} />
+          <Route path="/listening" element={protectedRoute(<Listening />)} />
+          <Route path="/reading" element={protectedRoute(<Reading />)} />
+          <Route path="/speaking" element={protectedRoute(<Speaking />)} />
+          <Route path="/reports" element={protectedRoute(<Reports />)} />
+          <Route path="/plans" element={protectedRoute(<Plans />)} />
+          <Route path="/reminders" element={protectedRoute(<ReminderCenter />)} />
+          <Route path="/achievements" element={protectedRoute(<Achievements />)} />
+          <Route path="/mock-exam" element={protectedRoute(<Diagnostic />)} />
+          <Route path="/profile" element={protectedRoute(<ComingSoon />)} />
         </Routes>
       </Suspense>
     </Router>
