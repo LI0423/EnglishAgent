@@ -12,6 +12,8 @@ from pydantic import BaseModel
 from ..db import save_mistake
 from ..deps import get_current_user
 from ..services.mistake_taxonomy import normalize_listening_error_type
+from ..services.ability_service import get_difficulty_recommendation, record_practice_result
+from ..services.difficulty_utils import dominant_difficulty as _dominant_difficulty
 from ..services.tts_service import get_tts_service
 
 router = APIRouter()
@@ -580,7 +582,8 @@ async def generate_listening_quiz(
     current_user: dict = Depends(get_current_user),
 ):
     count = max(1, min(int(payload.count or 5), 20))
-    difficulty = (payload.difficulty or "").strip().lower()
+    requested_difficulty = (payload.difficulty or "").strip().lower()
+    difficulty = requested_difficulty or _recommended_bank_difficulty(str(current_user["id"]))
     audio_id = (payload.audio_id or "").strip()
 
     pool = LISTENING_QUESTION_BANK
@@ -588,6 +591,10 @@ async def generate_listening_quiz(
         pool = [q for q in pool if str(q.get("difficulty") or "").lower() == difficulty]
     if audio_id:
         pool = [q for q in pool if str(q.get("audio_id") or "") == audio_id]
+    if not pool and not requested_difficulty:
+        pool = LISTENING_QUESTION_BANK
+        if audio_id:
+            pool = [q for q in pool if str(q.get("audio_id") or "") == audio_id]
     if not pool:
         raise HTTPException(status_code=400, detail="No quiz questions found for given filters")
 
@@ -686,6 +693,19 @@ async def submit_listening_quiz(
 
     total = len(runtime.get("questions", []))
     accuracy = round((correct / total), 4) if total else 0.0
+    difficulties = [str(q.get("difficulty") or "medium") for q in runtime.get("questions", [])]
+    record_practice_result(
+        str(current_user["id"]),
+        "listening",
+        {
+            "overall": round(accuracy * 10, 2),
+            "accuracy": round(accuracy * 10, 2),
+        },
+        difficulty=_dominant_difficulty(difficulties),
+        topic="general",
+        practice_mode="quiz",
+        source="listening_quiz",
+    )
     return ListeningQuizSubmitResponse(total=total, correct=correct, accuracy=accuracy, details=details)
 
 
@@ -695,7 +715,8 @@ async def generate_listening_intensive(
     current_user: dict = Depends(get_current_user),
 ):
     count = max(1, min(int(payload.count or 5), 20))
-    difficulty = (payload.difficulty or "").strip().lower()
+    requested_difficulty = (payload.difficulty or "").strip().lower()
+    difficulty = requested_difficulty or _recommended_bank_difficulty(str(current_user["id"]))
     audio_id = (payload.audio_id or "").strip()
     mode = (payload.mode or "mixed").strip().lower()
     if mode not in {"mixed", "dictation", "keyword"}:
@@ -707,6 +728,11 @@ async def generate_listening_intensive(
     if audio_id:
         pool = [q for q in pool if str(q.get("audio_id") or "") == audio_id]
     pool = [q for q in pool if _intensive_mode_match(mode, str(q.get("question_type") or ""))]
+    if not pool and not requested_difficulty:
+        pool = LISTENING_QUESTION_BANK
+        if audio_id:
+            pool = [q for q in pool if str(q.get("audio_id") or "") == audio_id]
+        pool = [q for q in pool if _intensive_mode_match(mode, str(q.get("question_type") or ""))]
     if not pool:
         raise HTTPException(status_code=400, detail="No intensive listening questions found for given filters")
 
@@ -804,6 +830,19 @@ async def submit_listening_intensive(
     total = len(runtime.get("questions", []))
     accuracy = round((correct / total), 4) if total else 0.0
     recommended_speed = 0.8 if accuracy < 0.6 else (1.0 if accuracy < 0.85 else 1.25)
+    difficulties = [str(q.get("difficulty") or "medium") for q in runtime.get("questions", [])]
+    record_practice_result(
+        str(current_user["id"]),
+        "listening",
+        {
+            "overall": round(accuracy * 10, 2),
+            "accuracy": round(accuracy * 10, 2),
+        },
+        difficulty=_dominant_difficulty(difficulties),
+        topic="general",
+        practice_mode=f"intensive_{runtime.get('mode') or 'mixed'}",
+        source="listening_intensive",
+    )
     return ListeningIntensiveSubmitResponse(
         total=total,
         correct=correct,
@@ -932,3 +971,13 @@ async def get_audio_segment(
         "url": f"{audio_info['url']}?start={start_time}&end={end_time}",
         "transcript": audio_info["transcript"][:100] if audio_info["transcript"] else None,
     }
+
+
+def _recommended_bank_difficulty(user_id: str) -> str:
+    recommendation = get_difficulty_recommendation(user_id, module="listening")
+    value = str(recommendation.get("recommended_difficulty") or "medium").strip().lower()
+    if value == "easy":
+        return "easy"
+    if value == "hard":
+        return "advanced"
+    return "intermediate"

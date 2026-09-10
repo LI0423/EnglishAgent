@@ -111,6 +111,7 @@ class MistakeClusterItem(BaseModel):
 class BatchReviewRequest(BaseModel):
     mistake_ids: List[str]
     mastery_delta: float = 0.2
+    quality: Optional[int] = None
 
 
 class BatchReviewResponse(BaseModel):
@@ -321,6 +322,7 @@ async def import_mistakes(
 async def mark_reviewed(
     mistake_id: str,
     mastery_delta: float = 0.2,
+    quality: Optional[int] = None,
     current_user: dict = Depends(get_current_user),
 ):
     mistake = get_mistake_by_id(mistake_id)
@@ -328,7 +330,7 @@ async def mark_reviewed(
         raise HTTPException(status_code=404, detail="Mistake not found")
     if mistake["user_id"] != current_user["id"]:
         raise HTTPException(status_code=403, detail="Access denied")
-    reviewed = review_mistake(mistake_id, mastery_delta)
+    reviewed = review_mistake(mistake_id, mastery_delta, quality=quality)
     if not reviewed:
         raise HTTPException(status_code=500, detail="Failed to review mistake")
     return ReviewResponse(
@@ -357,7 +359,7 @@ async def batch_review(
             skipped += 1
             failed_ids.append(mistake_id)
             continue
-        result = review_mistake(mistake_id, payload.mastery_delta)
+        result = review_mistake(mistake_id, payload.mastery_delta, quality=payload.quality)
         if result:
             reviewed += 1
         else:

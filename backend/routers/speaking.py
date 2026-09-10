@@ -13,6 +13,7 @@ from ..db import (
     list_sessions as db_list_sessions,
 )
 from backend.utils.tracking import get_learning_tracker
+from ..services.ability_service import record_practice_result
 from ..services.tts_service import get_tts_service
 
 
@@ -459,6 +460,29 @@ async def submit_turn(session_id: str, payload: SpeakingTurnRequest, current_use
         current_user["id"],
         "speaking_turn_submit",
         {"session_id": session_id, "part_index": part_index, "turn_index": turn_index, "mode": mode},
+    )
+    word_count = len(_tokenize(text))
+    content_score = min(10.0, max(3.0, word_count / 3.0))
+    pacing_score = 8.5 if spent_seconds <= int(target_seconds * 1.2) else 6.0
+    language_score = 7.5
+    if word_count < 10:
+        language_score = 5.5
+    elif word_count >= 25:
+        language_score = 8.0
+    record_practice_result(
+        str(current_user["id"]),
+        "speaking",
+        {
+            "overall": round((content_score + pacing_score + language_score) / 3, 2),
+            "accuracy": round(content_score, 2),
+            "fluency": round(pacing_score, 2),
+            "grammar": round(language_score, 2),
+            "vocabulary": round(language_score, 2),
+        },
+        difficulty="medium" if part_index < 3 else "hard",
+        topic="general",
+        practice_mode=f"{mode}_part{part_index}",
+        source="speaking_turn",
     )
     return SpeakingTurnResponse(
         ok=True,

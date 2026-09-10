@@ -6,17 +6,22 @@ from typing import Any, Dict, List
 from uuid import uuid4
 
 from backend.db import (
+    complete_daily_task_item,
     create_daily_task,
     create_learning_plan,
     get_conn,
     get_daily_task_by_date,
     get_latest_user_plan,
     get_plan_execution_health,
+    get_top_skill_states,
+    get_user_skill_state_summary,
     get_user_profile,
     get_vocabulary_stats,
     list_user_diagnostic_reports,
     update_plan_status,
 )
+from backend.services.growth_recommendation_service import get_growth_recommendations
+from backend.redis_client import get_timed_state
 
 
 MODULE_META = {
@@ -39,6 +44,7 @@ def get_dashboard_overview(user_id: str, username: str = "") -> Dict[str, Any]:
     events = _get_learning_events(user_id, week_start, now)
     activities = _get_user_activities(user_id, week_start, now)
     vocabulary = _build_vocabulary_summary(user_id, week_start)
+    growth = _build_growth_summary(user_id)
     latest_report = _latest_diagnostic_report(user_id)
 
     modules = _build_module_cards(events, activities, today_start)
@@ -46,6 +52,7 @@ def get_dashboard_overview(user_id: str, username: str = "") -> Dict[str, Any]:
     total_completion = _total_completion(plan_health, events, activities)
     current_band = _current_band(profile, latest_report)
     target_band = _to_float(profile.get("target_band")) or 6.5
+    growth_recommendations = get_growth_recommendations(user_id, limit=5)
 
     return {
         "summary": {
@@ -58,11 +65,12 @@ def get_dashboard_overview(user_id: str, username: str = "") -> Dict[str, Any]:
             "has_plan": bool(latest_plan),
         },
         "vocabulary": vocabulary,
+        "growth": growth,
         "modules": modules,
         "trend": trend,
         "checkin_calendar": checkin_calendar,
-        "recommendations": _build_recommendations(user_id, modules, vocabulary, latest_report),
-        "today_tasks": _build_today_tasks(latest_plan, today_start) if latest_plan else _fallback_today_tasks(modules, vocabulary),
+        "recommendations": growth_recommendations[:3] or _build_recommendations(user_id, modules, vocabulary, latest_report),
+        "today_tasks": _build_growth_today_tasks(growth_recommendations) or (_build_today_tasks(latest_plan, today_start) if latest_plan else _fallback_today_tasks(modules, vocabulary)),
         "data_sources": {
             "profile": bool(profile),
             "plan": bool(latest_plan),
@@ -85,6 +93,7 @@ def get_checkin_calendar(
     month_start = _month_start(month, now)
     next_month = _add_month(month_start)
     today = time.strftime("%Y-%m-%d", time.localtime(now))
+    today_vocab_completed = _today_vocabulary_learning_completed(user_id, today)
     rows = _get_plan_day_rows(user_id, month_start, next_month)
     row_by_date: Dict[str, Dict[str, Any]] = {}
     for row in rows:
@@ -98,6 +107,8 @@ def get_checkin_calendar(
         date_text = time.strftime("%Y-%m-%d", time.localtime(cursor))
         row = row_by_date.get(date_text)
         done, total, tasks = _daily_task_counts(row)
+        if date_text == today and today_vocab_completed:
+            done, total, tasks = _apply_module_completion(tasks, module="vocabulary")
         days.append(
             {
                 "date": date_text,
@@ -120,6 +131,59 @@ def get_checkin_calendar(
         "planned_days": planned_days,
         "today_status": next((day["status"] for day in days if day["is_today"]), "empty"),
         "days": days,
+    }
+
+
+def complete_smart_learning_task(user_id: str, task_id: str) -> Dict[str, Any]:
+    from backend.services.learning_event_service import get_today_learning_plan
+
+    now = int(time.time())
+    today_start = _day_start(now)
+    plan = ensure_default_learning_plan(user_id, now_ts=now)
+    daily = get_daily_task_by_date(str(plan["id"]), today_start)
+    if not daily:
+        create_daily_task(str(uuid4()), str(plan["id"]), today_start, [])
+        daily = get_daily_task_by_date(str(plan["id"]), today_start)
+    if not daily:
+        return {"ok": False, "message": "今日任务创建失败"}
+
+    plan_data = get_today_learning_plan(user_id, limit=10)
+    smart_tasks = list(plan_data.get("tasks") or [])
+    target = next((item for item in smart_tasks if str(item.get("id") or "") == str(task_id)), None)
+    if not target:
+        return {"ok": False, "message": "智能任务不存在或已过期"}
+
+    smart_item = {
+        "id": str(task_id),
+        "module": str(target.get("module") or ""),
+        "title": str(target.get("title") or "智能学习任务"),
+        "description": str(target.get("reason") or ""),
+        "duration_minutes": 10,
+        "time_required": 10,
+        "route": str(target.get("route") or ""),
+        "source": "hidden_growth_engine",
+        "completed": False,
+        "progress": 0,
+        "time_spent": 0,
+    }
+    # 单事务内「按需追加 + 标记完成」，避免与并发的其他智能任务写入互相覆盖。
+    refreshed = complete_daily_task_item(
+        str(daily["id"]),
+        {
+            "task_id": str(task_id),
+            "completed": True,
+            "progress": 100,
+            "time_spent": 10,
+        },
+        item=smart_item,
+    ) or daily
+    return {
+        "ok": True,
+        "task_id": str(task_id),
+        "daily_task_id": str(refreshed["id"]),
+        "completed": True,
+        "today_tasks_completed": int(sum(1 for item in (refreshed.get("tasks") or []) if bool(item.get("completed")))),
+        "today_tasks_total": int(len(refreshed.get("tasks") or [])),
     }
 
 
@@ -263,6 +327,7 @@ def _get_learning_events(user_id: str, start_ts: int, end_ts: int) -> List[Dict[
             SELECT event_id, event_type, event_name, properties, timestamp
             FROM learning_events
             WHERE user_id = ? AND timestamp >= ? AND timestamp <= ?
+              AND event_type NOT IN ('practice_growth_sample')
             ORDER BY timestamp ASC
             """,
             (user_id, start_ts, end_ts),
@@ -315,6 +380,39 @@ def _build_vocabulary_summary(user_id: str, week_start: int) -> Dict[str, Any]:
         }
     finally:
         conn.close()
+
+
+def _build_growth_summary(user_id: str) -> Dict[str, Any]:
+    now = int(time.time())
+    summary = get_user_skill_state_summary(user_id, now=now)
+    if not summary.get("tracked_skills"):
+        return {
+            "tracked_skills": 0,
+            "average_mastery": 0,
+            "due_review_count": 0,
+            "weak_skills": [],
+            "strong_skills": [],
+        }
+    visible_categories = ["module", "skill", "topic", "mode"]
+    weak = get_top_skill_states(user_id, visible_categories, order="asc", limit=5)
+    strong = get_top_skill_states(user_id, visible_categories, order="desc", limit=5)
+    return {
+        "tracked_skills": summary["tracked_skills"],
+        "average_mastery": summary["average_mastery"],
+        "due_review_count": summary["due_review_count"],
+        "weak_skills": [_format_skill_state(item) for item in weak],
+        "strong_skills": [_format_skill_state(item) for item in strong],
+    }
+
+
+def _format_skill_state(item: Dict[str, Any]) -> Dict[str, Any]:
+    return {
+        "skill_key": str(item.get("skill_key") or ""),
+        "category": str(item.get("category") or ""),
+        "mastery": round(float(item.get("mastery") or 0.0), 4),
+        "stability": round(float(item.get("stability") or 0.0), 4),
+        "exposure_count": int(item.get("exposure_count") or 0),
+    }
 
 
 def _build_module_cards(events: List[Dict[str, Any]], activities: List[Dict[str, Any]], today_start: int) -> List[Dict[str, Any]]:
@@ -422,6 +520,27 @@ def _build_today_tasks(plan: Dict[str, Any] | None, today_start: int) -> List[Di
         ]
     finally:
         conn.close()
+
+
+def _build_growth_today_tasks(recommendations: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    tasks: List[Dict[str, Any]] = []
+    for item in recommendations[:4]:
+        title = str(item.get("title") or item.get("module_label") or "完成一组练习")
+        difficulty = str(item.get("difficulty_label") or "")
+        mode = str(item.get("practice_mode") or "")
+        suffix_parts = [part for part in [difficulty, mode] if part]
+        tasks.append(
+            {
+                "id": str(item.get("id") or f"growth-{len(tasks) + 1}"),
+                "title": f"{title}（{' · '.join(suffix_parts)}）" if suffix_parts else title,
+                "completed": False,
+                "progress": 0,
+                "module": str(item.get("module") or ""),
+                "route": str(item.get("route") or "/"),
+                "reason": str(item.get("reason") or ""),
+            }
+        )
+    return tasks
 
 
 def _fallback_today_tasks(modules: List[Dict[str, Any]], vocabulary: Dict[str, Any]) -> List[Dict[str, Any]]:
@@ -617,7 +736,12 @@ def _plan_streak_days(user_id: str, now: int) -> int:
         merged["tasks"].extend(_loads(row.get("tasks"), []))
 
     today_text = time.strftime("%Y-%m-%d", time.localtime(today_start))
-    today_done, today_total, _ = _daily_task_counts(row_by_date.get(today_text))
+    today_done, today_total, today_tasks = _daily_task_counts(row_by_date.get(today_text))
+    if _today_vocabulary_learning_completed(user_id, today_text):
+        today_done, today_total, _ = _apply_module_completion(
+            today_tasks,
+            module="vocabulary",
+        )
     cursor = today_start if _day_status(today_done, today_total, today_text, today_text) == "completed" else today_start - 86400
 
     streak = 0
@@ -629,6 +753,27 @@ def _plan_streak_days(user_id: str, now: int) -> int:
         streak += 1
         cursor -= 86400
     return streak
+
+
+def _apply_module_completion(tasks: List[Dict[str, Any]], module: str) -> tuple[int, int, List[Dict[str, Any]]]:
+    if not tasks:
+        return 0, 0, []
+    updated: List[Dict[str, Any]] = []
+    for task in tasks:
+        if str(task.get("module") or "") == module:
+            updated.append({**task, "completed": True, "progress": 100})
+        else:
+            updated.append(task)
+    done = sum(1 for task in updated if bool(task.get("completed")) or int(task.get("progress") or 0) >= 100)
+    return done, len(updated), updated
+
+
+def _today_vocabulary_learning_completed(user_id: str, date_key: str) -> bool:
+    safe_date_key = str(date_key or "").strip()
+    if not safe_date_key:
+        safe_date_key = time.strftime("%Y-%m-%d", time.localtime())
+    key = f"vocabulary:today_learning:completed:{user_id}:{safe_date_key}"
+    return get_timed_state(key) == "completed"
 
 
 def _day_start(ts: int) -> int:

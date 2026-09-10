@@ -2,9 +2,13 @@ import os
 import sqlite3
 import time
 import json
+import logging
 from datetime import datetime, timedelta
 from uuid import uuid4
 from typing import Optional, Tuple, Any, Dict
+
+
+logger = logging.getLogger(__name__)
 
 
 DB_PATH = os.environ.get("IELTS_AGENT_DB", os.path.join(os.path.dirname(os.path.dirname(__file__)), "ielts_agent.db"))
@@ -49,6 +53,15 @@ def _dedupe_vocabulary_rows(conn: sqlite3.Connection) -> int:
     if to_delete:
         conn.executemany("DELETE FROM vocabulary WHERE id = ?", [(x,) for x in to_delete])
     return len(to_delete)
+
+
+def _add_column_if_missing(conn: sqlite3.Connection, table: str, column_sql: str) -> None:
+    try:
+        conn.execute(f"ALTER TABLE {table} ADD COLUMN {column_sql}")
+    except sqlite3.OperationalError as exc:
+        # 仅忽略「列已存在」，其它错误（表缺失、磁盘问题等）应暴露出来。
+        if "duplicate column name" not in str(exc).lower():
+            raise
 
 
 def init_db():
@@ -331,6 +344,12 @@ def init_db():
                 """
         )
         # vocabulary hardening: clean duplicated words first, then enforce uniqueness
+        for table in ("vocabulary", "mistakes"):
+            _add_column_if_missing(conn, table, "sm2_repetitions INTEGER NOT NULL DEFAULT 0")
+            _add_column_if_missing(conn, table, "sm2_interval_days REAL NOT NULL DEFAULT 0.0")
+            _add_column_if_missing(conn, table, "sm2_ease_factor REAL NOT NULL DEFAULT 2.5")
+            _add_column_if_missing(conn, table, "sm2_lapses INTEGER NOT NULL DEFAULT 0")
+            _add_column_if_missing(conn, table, "sm2_last_quality INTEGER")
         _dedupe_vocabulary_rows(conn)
         conn.execute(
             """
@@ -1310,28 +1329,64 @@ def update_task_completion(task_id: str, completed: bool) -> None:
 def update_task_progress(task_id: str, progress: dict) -> None:
     conn = get_conn()
     try:
-        # 获取当前任务
-        task = get_daily_task(task_id)
-        if not task:
+        # 同一条连接内完成「读-改-写」，避免跨连接竞态覆盖 daily_tasks.tasks
+        cur = conn.execute("SELECT * FROM daily_tasks WHERE id = ?", (task_id,))
+        row = cur.fetchone()
+        if not row:
             return
-        
-        # 更新任务进度
-        tasks = task['tasks']
-        for i, t in enumerate(tasks):
-            if t.get('id') == progress.get('task_id'):
-                tasks[i]['completed'] = progress.get('completed', False)
-                tasks[i]['progress'] = progress.get('progress', 0)
-                tasks[i]['time_spent'] = progress.get('time_spent', 0)
+        tasks = json.loads(row["tasks"]) if row["tasks"] else []
+        for t in tasks:
+            if isinstance(t, dict) and t.get('id') == progress.get('task_id'):
+                t['completed'] = progress.get('completed', False)
+                t['progress'] = progress.get('progress', 0)
+                t['time_spent'] = progress.get('time_spent', 0)
                 break
-        
-        # 检查是否所有任务都完成
         all_completed = all(t.get('completed', False) for t in tasks)
-        
         conn.execute(
             "UPDATE daily_tasks SET tasks = ?, completed = ?, updated_at = ? WHERE id = ?",
             (json.dumps(tasks), 1 if all_completed else 0, int(time.time()), task_id)
         )
         conn.commit()
+    finally:
+        conn.close()
+
+
+def complete_daily_task_item(
+    task_id: str,
+    progress: dict,
+    item: Optional[Dict[str, Any]] = None,
+) -> Optional[Dict[str, Any]]:
+    """在单连接/事务内「按需追加任务项 + 标记进度」，避免跨连接读-改-写丢更新。"""
+    conn = get_conn()
+    try:
+        cur = conn.execute("SELECT * FROM daily_tasks WHERE id = ?", (task_id,))
+        row = cur.fetchone()
+        if not row:
+            return None
+        tasks = json.loads(row["tasks"]) if row["tasks"] else []
+        target_id = str(progress.get("task_id") or "")
+        if item is not None and not any(
+            isinstance(t, dict) and str(t.get("id") or "") == target_id for t in tasks
+        ):
+            tasks.append(dict(item))
+        for t in tasks:
+            if isinstance(t, dict) and str(t.get("id") or "") == target_id:
+                t["completed"] = bool(progress.get("completed", False))
+                t["progress"] = progress.get("progress", 0)
+                t["time_spent"] = progress.get("time_spent", 0)
+                break
+        all_completed = all(bool(t.get("completed")) for t in tasks) if tasks else False
+        now = int(time.time())
+        conn.execute(
+            "UPDATE daily_tasks SET tasks = ?, completed = ?, updated_at = ? WHERE id = ?",
+            (json.dumps(tasks), 1 if all_completed else 0, now, task_id),
+        )
+        conn.commit()
+        result = dict(row)
+        result["tasks"] = tasks
+        result["completed"] = 1 if all_completed else 0
+        result["updated_at"] = now
+        return result
     finally:
         conn.close()
 
@@ -4208,6 +4263,273 @@ def save_learning_event(event_id: str, user_id: str, event_data: Dict[str, Any])
         conn.close()
 
 
+def ensure_skill_tag(
+    skill_key: str,
+    name: str,
+    category: str,
+    parent_key: str = "",
+    metadata: Optional[Dict[str, Any]] = None,
+) -> None:
+    key = str(skill_key or "").strip().lower()
+    if not key:
+        return
+    now = int(time.time())
+    conn = get_conn()
+    try:
+        conn.execute(
+            """
+            INSERT INTO skill_tags (
+              id, skill_key, name, category, parent_key, metadata, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(skill_key) DO UPDATE SET
+              name = excluded.name,
+              category = excluded.category,
+              parent_key = excluded.parent_key,
+              metadata = excluded.metadata,
+              updated_at = excluded.updated_at
+            """,
+            (
+                str(uuid4()),
+                key,
+                str(name or key),
+                str(category or "general").strip().lower() or "general",
+                str(parent_key or ""),
+                json.dumps(metadata or {}, ensure_ascii=False),
+                now,
+                now,
+            ),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def link_learning_event_skill(
+    event_id: str,
+    skill_key: str,
+    weight: float = 1.0,
+    outcome: Optional[float] = None,
+) -> None:
+    key = str(skill_key or "").strip().lower()
+    if not event_id or not key:
+        return
+    conn = get_conn()
+    try:
+        conn.execute(
+            """
+            INSERT OR IGNORE INTO learning_event_skill_tags (
+              id, event_id, skill_key, weight, outcome, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (
+                str(uuid4()),
+                str(event_id),
+                key,
+                max(0.0, float(weight or 1.0)),
+                None if outcome is None else max(0.0, min(1.0, float(outcome))),
+                int(time.time()),
+            ),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def update_user_skill_state(
+    user_id: str,
+    skill_key: str,
+    category: str,
+    outcome: float,
+    practiced_at: Optional[int] = None,
+) -> Dict[str, Any]:
+    key = str(skill_key or "").strip().lower()
+    if not user_id or not key:
+        return {}
+    now = int(practiced_at or time.time())
+    safe_outcome = max(0.0, min(1.0, float(outcome or 0.0)))
+    conn = get_conn()
+    try:
+        row = conn.execute(
+            """
+            SELECT *
+            FROM user_skill_state
+            WHERE user_id = ? AND skill_key = ?
+            LIMIT 1
+            """,
+            (str(user_id), key),
+        ).fetchone()
+
+        if row:
+            current = dict(row)
+            exposure_count = int(current.get("exposure_count") or 0) + 1
+            old_mastery = float(current.get("mastery") or 0.0)
+            old_stability = float(current.get("stability") or 0.0)
+            mastery = round(old_mastery * 0.78 + safe_outcome * 0.22, 4)
+            stability_delta = 0.08 if safe_outcome >= 0.72 else (-0.07 if safe_outcome < 0.5 else 0.02)
+            stability = round(max(0.0, min(1.0, old_stability + stability_delta)), 4)
+            correct_count = int(current.get("correct_count") or 0) + (1 if safe_outcome >= 0.72 else 0)
+            error_count = int(current.get("error_count") or 0) + (1 if safe_outcome < 0.5 else 0)
+        else:
+            exposure_count = 1
+            mastery = round(safe_outcome * 0.35, 4)
+            stability = round(0.18 + (0.12 if safe_outcome >= 0.72 else 0.0), 4)
+            correct_count = 1 if safe_outcome >= 0.72 else 0
+            error_count = 1 if safe_outcome < 0.5 else 0
+
+        if safe_outcome < 0.5:
+            interval = 4 * 3600
+        elif stability < 0.35:
+            interval = 24 * 3600
+        elif stability < 0.65:
+            interval = 3 * 24 * 3600
+        else:
+            interval = 7 * 24 * 3600
+        next_review_at = now + interval
+
+        conn.execute(
+            """
+            INSERT INTO user_skill_state (
+              user_id, skill_key, category, mastery, stability,
+              exposure_count, correct_count, error_count,
+              last_outcome, last_practiced_at, next_review_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(user_id, skill_key) DO UPDATE SET
+              category = excluded.category,
+              mastery = excluded.mastery,
+              stability = excluded.stability,
+              exposure_count = excluded.exposure_count,
+              correct_count = excluded.correct_count,
+              error_count = excluded.error_count,
+              last_outcome = excluded.last_outcome,
+              last_practiced_at = excluded.last_practiced_at,
+              next_review_at = excluded.next_review_at,
+              updated_at = excluded.updated_at
+            """,
+            (
+                str(user_id),
+                key,
+                str(category or "general").strip().lower() or "general",
+                mastery,
+                stability,
+                exposure_count,
+                correct_count,
+                error_count,
+                safe_outcome,
+                now,
+                next_review_at,
+                int(time.time()),
+            ),
+        )
+        conn.commit()
+        return {
+            "user_id": str(user_id),
+            "skill_key": key,
+            "category": str(category or "general").strip().lower() or "general",
+            "mastery": mastery,
+            "stability": stability,
+            "exposure_count": exposure_count,
+            "correct_count": correct_count,
+            "error_count": error_count,
+            "last_outcome": safe_outcome,
+            "last_practiced_at": now,
+            "next_review_at": next_review_at,
+        }
+    finally:
+        conn.close()
+
+
+def get_user_skill_states(
+    user_id: str,
+    category: Optional[str] = None,
+    limit: int = 100,
+) -> list[Dict[str, Any]]:
+    conn = get_conn()
+    try:
+        safe_limit = max(1, min(int(limit or 100), 500))
+        if category:
+            cur = conn.execute(
+                """
+                SELECT *
+                FROM user_skill_state
+                WHERE user_id = ? AND category = ?
+                ORDER BY mastery ASC, last_practiced_at DESC
+                LIMIT ?
+                """,
+                (str(user_id), str(category).strip().lower(), safe_limit),
+            )
+        else:
+            cur = conn.execute(
+                """
+                SELECT *
+                FROM user_skill_state
+                WHERE user_id = ?
+                ORDER BY updated_at DESC
+                LIMIT ?
+                """,
+                (str(user_id), safe_limit),
+            )
+        return [dict(row) for row in cur.fetchall()]
+    finally:
+        conn.close()
+
+
+def get_user_skill_state_summary(user_id: str, now: Optional[int] = None) -> Dict[str, Any]:
+    """在 SQL 内做全量聚合，避免按行 LIMIT 截断导致统计偏置。"""
+    now_ts = int(now or time.time())
+    conn = get_conn()
+    try:
+        row = conn.execute(
+            """
+            SELECT
+              COUNT(*) AS tracked_skills,
+              COALESCE(AVG(mastery), 0.0) AS average_mastery,
+              COALESCE(SUM(CASE WHEN next_review_at > 0 AND next_review_at <= ? THEN 1 ELSE 0 END), 0) AS due_review_count
+            FROM user_skill_state
+            WHERE user_id = ?
+            """,
+            (now_ts, str(user_id)),
+        ).fetchone()
+        return {
+            "tracked_skills": int(row["tracked_skills"] or 0),
+            "average_mastery": round(float(row["average_mastery"] or 0.0), 4),
+            "due_review_count": int(row["due_review_count"] or 0),
+        }
+    finally:
+        conn.close()
+
+
+def get_top_skill_states(
+    user_id: str,
+    categories: Optional[list[str]] = None,
+    order: str = "asc",
+    limit: int = 5,
+) -> list[Dict[str, Any]]:
+    conn = get_conn()
+    try:
+        safe_limit = max(1, min(int(limit or 5), 50))
+        direction = "DESC" if str(order or "").strip().lower() == "desc" else "ASC"
+        params: list[Any] = [str(user_id)]
+        where = "user_id = ?"
+        cats = [str(c).strip().lower() for c in (categories or []) if str(c).strip()]
+        if cats:
+            placeholders = ",".join("?" for _ in cats)
+            where += f" AND category IN ({placeholders})"
+            params.extend(cats)
+        cur = conn.execute(
+            f"""
+            SELECT *
+            FROM user_skill_state
+            WHERE {where}
+            ORDER BY mastery {direction}, exposure_count DESC
+            LIMIT ?
+            """,
+            (*params, safe_limit),
+        )
+        return [dict(row) for row in cur.fetchall()]
+    finally:
+        conn.close()
+
+
 def get_user_events(user_id: str, limit: int = 100, offset: int = 0) -> list[Dict[str, Any]]:
     conn = get_conn()
     try:
@@ -4431,13 +4753,25 @@ def get_last_reminder_time(user_id: str) -> Optional[int]:
 def save_mistake(mistake_id: str, user_id: str, mistake_data: Dict[str, Any]) -> None:
     conn = get_conn()
     try:
+        now = int(time.time())
         conn.execute(
             """
-            INSERT OR REPLACE INTO mistakes (
-              id, user_id, module, question_id, question_type, error_type, 
-              content, user_answer, correct_answer, explanation, difficulty, 
+            INSERT INTO mistakes (
+              id, user_id, module, question_id, question_type, error_type,
+              content, user_answer, correct_answer, explanation, difficulty,
               tags, created_at, last_reviewed_at, next_review_date, mastery_level
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(id) DO UPDATE SET
+              module = excluded.module,
+              question_id = excluded.question_id,
+              question_type = excluded.question_type,
+              error_type = excluded.error_type,
+              content = excluded.content,
+              user_answer = excluded.user_answer,
+              correct_answer = excluded.correct_answer,
+              explanation = excluded.explanation,
+              difficulty = excluded.difficulty,
+              tags = excluded.tags
             """,
             (
                 mistake_id,
@@ -4452,9 +4786,9 @@ def save_mistake(mistake_id: str, user_id: str, mistake_data: Dict[str, Any]) ->
                 mistake_data.get('explanation', ''),
                 mistake_data.get('difficulty', 'medium'),
                 json.dumps(mistake_data.get('tags', [])),
-                int(time.time()),
-                int(time.time()),
-                int(time.time()) + 24 * 3600,  # 1 day later
+                now,
+                now,
+                now + 24 * 3600,  # 1 day later（仅新建时生效）
                 mistake_data.get('mastery_level', 0.0)
             )
         )
@@ -4608,12 +4942,23 @@ def get_mistake_by_id(mistake_id: str) -> Optional[Dict[str, Any]]:
         conn.close()
 
 
-def review_mistake(mistake_id: str, mastery_delta: float = 0.2) -> Optional[Dict[str, Any]]:
+def review_mistake(
+    mistake_id: str,
+    mastery_delta: float = 0.2,
+    quality: Optional[int] = None,
+) -> Optional[Dict[str, Any]]:
+    from backend.services.learning_event_service import ability_keys_for_unit, record_hidden_learning_event
+    from backend.services.spaced_repetition import (
+        calculate_sm2_review,
+        mastery_delta_from_quality,
+        quality_from_mastery_delta,
+    )
+
     conn = get_conn()
     try:
         cur = conn.execute(
             """
-            SELECT id, user_id, module, question_type, error_type, mastery_level
+            SELECT *
             FROM mistakes
             WHERE id = ?
             """,
@@ -4623,14 +4968,44 @@ def review_mistake(mistake_id: str, mastery_delta: float = 0.2) -> Optional[Dict
         if not row:
             return None
         current_mastery = float(row['mastery_level'] or 0.0)
-        new_mastery = max(0.0, min(1.0, current_mastery + mastery_delta))
+        sm2_quality = int(quality if quality is not None else quality_from_mastery_delta(mastery_delta))
+        effective_mastery_delta = (
+            mastery_delta_from_quality(sm2_quality) if quality is not None else mastery_delta
+        )
+        sm2 = calculate_sm2_review(
+            quality=sm2_quality,
+            repetitions=row["sm2_repetitions"] if "sm2_repetitions" in row.keys() else 0,
+            interval_days=row["sm2_interval_days"] if "sm2_interval_days" in row.keys() else 0.0,
+            ease_factor=row["sm2_ease_factor"] if "sm2_ease_factor" in row.keys() else 2.5,
+            lapses=row["sm2_lapses"] if "sm2_lapses" in row.keys() else 0,
+        )
+        new_mastery = round(max(0.0, min(1.0, current_mastery + effective_mastery_delta)), 4)
         now = int(time.time())
-        # mastery越高，下次复习间隔越长
-        interval_days = 1 if new_mastery < 0.4 else (3 if new_mastery < 0.7 else 7)
-        next_review_date = now + interval_days * 24 * 3600
+        next_review_date = int(sm2["next_review_at"])
         conn.execute(
-            "UPDATE mistakes SET last_reviewed_at = ?, next_review_date = ?, mastery_level = ? WHERE id = ?",
-            (now, next_review_date, new_mastery, mistake_id)
+            """
+            UPDATE mistakes
+            SET last_reviewed_at = ?,
+                next_review_date = ?,
+                mastery_level = ?,
+                sm2_repetitions = ?,
+                sm2_interval_days = ?,
+                sm2_ease_factor = ?,
+                sm2_lapses = ?,
+                sm2_last_quality = ?
+            WHERE id = ?
+            """,
+            (
+                now,
+                next_review_date,
+                new_mastery,
+                int(sm2["repetitions"]),
+                float(sm2["interval_days"]),
+                float(sm2["ease_factor"]),
+                int(sm2["lapses"]),
+                int(sm2["quality"]),
+                mistake_id,
+            )
         )
         conn.execute(
             """
@@ -4655,10 +5030,39 @@ def review_mistake(mistake_id: str, mastery_delta: float = 0.2) -> Optional[Dict
             ),
         )
         conn.commit()
+        try:
+            tags = json.loads(row["tags"]) if row["tags"] else []
+        except Exception:
+            tags = []
+        # 成长引擎属于旁路埋点：主业务（mastery/SM2）已提交，这里失败不能冒泡，
+        # 否则会变成「已写库却返回 500」，客户端重试会再叠加一次 mastery。
+        try:
+            record_hidden_learning_event(
+                user_id=str(row["user_id"] or ""),
+                module=str(row["module"] or "mistakes"),
+                event_type="mistake_review",
+                unit_type="mistake",
+                unit_key=f"{row['module']}:{row['question_type']}:{row['error_type']}:{mistake_id}",
+                title=str(row["error_type"] or row["question_type"] or "错题复习"),
+                quality=int(sm2["quality"]),
+                score=float(sm2["quality"]) / 5.0,
+                ability_keys=ability_keys_for_unit(str(row["module"] or "mistakes"), "mistake", tags),
+                tags=tags,
+                metadata={
+                    "mistake_id": mistake_id,
+                    "question_id": str(row["question_id"] or ""),
+                    "mastery_before": round(current_mastery, 4),
+                    "mastery_after": round(new_mastery, 4),
+                },
+                sm2_result=sm2,
+            )
+        except Exception:
+            logger.warning("record_hidden_learning_event failed for mistake %s", mistake_id, exc_info=True)
         return {
             "last_reviewed_at": now,
             "next_review_date": next_review_date,
             "mastery_level": new_mastery,
+            "sm2": sm2,
         }
     finally:
         conn.close()
@@ -5278,23 +5682,10 @@ def save_vocabulary(vocab_id: str, user_id: str, vocab_data: Dict[str, Any]) -> 
         now = int(time.time())
         word = str(vocab_data.get("word", "") or "").strip()
         normalized_word = _normalize_vocab_word(word)
-        existing_id = None
-        if normalized_word:
-            cur = conn.execute(
-                """
-                SELECT id
-                FROM vocabulary
-                WHERE user_id = ? AND lower(trim(word)) = ?
-                LIMIT 1
-                """,
-                (user_id, normalized_word),
-            )
-            row = cur.fetchone()
-            if row:
-                existing_id = str(row["id"])
 
-        target_id = existing_id or vocab_id
-        if existing_id:
+        def _update_existing(row_id: str) -> None:
+            # 已存在的词只更新词条内容，保留 mastery / 复习时间 / sm2_* 等学习状态，
+            # 避免重复导入把用户的学习进度重置。
             conn.execute(
                 """
                 UPDATE vocabulary
@@ -5304,10 +5695,7 @@ def save_vocabulary(vocab_id: str, user_id: str, vocab_data: Dict[str, Any]) -> 
                     pronunciation = ?,
                     part_of_speech = ?,
                     tags = ?,
-                    source_module = ?,
-                    mastery_level = ?,
-                    last_reviewed_at = ?,
-                    next_review_date = ?
+                    source_module = ?
                 WHERE id = ?
                 """,
                 (
@@ -5318,37 +5706,57 @@ def save_vocabulary(vocab_id: str, user_id: str, vocab_data: Dict[str, Any]) -> 
                     vocab_data.get("part_of_speech", ""),
                     json.dumps(vocab_data.get("tags", [])),
                     vocab_data.get("source_module", ""),
-                    vocab_data.get("mastery_level", 0.0),
-                    now,
-                    now + 24 * 3600,
-                    target_id,
+                    row_id,
                 ),
             )
+
+        existing_id = None
+        if normalized_word:
+            row = conn.execute(
+                "SELECT id FROM vocabulary WHERE user_id = ? AND lower(trim(word)) = ? LIMIT 1",
+                (user_id, normalized_word),
+            ).fetchone()
+            if row:
+                existing_id = str(row["id"])
+
+        if existing_id:
+            _update_existing(existing_id)
         else:
-            conn.execute(
-                """
-                INSERT INTO vocabulary (
-                  id, user_id, word, definition, examples, pronunciation,
-                  part_of_speech, tags, source_module, mastery_level,
-                  last_reviewed_at, next_review_date, created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    target_id,
-                    user_id,
-                    word,
-                    vocab_data.get("definition", ""),
-                    json.dumps(vocab_data.get("examples", [])),
-                    vocab_data.get("pronunciation", ""),
-                    vocab_data.get("part_of_speech", ""),
-                    json.dumps(vocab_data.get("tags", [])),
-                    vocab_data.get("source_module", ""),
-                    vocab_data.get("mastery_level", 0.0),
-                    now,
-                    now + 24 * 3600,
-                    now,
-                ),
-            )
+            try:
+                conn.execute(
+                    """
+                    INSERT INTO vocabulary (
+                      id, user_id, word, definition, examples, pronunciation,
+                      part_of_speech, tags, source_module, mastery_level,
+                      last_reviewed_at, next_review_date, created_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        vocab_id,
+                        user_id,
+                        word,
+                        vocab_data.get("definition", ""),
+                        json.dumps(vocab_data.get("examples", [])),
+                        vocab_data.get("pronunciation", ""),
+                        vocab_data.get("part_of_speech", ""),
+                        json.dumps(vocab_data.get("tags", [])),
+                        vocab_data.get("source_module", ""),
+                        vocab_data.get("mastery_level", 0.0),
+                        now,
+                        now + 24 * 3600,
+                        now,
+                    ),
+                )
+            except sqlite3.IntegrityError:
+                # 并发下另一连接已插入同词（唯一索引兜底）：改为更新既有行，
+                # 既不产生重复词，也不重置学习状态，避免双击 / 双击划词直接 500。
+                fallback = conn.execute(
+                    "SELECT id FROM vocabulary WHERE user_id = ? AND lower(trim(word)) = ? LIMIT 1",
+                    (user_id, normalized_word),
+                ).fetchone()
+                if not fallback:
+                    raise
+                _update_existing(str(fallback["id"]))
         conn.commit()
     finally:
         conn.close()
@@ -5431,30 +5839,224 @@ def get_vocabulary_by_id(vocab_id: str) -> Optional[Dict[str, Any]]:
         conn.close()
 
 
+def get_user_vocabulary_by_word(user_id: str, word: str) -> Optional[Dict[str, Any]]:
+    normalized = _normalize_vocab_word(word)
+    if not normalized:
+        return None
+    conn = get_conn()
+    try:
+        row = conn.execute(
+            "SELECT * FROM vocabulary WHERE user_id = ? AND lower(trim(word)) = ? LIMIT 1",
+            (str(user_id), normalized),
+        ).fetchone()
+        if not row:
+            return None
+        item = dict(row)
+        item["examples"] = json.loads(item["examples"]) if item["examples"] else []
+        item["tags"] = json.loads(item["tags"]) if item["tags"] else []
+        return item
+    finally:
+        conn.close()
+
+
+def get_user_vocabulary_word_set(user_id: str) -> set[str]:
+    """返回用户词汇本中所有词的小写集合，用于批量排除已入本的词。"""
+    conn = get_conn()
+    try:
+        rows = conn.execute(
+            "SELECT lower(trim(word)) AS w FROM vocabulary WHERE user_id = ?",
+            (str(user_id),),
+        ).fetchall()
+        return {str(r["w"]) for r in rows if r["w"]}
+    finally:
+        conn.close()
+
+
+def delete_vocabulary(vocab_id: str, user_id: str) -> bool:
+    """把词移出词汇本（仅限本人），返回是否确有删除。"""
+    conn = get_conn()
+    try:
+        cur = conn.execute(
+            "DELETE FROM vocabulary WHERE id = ? AND user_id = ?",
+            (str(vocab_id), str(user_id)),
+        )
+        conn.commit()
+        return cur.rowcount > 0
+    finally:
+        conn.close()
+
+
+# 已掌握归档判定：掌握度高且复习间隔足够长
+VOCABULARY_MASTERED_MASTERY = 0.9
+VOCABULARY_MASTERED_INTERVAL_DAYS = 60.0
+# 历史数据可能存在浮点漂移（如 0.8999999999999999），比较时留一点容差
+_VOCABULARY_MASTERED_EPSILON = 1e-6
+
+
+def _mastered_thresholds() -> tuple[float, float]:
+    return (
+        VOCABULARY_MASTERED_MASTERY - _VOCABULARY_MASTERED_EPSILON,
+        VOCABULARY_MASTERED_INTERVAL_DAYS - _VOCABULARY_MASTERED_EPSILON,
+    )
+
+
+def get_vocabulary_mastery_counts(user_id: str) -> Dict[str, int]:
+    conn = get_conn()
+    try:
+        mastery_min, interval_min = _mastered_thresholds()
+        row = conn.execute(
+            """
+            SELECT
+              COALESCE(SUM(CASE WHEN mastery_level >= ? AND sm2_interval_days >= ? THEN 1 ELSE 0 END), 0) AS mastered,
+              COALESCE(SUM(CASE WHEN mastery_level >= ? AND sm2_interval_days >= ? THEN 0 ELSE 1 END), 0) AS active
+            FROM vocabulary
+            WHERE user_id = ?
+            """,
+            (mastery_min, interval_min, mastery_min, interval_min, str(user_id)),
+        ).fetchone()
+        return {"mastered": int(row["mastered"] or 0), "active": int(row["active"] or 0)}
+    finally:
+        conn.close()
+
+
+def get_vocabulary_page(
+    user_id: str,
+    source_module: Optional[str] = None,
+    status: str = "all",
+    limit: int = 50,
+    offset: int = 0,
+    now_ts: Optional[int] = None,
+) -> Dict[str, Any]:
+    """词汇本分页查询，支持按来源分组与「活跃 / 已掌握」筛选。"""
+    now = int(now_ts or time.time())
+    safe_limit = max(1, min(int(limit or 50), 200))
+    safe_offset = max(0, int(offset or 0))
+    conditions = ["user_id = ?"]
+    params: list[Any] = [str(user_id)]
+    if source_module:
+        conditions.append("COALESCE(NULLIF(TRIM(source_module), ''), 'unknown') = ?")
+        params.append(str(source_module))
+    mastered_sql = "(mastery_level >= ? AND sm2_interval_days >= ?)"
+    mastery_min, interval_min = _mastered_thresholds()
+    status_key = str(status or "all").strip().lower()
+    if status_key == "mastered":
+        conditions.append(mastered_sql)
+        params.extend([mastery_min, interval_min])
+    elif status_key == "active":
+        conditions.append(f"NOT {mastered_sql}")
+        params.extend([mastery_min, interval_min])
+    where = " AND ".join(conditions)
+
+    conn = get_conn()
+    try:
+        total_row = conn.execute(
+            f"SELECT COUNT(*) AS c FROM vocabulary WHERE {where}",
+            tuple(params),
+        ).fetchone()
+        cur = conn.execute(
+            f"""
+            SELECT * FROM vocabulary
+            WHERE {where}
+            ORDER BY next_review_date ASC, created_at DESC
+            LIMIT ? OFFSET ?
+            """,
+            (*params, safe_limit, safe_offset),
+        )
+        items: list[Dict[str, Any]] = []
+        for row in cur.fetchall():
+            item = dict(row)
+            item["examples"] = json.loads(item["examples"]) if item["examples"] else []
+            item["tags"] = json.loads(item["tags"]) if item["tags"] else []
+            mastery = float(item.get("mastery_level") or 0.0)
+            interval = float(item.get("sm2_interval_days") or 0.0)
+            item["mastered"] = mastery >= mastery_min and interval >= interval_min
+            item["due"] = int(item.get("next_review_date") or 0) <= now
+            items.append(item)
+        return {"total": int(total_row["c"] or 0), "items": items}
+    finally:
+        conn.close()
+
+
+def delete_vocabulary_bulk(vocab_ids: list[str], user_id: str) -> int:
+    ids = [str(x).strip() for x in (vocab_ids or []) if str(x).strip()]
+    if not ids:
+        return 0
+    placeholders = ",".join("?" for _ in ids)
+    conn = get_conn()
+    try:
+        cur = conn.execute(
+            f"DELETE FROM vocabulary WHERE user_id = ? AND id IN ({placeholders})",
+            (str(user_id), *ids),
+        )
+        conn.commit()
+        return int(cur.rowcount or 0)
+    finally:
+        conn.close()
+
+
 def review_vocabulary(
     vocab_id: str,
     mastery_delta: float = 0.15,
     review_interval_seconds: Optional[int] = None,
+    quality: Optional[int] = None,
 ) -> Optional[Dict[str, Any]]:
+    from backend.services.learning_event_service import ability_keys_for_unit, record_hidden_learning_event
+    from backend.services.spaced_repetition import (
+        calculate_sm2_review,
+        mastery_delta_from_quality,
+        quality_from_mastery_delta,
+    )
+
     conn = get_conn()
     try:
-        cur = conn.execute("SELECT user_id, mastery_level FROM vocabulary WHERE id = ?", (vocab_id,))
+        cur = conn.execute("SELECT * FROM vocabulary WHERE id = ?", (vocab_id,))
         row = cur.fetchone()
         if not row:
             return None
         user_id = str(row["user_id"] or "")
         current_mastery = float(row["mastery_level"] or 0.0)
-        new_mastery = max(0.0, min(1.0, current_mastery + mastery_delta))
+        sm2_quality = int(quality if quality is not None else quality_from_mastery_delta(mastery_delta))
+        effective_mastery_delta = (
+            mastery_delta_from_quality(sm2_quality) if quality is not None else mastery_delta
+        )
+        sm2 = calculate_sm2_review(
+            quality=sm2_quality,
+            repetitions=row["sm2_repetitions"] if "sm2_repetitions" in row.keys() else 0,
+            interval_days=row["sm2_interval_days"] if "sm2_interval_days" in row.keys() else 0.0,
+            ease_factor=row["sm2_ease_factor"] if "sm2_ease_factor" in row.keys() else 2.5,
+            lapses=row["sm2_lapses"] if "sm2_lapses" in row.keys() else 0,
+        )
+        new_mastery = round(max(0.0, min(1.0, current_mastery + effective_mastery_delta)), 4)
         now = int(time.time())
         if review_interval_seconds is not None:
             interval_seconds = max(15 * 60, int(review_interval_seconds))
+            next_review_date = now + interval_seconds
         else:
-            interval_days = 1 if new_mastery < 0.35 else (3 if new_mastery < 0.6 else (7 if new_mastery < 0.85 else 14))
-            interval_seconds = interval_days * 24 * 3600
-        next_review_date = now + interval_seconds
+            next_review_date = int(sm2["next_review_at"])
         conn.execute(
-            "UPDATE vocabulary SET last_reviewed_at = ?, next_review_date = ?, mastery_level = ? WHERE id = ?",
-            (now, next_review_date, new_mastery, vocab_id),
+            """
+            UPDATE vocabulary
+            SET last_reviewed_at = ?,
+                next_review_date = ?,
+                mastery_level = ?,
+                sm2_repetitions = ?,
+                sm2_interval_days = ?,
+                sm2_ease_factor = ?,
+                sm2_lapses = ?,
+                sm2_last_quality = ?
+            WHERE id = ?
+            """,
+            (
+                now,
+                next_review_date,
+                new_mastery,
+                int(sm2["repetitions"]),
+                float(sm2["interval_days"]),
+                float(sm2["ease_factor"]),
+                int(sm2["lapses"]),
+                int(sm2["quality"]),
+                vocab_id,
+            ),
         )
         conn.execute(
             """
@@ -5477,10 +6079,41 @@ def review_vocabulary(
             ),
         )
         conn.commit()
+        try:
+            tags = json.loads(row["tags"]) if row["tags"] else []
+        except Exception:
+            tags = []
+        word = str(row["word"] or "")
+        # 同 review_mistake：旁路埋点失败不影响已提交的 mastery/SM2
+        try:
+            record_hidden_learning_event(
+                user_id=user_id,
+                module="vocabulary",
+                event_type="vocabulary_review",
+                unit_type="vocabulary",
+                unit_key=word.strip().lower() or vocab_id,
+                title=word or "词汇复习",
+                quality=int(sm2["quality"]),
+                score=float(sm2["quality"]) / 5.0,
+                ability_keys=ability_keys_for_unit("vocabulary", "vocabulary", tags),
+                tags=tags,
+                metadata={
+                    "vocab_id": vocab_id,
+                    "source_module": str(row["source_module"] or ""),
+                    "mastery_before": round(current_mastery, 4),
+                    "mastery_after": round(new_mastery, 4),
+                },
+                sm2_result={**sm2, "next_review_at": next_review_date},
+            )
+        except Exception:
+            logger.warning("record_hidden_learning_event failed for vocabulary %s", vocab_id, exc_info=True)
         return {
             "last_reviewed_at": now,
             "next_review_date": next_review_date,
             "mastery_level": new_mastery,
+            "review_interval_days": round((next_review_date - now) / 86400.0, 4),
+            "next_review_label": sm2.get("next_review_label", ""),
+            "sm2": sm2,
         }
     finally:
         conn.close()

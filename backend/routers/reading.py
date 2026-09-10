@@ -11,6 +11,9 @@ from pydantic import BaseModel
 from ..db import save_mistake
 from ..deps import get_current_user
 from ..services.mistake_taxonomy import normalize_reading_error_type
+from ..services.ability_service import record_practice_result
+from ..services.ability_service import get_difficulty_recommendation
+from ..services.difficulty_utils import dominant_difficulty as _dominant_difficulty
 
 router = APIRouter()
 
@@ -351,7 +354,8 @@ async def generate_reading_quiz(
     current_user: dict = Depends(get_current_user),
 ):
     count = max(1, min(int(payload.count or 5), 20))
-    difficulty = (payload.difficulty or "").strip().lower()
+    requested_difficulty = (payload.difficulty or "").strip().lower()
+    difficulty = requested_difficulty or _recommended_bank_difficulty(str(current_user["id"]))
     question_type = (payload.question_type or "").strip().lower()
 
     pool = READING_QUESTION_BANK
@@ -359,6 +363,10 @@ async def generate_reading_quiz(
         pool = [q for q in pool if str(q.get("difficulty") or "").lower() == difficulty]
     if question_type:
         pool = [q for q in pool if str(q.get("question_type") or "").lower() == question_type]
+    if not pool and not requested_difficulty:
+        pool = READING_QUESTION_BANK
+        if question_type:
+            pool = [q for q in pool if str(q.get("question_type") or "").lower() == question_type]
     if not pool:
         raise HTTPException(status_code=400, detail="No reading quiz questions found for given filters")
 
@@ -454,6 +462,21 @@ async def submit_reading_quiz(
 
     total = len(runtime.get("questions", []))
     accuracy = round((correct / total), 4) if total else 0.0
+    difficulties = [str(q.get("difficulty") or "medium") for q in runtime.get("questions", [])]
+    question_types = [str(q.get("question_type") or "") for q in runtime.get("questions", [])]
+    record_practice_result(
+        str(current_user["id"]),
+        "reading",
+        {
+            "overall": round(accuracy * 10, 2),
+            "accuracy": round(accuracy * 10, 2),
+            "question_type": ",".join(sorted({x for x in question_types if x})),
+        },
+        difficulty=_dominant_difficulty(difficulties),
+        topic="general",
+        practice_mode="quiz",
+        source="reading_quiz",
+    )
     return ReadingQuizSubmitResponse(total=total, correct=correct, accuracy=accuracy, details=details)
 
 
@@ -466,13 +489,18 @@ async def generate_reading_strategy_drill(
     if mode not in {"skim", "scan", "mixed"}:
         raise HTTPException(status_code=400, detail="Unsupported reading strategy mode")
     count = max(1, min(int(payload.count or 3), 10))
-    difficulty = (payload.difficulty or "").strip().lower()
+    requested_difficulty = (payload.difficulty or "").strip().lower()
+    difficulty = requested_difficulty or _recommended_bank_difficulty(str(current_user["id"]))
 
     pool = READING_STRATEGY_DRILL_BANK
     if mode != "mixed":
         pool = [x for x in pool if str(x.get("mode") or "") == mode]
     if difficulty:
         pool = [x for x in pool if str(x.get("difficulty") or "") == difficulty]
+    if not pool and not requested_difficulty:
+        pool = READING_STRATEGY_DRILL_BANK
+        if mode != "mixed":
+            pool = [x for x in pool if str(x.get("mode") or "") == mode]
     if not pool:
         raise HTTPException(status_code=400, detail="No reading strategy drills found for given filters")
 
@@ -589,6 +617,23 @@ async def submit_reading_strategy_drill(
     else:
         recommended_focus = "进入 mixed 组合训练并提高难度"
 
+    difficulties = [str(q.get("difficulty") or "medium") for q in runtime.get("questions", [])]
+    mode = str(runtime.get("mode") or "mixed")
+    combined_score = round((accuracy * 0.75 + on_time_rate * 0.25) * 10, 2)
+    record_practice_result(
+        str(current_user["id"]),
+        "reading",
+        {
+            "overall": combined_score,
+            "accuracy": round(accuracy * 10, 2),
+            "fluency": round(on_time_rate * 10, 2),
+        },
+        difficulty=_dominant_difficulty(difficulties),
+        topic="general",
+        practice_mode=f"strategy_{mode}",
+        source="reading_strategy",
+    )
+
     return ReadingStrategySubmitResponse(
         total=total,
         correct=correct,
@@ -628,6 +673,16 @@ async def recognize_synonyms(req: SynonymRecognitionRequest, current_user: dict 
 
     summary = f"Found {len(results)} groups of synonyms"
     return SynonymRecognitionResponse(results=results, summary=summary)
+
+
+def _recommended_bank_difficulty(user_id: str) -> str:
+    recommendation = get_difficulty_recommendation(user_id, module="reading")
+    value = str(recommendation.get("recommended_difficulty") or "medium").strip().lower()
+    if value == "easy":
+        return "basic"
+    if value == "hard":
+        return "advanced"
+    return "intermediate"
 
 
 @router.post("/analyze", response_model=PassageAnalysisResponse)

@@ -133,7 +133,12 @@ async def translation_practice(request: TranslationPracticeRequest, current_user
         if request.action == "generate":
             # 生成翻译题目
             difficulty = request.difficulty or "medium"
-            core_words = select_translation_core_words(difficulty=difficulty, topic=request.topic, limit=3)
+            core_words = select_translation_core_words(
+                difficulty=difficulty,
+                topic=request.topic,
+                limit=3,
+                user_id=str(current_user.get("id") or ""),
+            )
             word_context = format_core_words_for_prompt(core_words)
             try:
                 result = translation_agent.generate_translation_question(

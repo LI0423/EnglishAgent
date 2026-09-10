@@ -23,6 +23,7 @@ from ..db import (
     consume_user_entitlement,
 )
 from ..services.mistake_taxonomy import normalize_writing_dim_error_type, normalize_writing_feedback_error_type
+from ..services.ability_service import record_practice_result
 from backend.utils.tracking import get_learning_tracker
 
 router = APIRouter()
@@ -504,6 +505,22 @@ async def analyze_task1_writing(req: Task1WritingRequest, current_user: dict = D
                 },
             )
 
+    record_practice_result(
+        str(current_user["id"]),
+        "writing",
+        {
+            "overall": round((structure_score + content_score + vocabulary_score + grammar_score) / 4, 2),
+            "accuracy": content_score,
+            "fluency": structure_score,
+            "grammar": grammar_score,
+            "vocabulary": vocabulary_score,
+        },
+        difficulty="medium",
+        topic=req.topic,
+        practice_mode="task1",
+        source="writing_task1_analyze",
+    )
+
     return Task1Analysis(
         structure_score=structure_score,
         content_score=content_score,
@@ -723,6 +740,22 @@ async def analyze_task2_writing(req: Task2WritingRequest, current_user: dict = D
                     "tags": ["writing_task2", f"low_{dim}", f"error_type:{normalized_error_type}", "taxonomy:v1"],
                 },
             )
+
+    record_practice_result(
+        str(current_user["id"]),
+        "writing",
+        {
+            "overall": round((structure_score + content_score + vocabulary_score + grammar_score) / 4, 2),
+            "accuracy": content_score,
+            "fluency": structure_score,
+            "grammar": grammar_score,
+            "vocabulary": vocabulary_score,
+        },
+        difficulty="medium",
+        topic=req.topic,
+        practice_mode="task2",
+        source="writing_task2_analyze",
+    )
 
     return Task1Analysis(
         structure_score=structure_score,
