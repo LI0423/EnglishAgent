@@ -330,6 +330,7 @@ def _upsert_learning_unit(
 ) -> str:
     conn = db.get_conn()
     try:
+        db.begin_immediate(conn)
         unit_id = str(uuid4())
         existing = conn.execute(
             "SELECT source_modules, ability_keys, tags FROM learning_units WHERE unit_type = ? AND unit_key = ?",
@@ -422,6 +423,7 @@ def _upsert_user_unit_memory(user_id: str, unit_id: str, quality: int, sm2_resul
 def _record_ability_sample(user_id: str, ability_key: str, outcome: float, now: int) -> None:
     conn = db.get_conn()
     try:
+        db.begin_immediate(conn)
         row = conn.execute(
             "SELECT * FROM user_ability_growth WHERE user_id = ? AND ability_key = ?",
             (user_id, ability_key),

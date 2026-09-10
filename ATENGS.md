@@ -43,6 +43,7 @@
 - [详细每周进度计划](docs/详细每周进度计划.md)
 - [开发进度文档](docs/开发进度文档.md)
 - [商业化建议](docs/商业化建议.md)
+- [技术债与待修问题清单](docs/技术债与待修问题清单.md)
 
 ## 3. 核心技术文档索引
 
@@ -120,4 +121,4 @@ PYTHONPATH=. ./venv/bin/pytest -q tests/test_week2_backend_progress.py
 
 ---
 
-最后更新：2026-05-19
+最后更新：2026-09-10

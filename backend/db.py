@@ -15,9 +15,23 @@ DB_PATH = os.environ.get("IELTS_AGENT_DB", os.path.join(os.path.dirname(os.path.
 
 
 def get_conn():
-    conn = sqlite3.connect(DB_PATH)
+    conn = sqlite3.connect(DB_PATH, timeout=10.0)
     conn.row_factory = sqlite3.Row
     return conn
+
+
+def begin_immediate(conn: sqlite3.Connection) -> None:
+    """显式开启写事务。
+
+    默认 isolation_level="" 下 SQLite 只对 DML 隐式 BEGIN，SELECT 属于自动提交，
+    因此「先读后写」的并发调用会读到同一快照并互相覆盖（实测两次自增只得到 1）。
+    BEGIN IMMEDIATE 会在读之前就取写锁，把读-改-写变成原子操作。
+    """
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+    except sqlite3.OperationalError:
+        # 已经在事务中：无需重复开启
+        pass
 
 
 def _normalize_vocab_word(word: Any) -> str:
@@ -1329,6 +1343,7 @@ def update_task_completion(task_id: str, completed: bool) -> None:
 def update_task_progress(task_id: str, progress: dict) -> None:
     conn = get_conn()
     try:
+        begin_immediate(conn)
         # 同一条连接内完成「读-改-写」，避免跨连接竞态覆盖 daily_tasks.tasks
         cur = conn.execute("SELECT * FROM daily_tasks WHERE id = ?", (task_id,))
         row = cur.fetchone()
@@ -1359,6 +1374,7 @@ def complete_daily_task_item(
     """在单连接/事务内「按需追加任务项 + 标记进度」，避免跨连接读-改-写丢更新。"""
     conn = get_conn()
     try:
+        begin_immediate(conn)
         cur = conn.execute("SELECT * FROM daily_tasks WHERE id = ?", (task_id,))
         row = cur.fetchone()
         if not row:
@@ -1394,6 +1410,7 @@ def complete_daily_task_item(
 def append_daily_task_items(task_id: str, items: list[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
     conn = get_conn()
     try:
+        begin_immediate(conn)
         cur = conn.execute("SELECT * FROM daily_tasks WHERE id = ?", (task_id,))
         row = cur.fetchone()
         if not row:
@@ -4349,6 +4366,7 @@ def update_user_skill_state(
     safe_outcome = max(0.0, min(1.0, float(outcome or 0.0)))
     conn = get_conn()
     try:
+        begin_immediate(conn)
         row = conn.execute(
             """
             SELECT *
@@ -5676,6 +5694,35 @@ def get_mistake_weekly_focus_plan(
 
 
 # Vocabulary DAO
+def get_unit_memory_by_key(user_id: str, unit_type: str, unit_key: str) -> Optional[Dict[str, Any]]:
+    """读取隐藏成长引擎里该 unit 的记忆状态（用于重新收藏时回填 SM2）。
+
+    迁移 018 尚未执行时返回 None，不影响主流程。
+    """
+    if not user_id or not unit_key:
+        return None
+    try:
+        conn = get_conn()
+        try:
+            row = conn.execute(
+                """
+                SELECT m.mastery_level, m.memory_strength, m.sm2_repetitions,
+                       m.sm2_interval_days, m.sm2_ease_factor, m.sm2_lapses,
+                       m.sm2_last_quality, m.next_review_at
+                FROM user_unit_memory m
+                JOIN learning_units u ON u.id = m.unit_id
+                WHERE m.user_id = ? AND u.unit_type = ? AND u.unit_key = ?
+                LIMIT 1
+                """,
+                (str(user_id), str(unit_type), str(unit_key)),
+            ).fetchone()
+            return dict(row) if row else None
+        finally:
+            conn.close()
+    except sqlite3.OperationalError:
+        return None
+
+
 def save_vocabulary(vocab_id: str, user_id: str, vocab_data: Dict[str, Any]) -> None:
     conn = get_conn()
     try:
@@ -5722,14 +5769,37 @@ def save_vocabulary(vocab_id: str, user_id: str, vocab_data: Dict[str, Any]) -> 
         if existing_id:
             _update_existing(existing_id)
         else:
+            # 重新收藏时从成长引擎回填学习状态：硬删除会丢掉 vocabulary 行的 sm2_*，
+            # 但 user_unit_memory 仍以词为 key 保留着历史间隔/易度，直接归零会白练。
+            memory = get_unit_memory_by_key(user_id, "vocabulary", normalized_word) if normalized_word else None
+            if memory:
+                init_reps = int(memory.get("sm2_repetitions") or 0)
+                # vocabulary.mastery 是按 mastery_delta 累积的（每次 0.18 上限），
+                # 与成长引擎 mastery 的口径不同；这里按迭代次数重建，避免回填后虚高被误判"已掌握"。
+                init_mastery = min(VOCABULARY_MASTERED_MASTERY, round(init_reps * 0.18, 4))
+                init_interval = float(memory.get("sm2_interval_days") or 0.0)
+                init_ease = float(memory.get("sm2_ease_factor") or 2.5)
+                init_lapses = int(memory.get("sm2_lapses") or 0)
+                init_quality = memory.get("sm2_last_quality")
+                init_next_review = int(memory.get("next_review_at") or 0) or (now + 24 * 3600)
+            else:
+                init_mastery = float(vocab_data.get("mastery_level", 0.0) or 0.0)
+                init_reps = 0
+                init_interval = 0.0
+                init_ease = 2.5
+                init_lapses = 0
+                init_quality = None
+                init_next_review = now + 24 * 3600
             try:
                 conn.execute(
                     """
                     INSERT INTO vocabulary (
                       id, user_id, word, definition, examples, pronunciation,
                       part_of_speech, tags, source_module, mastery_level,
-                      last_reviewed_at, next_review_date, created_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                      last_reviewed_at, next_review_date, created_at,
+                      sm2_repetitions, sm2_interval_days, sm2_ease_factor,
+                      sm2_lapses, sm2_last_quality
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         vocab_id,
@@ -5741,10 +5811,15 @@ def save_vocabulary(vocab_id: str, user_id: str, vocab_data: Dict[str, Any]) -> 
                         vocab_data.get("part_of_speech", ""),
                         json.dumps(vocab_data.get("tags", [])),
                         vocab_data.get("source_module", ""),
-                        vocab_data.get("mastery_level", 0.0),
+                        init_mastery,
                         now,
-                        now + 24 * 3600,
+                        init_next_review,
                         now,
+                        init_reps,
+                        init_interval,
+                        init_ease,
+                        init_lapses,
+                        init_quality,
                     ),
                 )
             except sqlite3.IntegrityError:
@@ -5886,7 +5961,10 @@ def delete_vocabulary(vocab_id: str, user_id: str) -> bool:
         conn.close()
 
 
-# 已掌握归档判定：掌握度高且复习间隔足够长
+# 已掌握归档判定：掌握度高 **或** 复习间隔足够长。
+# 用 OR 而不是 AND：SM-2 下 q=5 只来自「认识」，而「认识」默认不入本，
+# 因此新词很难同时满足两个条件（实测当前库 19 词 mastered=0）；
+# 且历史行迁移后 sm2_interval_days 被填 0，AND 会让原本高掌握度的词全部回退为"学习中"。
 VOCABULARY_MASTERED_MASTERY = 0.9
 VOCABULARY_MASTERED_INTERVAL_DAYS = 60.0
 # 历史数据可能存在浮点漂移（如 0.8999999999999999），比较时留一点容差
@@ -5907,8 +5985,8 @@ def get_vocabulary_mastery_counts(user_id: str) -> Dict[str, int]:
         row = conn.execute(
             """
             SELECT
-              COALESCE(SUM(CASE WHEN mastery_level >= ? AND sm2_interval_days >= ? THEN 1 ELSE 0 END), 0) AS mastered,
-              COALESCE(SUM(CASE WHEN mastery_level >= ? AND sm2_interval_days >= ? THEN 0 ELSE 1 END), 0) AS active
+              COALESCE(SUM(CASE WHEN mastery_level >= ? OR sm2_interval_days >= ? THEN 1 ELSE 0 END), 0) AS mastered,
+              COALESCE(SUM(CASE WHEN mastery_level >= ? OR sm2_interval_days >= ? THEN 0 ELSE 1 END), 0) AS active
             FROM vocabulary
             WHERE user_id = ?
             """,
@@ -5936,7 +6014,7 @@ def get_vocabulary_page(
     if source_module:
         conditions.append("COALESCE(NULLIF(TRIM(source_module), ''), 'unknown') = ?")
         params.append(str(source_module))
-    mastered_sql = "(mastery_level >= ? AND sm2_interval_days >= ?)"
+    mastered_sql = "(mastery_level >= ? OR sm2_interval_days >= ?)"
     mastery_min, interval_min = _mastered_thresholds()
     status_key = str(status or "all").strip().lower()
     if status_key == "mastered":
@@ -5969,7 +6047,7 @@ def get_vocabulary_page(
             item["tags"] = json.loads(item["tags"]) if item["tags"] else []
             mastery = float(item.get("mastery_level") or 0.0)
             interval = float(item.get("sm2_interval_days") or 0.0)
-            item["mastered"] = mastery >= mastery_min and interval >= interval_min
+            item["mastered"] = mastery >= mastery_min or interval >= interval_min
             item["due"] = int(item.get("next_review_date") or 0) <= now
             items.append(item)
         return {"total": int(total_row["c"] or 0), "items": items}
