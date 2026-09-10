@@ -14,6 +14,8 @@ import threading
 import time
 from pathlib import Path
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from backend import db as db_module
@@ -159,3 +161,37 @@ def test_mastered_threshold_accepts_high_mastery_without_interval(tmp_path):
 
     page = db_module.get_vocabulary_page("u1", status="mastered")
     assert [item["word"] for item in page["items"]] == ["hist"]
+
+
+def test_hidden_learning_event_write_is_atomic(tmp_path, monkeypatch):
+    """埋点中途失败必须整体回滚，不能留下部分状态（半写）。"""
+    _init_tmp_db(tmp_path)
+    from backend.services import learning_event_service as les
+
+    def boom(*args, **kwargs):
+        raise RuntimeError("simulated failure")
+
+    monkeypatch.setattr(les.db, "link_learning_event_skill", boom)
+
+    with pytest.raises(RuntimeError):
+        les.record_hidden_learning_event(
+            user_id="u1",
+            module="writing",
+            event_type="practice_growth_sample",
+            unit_type="practice",
+            unit_key="writing:work:task2:medium",
+            title="写作练习",
+            quality=4,
+        )
+
+    conn = les.db.get_conn()
+    try:
+        events = conn.execute("SELECT COUNT(*) AS c FROM learning_events").fetchone()["c"]
+        units = conn.execute("SELECT COUNT(*) AS c FROM learning_units").fetchone()["c"]
+        abilities = conn.execute("SELECT COUNT(*) AS c FROM user_ability_growth").fetchone()["c"]
+    finally:
+        conn.close()
+
+    assert events == 0, "失败后不应留下 learning_events"
+    assert units == 0, "失败后不应留下 learning_units"
+    assert abilities == 0, "失败后不应留下 user_ability_growth"

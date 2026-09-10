@@ -4255,8 +4255,18 @@ def get_reminder_preference_history_by_id(
 
 
 # Learning Events DAO
-def save_learning_event(event_id: str, user_id: str, event_data: Dict[str, Any]) -> None:
-    conn = get_conn()
+def save_learning_event(
+    event_id: str,
+    user_id: str,
+    event_data: Dict[str, Any],
+    conn: Optional[sqlite3.Connection] = None,
+) -> None:
+    """写入学习事件。
+
+    `conn` 由调用方传入时复用其连接与事务（埋点批量写入用），此时不自行 commit/close。
+    """
+    own = conn is None
+    conn = get_conn() if own else conn
     try:
         conn.execute(
             """
@@ -4275,9 +4285,11 @@ def save_learning_event(event_id: str, user_id: str, event_data: Dict[str, Any])
                 int(time.time())
             )
         )
-        conn.commit()
+        if own:
+            conn.commit()
     finally:
-        conn.close()
+        if own:
+            conn.close()
 
 
 def ensure_skill_tag(
@@ -4286,12 +4298,14 @@ def ensure_skill_tag(
     category: str,
     parent_key: str = "",
     metadata: Optional[Dict[str, Any]] = None,
+    conn: Optional[sqlite3.Connection] = None,
 ) -> None:
     key = str(skill_key or "").strip().lower()
     if not key:
         return
     now = int(time.time())
-    conn = get_conn()
+    own = conn is None
+    conn = get_conn() if own else conn
     try:
         conn.execute(
             """
@@ -4316,9 +4330,11 @@ def ensure_skill_tag(
                 now,
             ),
         )
-        conn.commit()
+        if own:
+            conn.commit()
     finally:
-        conn.close()
+        if own:
+            conn.close()
 
 
 def link_learning_event_skill(
@@ -4326,11 +4342,13 @@ def link_learning_event_skill(
     skill_key: str,
     weight: float = 1.0,
     outcome: Optional[float] = None,
+    conn: Optional[sqlite3.Connection] = None,
 ) -> None:
     key = str(skill_key or "").strip().lower()
     if not event_id or not key:
         return
-    conn = get_conn()
+    own = conn is None
+    conn = get_conn() if own else conn
     try:
         conn.execute(
             """
@@ -4347,9 +4365,11 @@ def link_learning_event_skill(
                 int(time.time()),
             ),
         )
-        conn.commit()
+        if own:
+            conn.commit()
     finally:
-        conn.close()
+        if own:
+            conn.close()
 
 
 def update_user_skill_state(
@@ -4358,13 +4378,15 @@ def update_user_skill_state(
     category: str,
     outcome: float,
     practiced_at: Optional[int] = None,
+    conn: Optional[sqlite3.Connection] = None,
 ) -> Dict[str, Any]:
     key = str(skill_key or "").strip().lower()
     if not user_id or not key:
         return {}
     now = int(practiced_at or time.time())
     safe_outcome = max(0.0, min(1.0, float(outcome or 0.0)))
-    conn = get_conn()
+    own = conn is None
+    conn = get_conn() if own else conn
     try:
         begin_immediate(conn)
         row = conn.execute(
@@ -4438,7 +4460,8 @@ def update_user_skill_state(
                 int(time.time()),
             ),
         )
-        conn.commit()
+        if own:
+            conn.commit()
         return {
             "user_id": str(user_id),
             "skill_key": key,
@@ -4453,7 +4476,8 @@ def update_user_skill_state(
             "next_review_at": next_review_at,
         }
     finally:
-        conn.close()
+        if own:
+            conn.close()
 
 
 def get_user_skill_states(

@@ -7,7 +7,9 @@ from typing import Any, Dict, List, Optional
 from uuid import uuid4
 
 from backend.db import (
+    begin_immediate,
     ensure_skill_tag,
+    get_conn,
     get_daily_task_by_date,
     get_latest_user_plan,
     get_user_events,
@@ -311,23 +313,38 @@ def _update_skill_states(
     outcome: float,
     practiced_at: int,
 ) -> None:
-    for item in skill_tags:
-        skill_key = item.get("skill_key", "")
-        if not skill_key:
-            continue
-        ensure_skill_tag(
-            skill_key,
-            item.get("name") or skill_key,
-            item.get("category") or "general",
-        )
-        link_learning_event_skill(event_id, skill_key, weight=1.0, outcome=outcome)
-        update_user_skill_state(
-            user_id,
-            skill_key,
-            item.get("category") or "general",
-            outcome,
-            practiced_at,
-        )
+    """批量写入技能状态：单连接单事务，避免每个 tag 开 3 个连接。"""
+    conn = get_conn()
+    try:
+        begin_immediate(conn)
+        for item in skill_tags:
+            skill_key = item.get("skill_key", "")
+            if not skill_key:
+                continue
+            ensure_skill_tag(
+                skill_key,
+                item.get("name") or skill_key,
+                item.get("category") or "general",
+                conn=conn,
+            )
+            link_learning_event_skill(event_id, skill_key, weight=1.0, outcome=outcome, conn=conn)
+            update_user_skill_state(
+                user_id,
+                skill_key,
+                item.get("category") or "general",
+                outcome,
+                practiced_at,
+                conn=conn,
+            )
+        conn.commit()
+    except Exception:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        raise
+    finally:
+        conn.close()
 
 
 def _normalize_key(value: Any) -> str:

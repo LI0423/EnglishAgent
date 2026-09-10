@@ -124,65 +124,86 @@ def record_hidden_learning_event(
         return {}
 
     abilities = ability_keys or ability_keys_for_unit(safe_module, safe_unit_type, tags)
-    if sm2_result is None:
-        sm2_result = _calculate_unit_sm2(
-            user_id=str(user_id),
+
+    # 整个埋点在「单连接 + 单事务」内完成：既避免半写，也把一次埋点从 ~9 个连接降为 1 个。
+    conn = db.get_conn()
+    try:
+        db.begin_immediate(conn)
+        if sm2_result is None:
+            sm2_result = _calculate_unit_sm2(
+                user_id=str(user_id),
+                unit_type=safe_unit_type,
+                unit_key=safe_unit_key,
+                quality=int(quality),
+                reviewed_at=now,
+                conn=conn,
+            )
+        unit_id = _upsert_learning_unit(
             unit_type=safe_unit_type,
             unit_key=safe_unit_key,
+            title=title,
+            source_modules=[safe_module],
+            ability_keys=abilities,
+            tags=tags or [],
+            now=now,
+            conn=conn,
+        )
+        event_id = str(uuid4())
+        properties = {
+            "module": safe_module,
+            "unit_type": safe_unit_type,
+            "unit_key": safe_unit_key,
+            "unit_id": unit_id,
+            "title": title,
+            "quality": int(quality),
+            "score": score,
+            "ability_keys": abilities,
+            "tags": tags or [],
+            "metadata": metadata or {},
+            "sm2": sm2_result or {},
+        }
+        db.save_learning_event(
+            event_id,
+            str(user_id),
+            {
+                "event_type": event_type,
+                "event_name": f"{safe_module}_{safe_unit_type}_reviewed",
+                "properties": properties,
+                "timestamp": now,
+            },
+            conn=conn,
+        )
+        outcome = outcome_from_quality(int(quality))
+        for ability in abilities:
+            _record_ability_sample(str(user_id), ability, outcome, now, conn=conn)
+            db.ensure_skill_tag(
+                f"ability:{ability}",
+                ABILITY_LABELS.get(ability, ability),
+                "ability",
+                metadata={"hidden_growth_engine": True},
+                conn=conn,
+            )
+            db.link_learning_event_skill(event_id, f"ability:{ability}", weight=1.0, outcome=outcome, conn=conn)
+            db.update_user_skill_state(
+                str(user_id), f"ability:{ability}", "ability", outcome, practiced_at=now, conn=conn
+            )
+        _upsert_user_unit_memory(
+            user_id=str(user_id),
+            unit_id=unit_id,
             quality=int(quality),
-            reviewed_at=now,
+            sm2_result=sm2_result or {},
+            now=now,
+            conn=conn,
         )
-    unit_id = _upsert_learning_unit(
-        unit_type=safe_unit_type,
-        unit_key=safe_unit_key,
-        title=title,
-        source_modules=[safe_module],
-        ability_keys=abilities,
-        tags=tags or [],
-        now=now,
-    )
-    event_id = str(uuid4())
-    properties = {
-        "module": safe_module,
-        "unit_type": safe_unit_type,
-        "unit_key": safe_unit_key,
-        "unit_id": unit_id,
-        "title": title,
-        "quality": int(quality),
-        "score": score,
-        "ability_keys": abilities,
-        "tags": tags or [],
-        "metadata": metadata or {},
-        "sm2": sm2_result or {},
-    }
-    db.save_learning_event(
-        event_id,
-        str(user_id),
-        {
-            "event_type": event_type,
-            "event_name": f"{safe_module}_{safe_unit_type}_reviewed",
-            "properties": properties,
-            "timestamp": now,
-        },
-    )
-    outcome = outcome_from_quality(int(quality))
-    for ability in abilities:
-        _record_ability_sample(str(user_id), ability, outcome, now)
-        db.ensure_skill_tag(
-            f"ability:{ability}",
-            ABILITY_LABELS.get(ability, ability),
-            "ability",
-            metadata={"hidden_growth_engine": True},
-        )
-        db.link_learning_event_skill(event_id, f"ability:{ability}", weight=1.0, outcome=outcome)
-        db.update_user_skill_state(str(user_id), f"ability:{ability}", "ability", outcome, practiced_at=now)
-    _upsert_user_unit_memory(
-        user_id=str(user_id),
-        unit_id=unit_id,
-        quality=int(quality),
-        sm2_result=sm2_result or {},
-        now=now,
-    )
+        conn.commit()
+    except Exception:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        raise
+    finally:
+        conn.close()
     return {
         "event_id": event_id,
         "unit_id": unit_id,
@@ -275,8 +296,16 @@ def get_growth_insights(user_id: str, limit: int = 8) -> Dict[str, Any]:
     }
 
 
-def _calculate_unit_sm2(user_id: str, unit_type: str, unit_key: str, quality: int, reviewed_at: int) -> Dict[str, Any]:
-    conn = db.get_conn()
+def _calculate_unit_sm2(
+    user_id: str,
+    unit_type: str,
+    unit_key: str,
+    quality: int,
+    reviewed_at: int,
+    conn: Any = None,
+) -> Dict[str, Any]:
+    own = conn is None
+    conn = db.get_conn() if own else conn
     try:
         row = conn.execute(
             """
@@ -297,7 +326,8 @@ def _calculate_unit_sm2(user_id: str, unit_type: str, unit_key: str, quality: in
             reviewed_at=reviewed_at,
         )
     finally:
-        conn.close()
+        if own:
+            conn.close()
 
 
 def _merge_json_list(raw: Any, new_items: List[Any]) -> List[Any]:
@@ -327,8 +357,10 @@ def _upsert_learning_unit(
     ability_keys: List[str],
     tags: List[Any],
     now: int,
+    conn: Any = None,
 ) -> str:
-    conn = db.get_conn()
+    own = conn is None
+    conn = db.get_conn() if own else conn
     try:
         db.begin_immediate(conn)
         unit_id = str(uuid4())
@@ -366,18 +398,28 @@ def _upsert_learning_unit(
                 now,
             ),
         )
-        conn.commit()
+        if own:
+            conn.commit()
         row = conn.execute(
             "SELECT id FROM learning_units WHERE unit_type = ? AND unit_key = ?",
             (unit_type, unit_key),
         ).fetchone()
         return str(row["id"] if row else unit_id)
     finally:
-        conn.close()
+        if own:
+            conn.close()
 
 
-def _upsert_user_unit_memory(user_id: str, unit_id: str, quality: int, sm2_result: Dict[str, Any], now: int) -> None:
-    conn = db.get_conn()
+def _upsert_user_unit_memory(
+    user_id: str,
+    unit_id: str,
+    quality: int,
+    sm2_result: Dict[str, Any],
+    now: int,
+    conn: Any = None,
+) -> None:
+    own = conn is None
+    conn = db.get_conn() if own else conn
     try:
         mastery = max(0.0, min(1.0, outcome_from_quality(quality) * 0.75 + float(sm2_result.get("memory_strength") or 0.0) * 0.25))
         conn.execute(
@@ -415,13 +457,16 @@ def _upsert_user_unit_memory(user_id: str, unit_id: str, quality: int, sm2_resul
                 now,
             ),
         )
-        conn.commit()
+        if own:
+            conn.commit()
     finally:
-        conn.close()
+        if own:
+            conn.close()
 
 
-def _record_ability_sample(user_id: str, ability_key: str, outcome: float, now: int) -> None:
-    conn = db.get_conn()
+def _record_ability_sample(user_id: str, ability_key: str, outcome: float, now: int, conn: Any = None) -> None:
+    own = conn is None
+    conn = db.get_conn() if own else conn
     try:
         db.begin_immediate(conn)
         row = conn.execute(
@@ -460,9 +505,11 @@ def _record_ability_sample(user_id: str, ability_key: str, outcome: float, now: 
             """,
             (str(uuid4()), user_id, ability_key, current_score, velocity, stability, confidence, risk, sample_count, now, now),
         )
-        conn.commit()
+        if own:
+            conn.commit()
     finally:
-        conn.close()
+        if own:
+            conn.close()
 
 
 def _has_score(result: Dict[str, Any], key: str) -> bool:
