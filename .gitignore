@@ -1,6 +1,25 @@
 # 环境变量文件
 .env
 venv/
-.DS_Store
-*/*.DS_Store
 .idea/
+desktop/
+
+# 系统文件
+.DS_Store
+**/.DS_Store
+
+# Python 构建产物
+__pycache__/
+*.py[cod]
+
+# 运行期数据与日志（本地状态，不应入库）
+*.db
+*.db.lock
+*.lock
+*.log
+logs/
+backend/generated_tts/
+
+# 前端依赖与构建产物
+node_modules/
+frontend/dist/
