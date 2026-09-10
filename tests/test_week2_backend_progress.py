@@ -8,6 +8,18 @@ from datetime import datetime, timedelta, time as dtime
 import pytest
 from starlette.responses import Response
 
+
+def _run(value):
+    """兼容 sync/async 端点：协程走事件循环，普通返回值直接透传。
+
+    本轮把 vocabulary 路由里做同步 IO 的端点从 async def 改为 def
+    （让 FastAPI 自动丢线程池），测试里统一的 asyncio.run(...) 需要同时接受两种形态。
+    """
+    if asyncio.iscoroutine(value):
+        return asyncio.run(value)
+    return value
+
+
 if "jose" not in sys.modules:
     jose_stub = types.ModuleType("jose")
 
@@ -161,7 +173,7 @@ def _ensure_user(user_id: str, username: str):
 
 def test_auth_password_reset_flow(isolated_db, monkeypatch):
     monkeypatch.setattr(auth_router, "EXPOSE_RESET_TOKEN", True)
-    req = asyncio.run(
+    req = _run(
         auth_router.request_password_reset(
             auth_router.PasswordResetRequest(account="u1"),
         )
@@ -169,7 +181,7 @@ def test_auth_password_reset_flow(isolated_db, monkeypatch):
     assert req.success is True
     assert req.reset_token
 
-    done = asyncio.run(
+    done = _run(
         auth_router.confirm_password_reset(
             auth_router.PasswordResetConfirm(
                 reset_token=req.reset_token,
@@ -180,7 +192,7 @@ def test_auth_password_reset_flow(isolated_db, monkeypatch):
     assert done.success is True
 
     with pytest.raises(Exception) as e:
-        asyncio.run(
+        _run(
             auth_router.confirm_password_reset(
                 auth_router.PasswordResetConfirm(
                     reset_token=req.reset_token,
@@ -196,7 +208,7 @@ def test_auth_password_reset_rate_limit(isolated_db, monkeypatch):
     monkeypatch.setattr(auth_router, "PASSWORD_RESET_RATE_LIMIT", 2)
     monkeypatch.setattr(auth_router, "PASSWORD_RESET_RATE_WINDOW_SECONDS", 3600)
     for _ in range(3):
-        resp = asyncio.run(
+        resp = _run(
             auth_router.request_password_reset(
                 auth_router.PasswordResetRequest(account="u1"),
             )
@@ -215,7 +227,7 @@ def test_auth_password_reset_code_flow(isolated_db, monkeypatch):
     finally:
         conn.close()
 
-    requested = asyncio.run(
+    requested = _run(
         auth_router.request_password_reset_code(
             auth_router.PasswordResetCodeRequest(account="u1", channel="email")
         )
@@ -223,7 +235,7 @@ def test_auth_password_reset_code_flow(isolated_db, monkeypatch):
     assert requested.success is True
     assert requested.verification_code
 
-    done = asyncio.run(
+    done = _run(
         auth_router.confirm_password_reset_by_code(
             auth_router.PasswordResetCodeConfirm(
                 account="u1",
@@ -235,7 +247,7 @@ def test_auth_password_reset_code_flow(isolated_db, monkeypatch):
     assert done.success is True
 
     with pytest.raises(Exception) as e:
-        asyncio.run(
+        _run(
             auth_router.confirm_password_reset_by_code(
                 auth_router.PasswordResetCodeConfirm(
                     account="u1",
@@ -251,7 +263,7 @@ def test_auth_password_reset_code_flow(isolated_db, monkeypatch):
 def test_listening_library_version_endpoint(isolated_db):
     listening_router.player_states.clear()
     listening_router._load_audio_library()
-    info = asyncio.run(
+    info = _run(
         listening_router.get_audio_library_version(
             current_user={"id": "u1", "username": "u1"},
         )
@@ -278,7 +290,7 @@ def test_listening_tts_render_endpoint(isolated_db, monkeypatch):
             }
 
     monkeypatch.setattr(listening_router, "_tts_service", _StubTTS())
-    out = asyncio.run(
+    out = _run(
         listening_router.render_listening_tts(
             listening_router.ListeningTTSRenderRequest(
                 text="This is a test sentence.",
@@ -308,7 +320,7 @@ def test_listening_tts_material_generates_library_item(isolated_db, tmp_path, mo
             }
 
     monkeypatch.setattr(listening_router, "_tts_service", _StubTTS())
-    out = asyncio.run(
+    out = _run(
         listening_router.generate_listening_material(
             listening_router.ListeningMaterialGenerateRequest(
                 title="Generated listening material",
@@ -340,7 +352,7 @@ def test_listening_quiz_generate_submit_and_mistake_sink(isolated_db):
     listening_router.AUDIO_QUIZ_RUNTIME.clear()
     listening_router._load_listening_question_bank()
 
-    quiz = asyncio.run(
+    quiz = _run(
         listening_router.generate_listening_quiz(
             listening_router.ListeningQuizGenerateRequest(count=2, difficulty="easy"),
             current_user={"id": "u1", "username": "u1"},
@@ -353,7 +365,7 @@ def test_listening_quiz_generate_submit_and_mistake_sink(isolated_db):
         listening_router.ListeningQuizAnswer(question_id=q.id, answer="wrong-answer")
         for q in quiz.questions
     ]
-    result = asyncio.run(
+    result = _run(
         listening_router.submit_listening_quiz(
             listening_router.ListeningQuizSubmitRequest(
                 quiz_id=quiz.quiz_id,
@@ -405,7 +417,7 @@ def test_listening_intensive_generate_and_submit(isolated_db):
     listening_router.LISTENING_INTENSIVE_RUNTIME.clear()
     listening_router._load_listening_question_bank()
 
-    generated = asyncio.run(
+    generated = _run(
         listening_router.generate_listening_intensive(
             listening_router.ListeningIntensiveGenerateRequest(
                 count=3,
@@ -422,7 +434,7 @@ def test_listening_intensive_generate_and_submit(isolated_db):
         listening_router.ListeningIntensiveAnswer(question_id=q.id, answer="wrong")
         for q in generated.questions
     ]
-    submitted = asyncio.run(
+    submitted = _run(
         listening_router.submit_listening_intensive(
             listening_router.ListeningIntensiveSubmitRequest(
                 session_id=generated.session_id,
@@ -443,7 +455,7 @@ def test_reading_quiz_generate_submit_and_mistake_sink(isolated_db):
     reading_router.READING_QUIZ_RUNTIME.clear()
     reading_router._load_reading_question_bank()
 
-    quiz = asyncio.run(
+    quiz = _run(
         reading_router.generate_reading_quiz(
             reading_router.ReadingQuizGenerateRequest(count=2, difficulty="intermediate"),
             current_user={"id": "u1", "username": "u1"},
@@ -456,7 +468,7 @@ def test_reading_quiz_generate_submit_and_mistake_sink(isolated_db):
         reading_router.ReadingQuizAnswer(question_id=q.id, answer="wrong-answer")
         for q in quiz.questions
     ]
-    result = asyncio.run(
+    result = _run(
         reading_router.submit_reading_quiz(
             reading_router.ReadingQuizSubmitRequest(
                 quiz_id=quiz.quiz_id,
@@ -495,7 +507,7 @@ def test_reading_question_bank_fallback_when_file_missing(isolated_db, monkeypat
 def test_reading_strategy_drill_generate_and_submit(isolated_db):
     reading_router.READING_STRATEGY_RUNTIME.clear()
 
-    generated = asyncio.run(
+    generated = _run(
         reading_router.generate_reading_strategy_drill(
             reading_router.ReadingStrategyGenerateRequest(
                 mode="mixed",
@@ -512,7 +524,7 @@ def test_reading_strategy_drill_generate_and_submit(isolated_db):
         reading_router.ReadingStrategyAnswer(question_id=q.id, answer="wrong answer", spent_seconds=q.time_limit_seconds + 10)
         for q in generated.questions
     ]
-    submitted = asyncio.run(
+    submitted = _run(
         reading_router.submit_reading_strategy_drill(
             reading_router.ReadingStrategySubmitRequest(
                 session_id=generated.session_id,
@@ -532,15 +544,15 @@ def test_reading_strategy_drill_generate_and_submit(isolated_db):
 
 
 def test_speaking_session_user_isolation(isolated_db):
-    created_u1 = asyncio.run(
+    created_u1 = _run(
         speaking_router.create_session(current_user={"id": "u1", "username": "u1"})
     )
-    created_u2 = asyncio.run(
+    created_u2 = _run(
         speaking_router.create_session(current_user={"id": "u2", "username": "u2"})
     )
     assert created_u1.sessionId != created_u2.sessionId
 
-    list_u1 = asyncio.run(
+    list_u1 = _run(
         speaking_router.list_sessions(limit=20, offset=0, current_user={"id": "u1", "username": "u1"})
     )
     ids_u1 = {x.id for x in list_u1}
@@ -548,7 +560,7 @@ def test_speaking_session_user_isolation(isolated_db):
     assert created_u2.sessionId not in ids_u1
 
     with pytest.raises(Exception) as e:
-        asyncio.run(
+        _run(
             speaking_router.get_session_detail(
                 created_u1.sessionId,
                 current_user={"id": "u2", "username": "u2"},
@@ -559,12 +571,12 @@ def test_speaking_session_user_isolation(isolated_db):
 
 
 def test_speaking_turn_and_summary_flow(isolated_db):
-    created = asyncio.run(
+    created = _run(
         speaking_router.create_session(current_user={"id": "u1", "username": "u1"})
     )
     sid = created.sessionId
 
-    started = asyncio.run(
+    started = _run(
         speaking_router.start_part(
             sid,
             1,
@@ -575,7 +587,7 @@ def test_speaking_turn_and_summary_flow(isolated_db):
     assert started.partIndex == 1
     assert started.targetAnswerSeconds > 0
 
-    turn = asyncio.run(
+    turn = _run(
         speaking_router.submit_turn(
             sid,
             speaking_router.SpeakingTurnRequest(
@@ -597,7 +609,7 @@ def test_speaking_turn_and_summary_flow(isolated_db):
     assert turn.targetSeconds >= 1
     assert isinstance(turn.pacingFeedback, str)
 
-    summary = asyncio.run(
+    summary = _run(
         speaking_router.summarize_session(
             sid,
             current_user={"id": "u1", "username": "u1"},
@@ -619,12 +631,12 @@ def test_speaking_turn_with_audio_urls(isolated_db, monkeypatch):
             return {"audio_url": f"/media/tts/{hash(text) % 1000}.wav"}
 
     monkeypatch.setattr(speaking_router, "_tts_service", _StubTTS())
-    created = asyncio.run(
+    created = _run(
         speaking_router.create_session(current_user={"id": "u1", "username": "u1"})
     )
     sid = created.sessionId
 
-    started = asyncio.run(
+    started = _run(
         speaking_router.start_part(
             sid,
             1,
@@ -636,7 +648,7 @@ def test_speaking_turn_with_audio_urls(isolated_db, monkeypatch):
     )
     assert str(started.promptAudioUrl or "").startswith("/media/tts/")
 
-    turn = asyncio.run(
+    turn = _run(
         speaking_router.submit_turn(
             sid,
             speaking_router.SpeakingTurnRequest(
@@ -674,18 +686,18 @@ def test_history_sessions_user_isolation(isolated_db):
 
 
 def test_scoring_transcript_user_isolation_and_mistake_sink(isolated_db, monkeypatch):
-    created = asyncio.run(
+    created = _run(
         speaking_router.create_session(current_user={"id": "u1", "username": "u1"})
     )
     sid = created.sessionId
-    asyncio.run(
+    _run(
         speaking_router.ingest_audio(
             sid,
             speaking_router.AudioChunk(textPartial="I like reading books and discuss ideas."),
             current_user={"id": "u1", "username": "u1"},
         )
     )
-    finished = asyncio.run(
+    finished = _run(
         speaking_router.finish_session(sid, current_user={"id": "u1", "username": "u1"})
     )
     tid = finished.transcriptId
@@ -702,7 +714,7 @@ def test_scoring_transcript_user_isolation_and_mistake_sink(isolated_db, monkeyp
         },
     )
 
-    result = asyncio.run(
+    result = _run(
         scoring_router.score_speaking(
             scoring_router.ScoringRequest(transcriptId=tid),
             current_user={"id": "u1", "username": "u1"},
@@ -725,7 +737,7 @@ def test_scoring_transcript_user_isolation_and_mistake_sink(isolated_db, monkeyp
     assert all("taxonomy:v1" in (m.get("tags") or []) for m in speaking_mistakes)
 
     with pytest.raises(Exception) as e:
-        asyncio.run(
+        _run(
             scoring_router.score_speaking(
                 scoring_router.ScoringRequest(transcriptId=tid),
                 current_user={"id": "u2", "username": "u2"},
@@ -742,7 +754,7 @@ def test_writing_analysis_sinks_medium_high_feedback_to_mistakes(isolated_db):
         topic="population trend",
         keywords=["population"],
     )
-    result = asyncio.run(
+    result = _run(
         writing_router.analyze_task1_writing(
             req,
             current_user={"id": "u1", "username": "u1"},
@@ -782,7 +794,7 @@ def test_writing_task2_analysis_and_brainstorm(isolated_db):
         keywords=["education", "policy", "equity", "funding"],
         stance="balanced",
     )
-    analysis = asyncio.run(
+    analysis = _run(
         writing_router.analyze_task2_writing(
             req,
             current_user={"id": "u1", "username": "u1"},
@@ -798,7 +810,7 @@ def test_writing_task2_analysis_and_brainstorm(isolated_db):
     assert len(mistakes) >= 1
     assert all("taxonomy:v1" in (m.get("tags") or []) for m in mistakes)
 
-    brainstorm = asyncio.run(
+    brainstorm = _run(
         writing_router.brainstorm_task2(
             writing_router.Task2BrainstormRequest(
                 topic="Should university education be free for everyone?",
@@ -814,7 +826,7 @@ def test_writing_task2_analysis_and_brainstorm(isolated_db):
 
 
 def test_writing_peer_review_flow(isolated_db):
-    submission = asyncio.run(
+    submission = _run(
         writing_router.submit_peer_writing(
             writing_router.PeerSubmissionCreateRequest(
                 task_type="task1",
@@ -826,7 +838,7 @@ def test_writing_peer_review_flow(isolated_db):
     )
     assert submission.submission_id
 
-    claimed = asyncio.run(
+    claimed = _run(
         writing_router.claim_peer_submission(
             current_user={"id": "u2", "username": "u2"},
         )
@@ -835,7 +847,7 @@ def test_writing_peer_review_flow(isolated_db):
     assert claimed.submission is not None
     assert claimed.submission.id == submission.submission_id
 
-    reviewed = asyncio.run(
+    reviewed = _run(
         writing_router.submit_peer_review(
             writing_router.PeerReviewSubmitRequest(
                 submission_id=submission.submission_id,
@@ -853,7 +865,7 @@ def test_writing_peer_review_flow(isolated_db):
     assert reviewed.overall_score > 0
     assert reviewed.quality_tier in {"basic", "standard", "advanced"}
 
-    subs = asyncio.run(
+    subs = _run(
         writing_router.get_my_peer_submissions(
             limit=20,
             current_user={"id": "u1", "username": "u1"},
@@ -863,7 +875,7 @@ def test_writing_peer_review_flow(isolated_db):
     assert target is not None
     assert target.review_count >= 1
 
-    received = asyncio.run(
+    received = _run(
         writing_router.get_received_peer_reviews(
             submission_id=submission.submission_id,
             limit=20,
@@ -874,7 +886,7 @@ def test_writing_peer_review_flow(isolated_db):
 
 
 def test_writing_peer_ai_assist_and_stats(isolated_db):
-    submission = asyncio.run(
+    submission = _run(
         writing_router.submit_peer_writing(
             writing_router.PeerSubmissionCreateRequest(
                 task_type="task2",
@@ -892,7 +904,7 @@ def test_writing_peer_ai_assist_and_stats(isolated_db):
     )
     assert submission.submission_id
 
-    claimed = asyncio.run(
+    claimed = _run(
         writing_router.claim_peer_submission(
             current_user={"id": "u2", "username": "u2"},
         )
@@ -900,7 +912,7 @@ def test_writing_peer_ai_assist_and_stats(isolated_db):
     assert claimed.claimed is True
     assert claimed.submission is not None
 
-    assist = asyncio.run(
+    assist = _run(
         writing_router.get_peer_review_ai_assist(
             writing_router.PeerReviewAssistRequest(submission_id=submission.submission_id),
             current_user={"id": "u2", "username": "u2"},
@@ -910,7 +922,7 @@ def test_writing_peer_ai_assist_and_stats(isolated_db):
     assert len(assist.sample_comment) > 0
     assert len(assist.strengths) >= 1
 
-    reviewed = asyncio.run(
+    reviewed = _run(
         writing_router.submit_peer_review(
             writing_router.PeerReviewSubmitRequest(
                 submission_id=submission.submission_id,
@@ -927,7 +939,7 @@ def test_writing_peer_ai_assist_and_stats(isolated_db):
     )
     assert reviewed.overall_score > 0
 
-    stats = asyncio.run(
+    stats = _run(
         writing_router.get_peer_stats(
             current_user={"id": "u2", "username": "u2"},
         )
@@ -936,7 +948,7 @@ def test_writing_peer_ai_assist_and_stats(isolated_db):
     assert stats.total_points >= 1
     assert len(stats.reviewer_badges) >= 1
 
-    leaderboard = asyncio.run(
+    leaderboard = _run(
         writing_router.get_peer_leaderboard(
             limit=10,
             current_user={"id": "u1", "username": "u1"},
@@ -946,7 +958,7 @@ def test_writing_peer_ai_assist_and_stats(isolated_db):
     assert any(item.reviewer_id == "u2" for item in leaderboard)
     assert all(item.reviewer_alias.startswith("互评同学#") for item in leaderboard)
 
-    received = asyncio.run(
+    received = _run(
         writing_router.get_received_peer_reviews(
             submission_id=submission.submission_id,
             limit=20,
@@ -959,7 +971,7 @@ def test_writing_peer_ai_assist_and_stats(isolated_db):
 
 def test_gamification_overview_leaderboard_and_redeem(isolated_db):
     for i in range(2):
-        submission = asyncio.run(
+        submission = _run(
             writing_router.submit_peer_writing(
                 writing_router.PeerSubmissionCreateRequest(
                     task_type="task1",
@@ -972,7 +984,7 @@ def test_gamification_overview_leaderboard_and_redeem(isolated_db):
                 current_user={"id": "u1", "username": "u1"},
             )
         )
-        asyncio.run(
+        _run(
             writing_router.submit_peer_review(
                 writing_router.PeerReviewSubmitRequest(
                     submission_id=submission.submission_id,
@@ -991,7 +1003,7 @@ def test_gamification_overview_leaderboard_and_redeem(isolated_db):
             )
         )
 
-    overview = asyncio.run(
+    overview = _run(
         gamification_router.get_overview(
             current_user={"id": "u2", "username": "u2"},
         )
@@ -1000,7 +1012,7 @@ def test_gamification_overview_leaderboard_and_redeem(isolated_db):
     assert overview.level in {"bronze", "silver", "gold", "diamond"}
     assert overview.event_count >= 1
 
-    achievements = asyncio.run(
+    achievements = _run(
         gamification_router.get_achievements(
             limit=20,
             current_user={"id": "u2", "username": "u2"},
@@ -1008,7 +1020,7 @@ def test_gamification_overview_leaderboard_and_redeem(isolated_db):
     )
     assert len(achievements) >= 1
 
-    leaderboard = asyncio.run(
+    leaderboard = _run(
         gamification_router.get_leaderboard(
             limit=10,
             current_user={"id": "u1", "username": "u1"},
@@ -1018,7 +1030,7 @@ def test_gamification_overview_leaderboard_and_redeem(isolated_db):
     assert any(item.user_id == "u2" for item in leaderboard)
 
     if overview.total_points >= 30:
-        redeemed = asyncio.run(
+        redeemed = _run(
             gamification_router.redeem_item(
                 gamification_router.RedemptionRequest(item_code="coupon_peer_boost"),
                 current_user={"id": "u2", "username": "u2"},
@@ -1029,7 +1041,7 @@ def test_gamification_overview_leaderboard_and_redeem(isolated_db):
 
 
 def test_learning_community_post_comment_vote_flow(isolated_db):
-    created = asyncio.run(
+    created = _run(
         community_router.create_post(
             community_router.CommunityPostCreateRequest(
                 post_type="question",
@@ -1048,7 +1060,7 @@ def test_learning_community_post_comment_vote_flow(isolated_db):
     assert created.status in {"published", "pending_review"}
     assert created.status == "published"
 
-    posts = asyncio.run(
+    posts = _run(
         community_router.get_posts(
             post_type=None,
             keyword="coherence",
@@ -1059,7 +1071,7 @@ def test_learning_community_post_comment_vote_flow(isolated_db):
     )
     assert any(p.id == created.post_id for p in posts)
 
-    detail = asyncio.run(
+    detail = _run(
         community_router.get_post_detail(
             created.post_id,
             current_user={"id": "u2", "username": "u2"},
@@ -1067,7 +1079,7 @@ def test_learning_community_post_comment_vote_flow(isolated_db):
     )
     assert detail.id == created.post_id
 
-    comment = asyncio.run(
+    comment = _run(
         community_router.create_comment(
             created.post_id,
             community_router.CommunityCommentCreateRequest(
@@ -1080,7 +1092,7 @@ def test_learning_community_post_comment_vote_flow(isolated_db):
     assert comment.post_id == created.post_id
     assert comment.status == "published"
 
-    comments = asyncio.run(
+    comments = _run(
         community_router.get_comments(
             created.post_id,
             limit=50,
@@ -1089,7 +1101,7 @@ def test_learning_community_post_comment_vote_flow(isolated_db):
     )
     assert any(c.id == comment.id for c in comments)
 
-    voted = asyncio.run(
+    voted = _run(
         community_router.vote_post(
             created.post_id,
             community_router.CommunityVoteRequest(vote=1),
@@ -1098,7 +1110,7 @@ def test_learning_community_post_comment_vote_flow(isolated_db):
     )
     assert voted.upvotes >= 1
 
-    voted_comment = asyncio.run(
+    voted_comment = _run(
         community_router.vote_comment(
             comment.id,
             community_router.CommunityVoteRequest(vote=1),
@@ -1107,12 +1119,12 @@ def test_learning_community_post_comment_vote_flow(isolated_db):
     )
     assert voted_comment.upvotes >= 1
 
-    summary_u1 = asyncio.run(
+    summary_u1 = _run(
         community_router.get_my_community_summary(
             current_user={"id": "u1", "username": "u1"},
         )
     )
-    summary_u2 = asyncio.run(
+    summary_u2 = _run(
         community_router.get_my_community_summary(
             current_user={"id": "u2", "username": "u2"},
         )
@@ -1120,12 +1132,12 @@ def test_learning_community_post_comment_vote_flow(isolated_db):
     assert summary_u1.post_count >= 1
     assert summary_u2.comment_count >= 1
 
-    overview_u1 = asyncio.run(
+    overview_u1 = _run(
         gamification_router.get_overview(
             current_user={"id": "u1", "username": "u1"},
         )
     )
-    overview_u2 = asyncio.run(
+    overview_u2 = _run(
         gamification_router.get_overview(
             current_user={"id": "u2", "username": "u2"},
         )
@@ -1135,7 +1147,7 @@ def test_learning_community_post_comment_vote_flow(isolated_db):
 
 
 def test_study_group_create_join_checkin_leaderboard_flow(isolated_db):
-    group = asyncio.run(
+    group = _run(
         study_group_router.create_group(
             study_group_router.StudyGroupCreateRequest(
                 name="7分冲刺组",
@@ -1149,7 +1161,7 @@ def test_study_group_create_join_checkin_leaderboard_flow(isolated_db):
     assert group.id
     assert group.member_count >= 1
 
-    joined = asyncio.run(
+    joined = _run(
         study_group_router.join_group(
             group.id,
             current_user={"id": "u2", "username": "u2"},
@@ -1157,7 +1169,7 @@ def test_study_group_create_join_checkin_leaderboard_flow(isolated_db):
     )
     assert joined.get("group_id") == group.id
 
-    checkin = asyncio.run(
+    checkin = _run(
         study_group_router.checkin_group(
             group.id,
             study_group_router.GroupCheckinRequest(
@@ -1170,7 +1182,7 @@ def test_study_group_create_join_checkin_leaderboard_flow(isolated_db):
     assert checkin.group_id == group.id
     assert checkin.score >= 1
 
-    leaderboard = asyncio.run(
+    leaderboard = _run(
         study_group_router.get_group_leaderboard(
             group.id,
             limit=20,
@@ -1180,7 +1192,7 @@ def test_study_group_create_join_checkin_leaderboard_flow(isolated_db):
     assert len(leaderboard) >= 2
     assert any(m.user_id == "u2" for m in leaderboard)
 
-    checkins = asyncio.run(
+    checkins = _run(
         study_group_router.get_group_checkins(
             group.id,
             limit=20,
@@ -1190,7 +1202,7 @@ def test_study_group_create_join_checkin_leaderboard_flow(isolated_db):
     assert len(checkins) >= 1
     assert any(x.user_id == "u2" for x in checkins)
 
-    my_groups = asyncio.run(
+    my_groups = _run(
         study_group_router.get_my_groups(
             limit=20,
             current_user={"id": "u2", "username": "u2"},
@@ -1198,7 +1210,7 @@ def test_study_group_create_join_checkin_leaderboard_flow(isolated_db):
     )
     assert any(g.id == group.id for g in my_groups)
 
-    overview_u2 = asyncio.run(
+    overview_u2 = _run(
         gamification_router.get_overview(
             current_user={"id": "u2", "username": "u2"},
         )
@@ -1207,14 +1219,14 @@ def test_study_group_create_join_checkin_leaderboard_flow(isolated_db):
 
 
 def test_payment_order_callback_and_writing_entitlement_consume(isolated_db):
-    products = asyncio.run(
+    products = _run(
         payment_router.list_products(
             current_user={"id": "u1", "username": "u1"},
         )
     )
     assert any(p.code == "writing_ai_review_pack_10" for p in products)
 
-    created = asyncio.run(
+    created = _run(
         payment_router.create_order(
             payment_router.CreateOrderRequest(
                 product_code="writing_ai_review_pack_10",
@@ -1226,14 +1238,14 @@ def test_payment_order_callback_and_writing_entitlement_consume(isolated_db):
     order_id = created.order.id
     assert order_id
 
-    intent = asyncio.run(
+    intent = _run(
         payment_router.mock_pay_order(
             order_id,
             current_user={"id": "u1", "username": "u1"},
         )
     )
     payload = intent.callback_payload
-    callback_1 = asyncio.run(
+    callback_1 = _run(
         payment_router.mock_callback(
             payment_router.MockCallbackRequest(
                 order_id=payload["order_id"],
@@ -1246,7 +1258,7 @@ def test_payment_order_callback_and_writing_entitlement_consume(isolated_db):
     )
     assert callback_1["status"] == "paid"
 
-    callback_2 = asyncio.run(
+    callback_2 = _run(
         payment_router.mock_callback(
             payment_router.MockCallbackRequest(
                 order_id=payload["order_id"],
@@ -1259,7 +1271,7 @@ def test_payment_order_callback_and_writing_entitlement_consume(isolated_db):
     )
     assert callback_2["status"] == "paid"
 
-    ents_before = asyncio.run(
+    ents_before = _run(
         payment_router.get_entitlements(
             current_user={"id": "u1", "username": "u1"},
         )
@@ -1279,7 +1291,7 @@ def test_payment_order_callback_and_writing_entitlement_consume(isolated_db):
         topic="Urban transport",
         keywords=["trend", "transport"],
     )
-    result = asyncio.run(
+    result = _run(
         writing_router.analyze_task1_writing(
             req,
             current_user={"id": "u1", "username": "u1"},
@@ -1287,7 +1299,7 @@ def test_payment_order_callback_and_writing_entitlement_consume(isolated_db):
     )
     assert result.total_score >= 0
 
-    ents_after = asyncio.run(
+    ents_after = _run(
         payment_router.get_entitlements(
             current_user={"id": "u1", "username": "u1"},
         )
@@ -1299,7 +1311,7 @@ def test_payment_order_callback_and_writing_entitlement_consume(isolated_db):
 
 
 def test_admin_console_overview_moderation_orders_and_ledger(isolated_db):
-    pending_post = asyncio.run(
+    pending_post = _run(
         community_router.create_post(
             community_router.CommunityPostCreateRequest(
                 post_type="discussion",
@@ -1313,7 +1325,7 @@ def test_admin_console_overview_moderation_orders_and_ledger(isolated_db):
     )
     assert pending_post.status == "pending_review"
 
-    published_post = asyncio.run(
+    published_post = _run(
         community_router.create_post(
             community_router.CommunityPostCreateRequest(
                 post_type="discussion",
@@ -1327,7 +1339,7 @@ def test_admin_console_overview_moderation_orders_and_ledger(isolated_db):
     )
     assert published_post.status == "published"
 
-    post_comment = asyncio.run(
+    post_comment = _run(
         community_router.create_comment(
             published_post.post_id,
             community_router.CommunityCommentCreateRequest(
@@ -1339,20 +1351,20 @@ def test_admin_console_overview_moderation_orders_and_ledger(isolated_db):
     )
     assert post_comment.status == "pending_review"
 
-    order = asyncio.run(
+    order = _run(
         payment_router.create_order(
             payment_router.CreateOrderRequest(product_code="writing_ai_review_pack_10", quantity=1),
             current_user={"id": "u1", "username": "u1"},
         )
     )
-    intent = asyncio.run(
+    intent = _run(
         payment_router.mock_pay_order(
             order.order.id,
             current_user={"id": "u1", "username": "u1"},
         )
     )
     payload = intent.callback_payload
-    _ = asyncio.run(
+    _ = _run(
         payment_router.mock_callback(
             payment_router.MockCallbackRequest(
                 order_id=payload["order_id"],
@@ -1365,7 +1377,7 @@ def test_admin_console_overview_moderation_orders_and_ledger(isolated_db):
     )
 
     with pytest.raises(Exception) as forbidden:
-        asyncio.run(
+        _run(
             admin_router.admin_overview(
                 current_user={"id": "u1", "username": "u1"},
             )
@@ -1373,7 +1385,7 @@ def test_admin_console_overview_moderation_orders_and_ledger(isolated_db):
     assert getattr(forbidden.value, "status_code", None) == 403
 
     admin_user = {"id": "u1", "username": "demo"}
-    overview = asyncio.run(
+    overview = _run(
         admin_router.admin_overview(
             current_user=admin_user,
         )
@@ -1381,7 +1393,7 @@ def test_admin_console_overview_moderation_orders_and_ledger(isolated_db):
     assert overview.total_users >= 2
     assert overview.total_orders >= 1
 
-    posts = asyncio.run(
+    posts = _run(
         admin_router.admin_pending_posts(
             limit=20,
             current_user=admin_user,
@@ -1389,7 +1401,7 @@ def test_admin_console_overview_moderation_orders_and_ledger(isolated_db):
     )
     assert any(x["id"] == pending_post.post_id for x in posts)
 
-    comments = asyncio.run(
+    comments = _run(
         admin_router.admin_pending_comments(
             limit=20,
             current_user=admin_user,
@@ -1397,14 +1409,14 @@ def test_admin_console_overview_moderation_orders_and_ledger(isolated_db):
     )
     assert any(x["id"] == post_comment.id for x in comments)
 
-    _ = asyncio.run(
+    _ = _run(
         admin_router.admin_moderate_post(
             pending_post.post_id,
             admin_router.ModerateRequest(action="approve", reason="合法讨论内容"),
             current_user=admin_user,
         )
     )
-    _ = asyncio.run(
+    _ = _run(
         admin_router.admin_moderate_comment(
             post_comment.id,
             admin_router.ModerateRequest(action="reject", reason="违规引流"),
@@ -1412,13 +1424,13 @@ def test_admin_console_overview_moderation_orders_and_ledger(isolated_db):
         )
     )
 
-    posts_after = asyncio.run(
+    posts_after = _run(
         admin_router.admin_pending_posts(
             limit=20,
             current_user=admin_user,
         )
     )
-    comments_after = asyncio.run(
+    comments_after = _run(
         admin_router.admin_pending_comments(
             limit=20,
             current_user=admin_user,
@@ -1427,7 +1439,7 @@ def test_admin_console_overview_moderation_orders_and_ledger(isolated_db):
     assert all(x["id"] != pending_post.post_id for x in posts_after)
     assert all(x["id"] != post_comment.id for x in comments_after)
 
-    order_rows = asyncio.run(
+    order_rows = _run(
         admin_router.admin_orders(
             status="paid",
             user_id="u1",
@@ -1437,7 +1449,7 @@ def test_admin_console_overview_moderation_orders_and_ledger(isolated_db):
     )
     assert any(x["id"] == order.order.id for x in order_rows)
 
-    ledger_rows = asyncio.run(
+    ledger_rows = _run(
         admin_router.admin_entitlement_ledger(
             user_id="u1",
             feature_code="writing_ai_review",
@@ -1447,7 +1459,7 @@ def test_admin_console_overview_moderation_orders_and_ledger(isolated_db):
     )
     assert len(ledger_rows) >= 1
 
-    retention = asyncio.run(
+    retention = _run(
         admin_router.admin_report_retention(
             cohort_days=14,
             current_user=admin_user,
@@ -1456,7 +1468,7 @@ def test_admin_console_overview_moderation_orders_and_ledger(isolated_db):
     assert retention.cohort_days == 14
     assert retention.new_users >= 0
 
-    funnel = asyncio.run(
+    funnel = _run(
         admin_router.admin_report_funnel(
             days=30,
             current_user=admin_user,
@@ -1465,7 +1477,7 @@ def test_admin_console_overview_moderation_orders_and_ledger(isolated_db):
     assert funnel.days == 30
     assert funnel.paid_count >= 1
 
-    ent_eff = asyncio.run(
+    ent_eff = _run(
         admin_router.admin_report_entitlement_efficiency(
             feature_code="writing_ai_review",
             days=30,
@@ -1475,7 +1487,7 @@ def test_admin_console_overview_moderation_orders_and_ledger(isolated_db):
     assert ent_eff.days == 30
     assert isinstance(ent_eff.feature_summary, list)
 
-    campaign_conv = asyncio.run(
+    campaign_conv = _run(
         admin_router.admin_report_campaign_conversion(
             days=30,
             current_user=admin_user,
@@ -1487,7 +1499,7 @@ def test_admin_console_overview_moderation_orders_and_ledger(isolated_db):
 
 def test_campaign_growth_flow_create_join_progress_complete_reward(isolated_db):
     now = int(time.time())
-    created = asyncio.run(
+    created = _run(
         campaign_router.create_campaign(
             campaign_router.CampaignCreateRequest(
                 title="7天打卡挑战",
@@ -1505,7 +1517,7 @@ def test_campaign_growth_flow_create_join_progress_complete_reward(isolated_db):
     assert created.id
     assert created.status == "active"
 
-    campaigns = asyncio.run(
+    campaigns = _run(
         campaign_router.get_campaigns(
             status="active",
             current_user={"id": "u2", "username": "u2"},
@@ -1513,7 +1525,7 @@ def test_campaign_growth_flow_create_join_progress_complete_reward(isolated_db):
     )
     assert any(c.id == created.id for c in campaigns)
 
-    joined = asyncio.run(
+    joined = _run(
         campaign_router.join_campaign(
             created.id,
             current_user={"id": "u2", "username": "u2"},
@@ -1523,7 +1535,7 @@ def test_campaign_growth_flow_create_join_progress_complete_reward(isolated_db):
     assert joined.target == 3
 
     for _ in range(3):
-        progressed = asyncio.run(
+        progressed = _run(
             campaign_router.report_campaign_event(
                 created.id,
                 campaign_router.CampaignEventRequest(
@@ -1537,7 +1549,7 @@ def test_campaign_growth_flow_create_join_progress_complete_reward(isolated_db):
     assert progressed.status == "completed"
     assert progressed.progress >= 3
 
-    me = asyncio.run(
+    me = _run(
         campaign_router.campaign_me(
             created.id,
             current_user={"id": "u2", "username": "u2"},
@@ -1546,7 +1558,7 @@ def test_campaign_growth_flow_create_join_progress_complete_reward(isolated_db):
     assert me is not None
     assert me.status == "completed"
 
-    stats = asyncio.run(
+    stats = _run(
         campaign_router.campaign_stats(
             created.id,
             current_user={"id": "u1", "username": "demo"},
@@ -1556,7 +1568,7 @@ def test_campaign_growth_flow_create_join_progress_complete_reward(isolated_db):
     assert int(stats["completed_count"]) >= 1
     assert float(stats["completion_rate"]) > 0
 
-    g_overview = asyncio.run(
+    g_overview = _run(
         gamification_router.get_overview(
             current_user={"id": "u2", "username": "u2"},
         )
@@ -1613,7 +1625,7 @@ def test_reminder_retry_backoff_and_failover(isolated_db, monkeypatch):
 
 
 def test_reminder_preferences_strategy_config_roundtrip(isolated_db):
-    updated = asyncio.run(
+    updated = _run(
         reminder_router.update_preferences(
             reminder_router.ReminderPreferences(
                 enabled=True,
@@ -1637,7 +1649,7 @@ def test_reminder_preferences_strategy_config_roundtrip(isolated_db):
     assert int(updated.strategy_config.get("max_reminders_per_window") or 0) == 3
     assert bool(updated.strategy_config.get("merge_similar_enabled")) is False
 
-    fetched = asyncio.run(
+    fetched = _run(
         reminder_router.get_preferences(
             current_user={"id": "u1", "username": "u1"},
         )
@@ -1647,7 +1659,7 @@ def test_reminder_preferences_strategy_config_roundtrip(isolated_db):
 
 
 def test_reminder_preference_presets_history_and_rollback(isolated_db):
-    presets = asyncio.run(
+    presets = _run(
         reminder_router.get_preference_presets(
             current_user={"id": "u1", "username": "u1"},
         )
@@ -1655,7 +1667,7 @@ def test_reminder_preference_presets_history_and_rollback(isolated_db):
     assert len(presets) >= 2
     assert any(p.key == "balanced" for p in presets)
 
-    applied = asyncio.run(
+    applied = _run(
         reminder_router.apply_preference_preset(
             reminder_router.ReminderPreferencePresetApplyRequest(preset_key="high_focus"),
             current_user={"id": "u1", "username": "u1"},
@@ -1664,7 +1676,7 @@ def test_reminder_preference_presets_history_and_rollback(isolated_db):
     assert int(applied.strategy_config.get("frequency_window_hours") or 0) == 2
     assert int(applied.strategy_config.get("max_reminders_per_window") or 0) == 3
 
-    updated = asyncio.run(
+    updated = _run(
         reminder_router.update_preferences(
             reminder_router.ReminderPreferences(
                 enabled=True,
@@ -1684,7 +1696,7 @@ def test_reminder_preference_presets_history_and_rollback(isolated_db):
     )
     assert int(updated.strategy_config.get("frequency_window_hours") or 0) == 5
 
-    history = asyncio.run(
+    history = _run(
         reminder_router.get_preferences_history(
             limit=20,
             current_user={"id": "u1", "username": "u1"},
@@ -1696,7 +1708,7 @@ def test_reminder_preference_presets_history_and_rollback(isolated_db):
     assert int((manual_entry.before or {}).get("strategy_config", {}).get("frequency_window_hours") or 0) == 2
     assert int((manual_entry.after or {}).get("strategy_config", {}).get("frequency_window_hours") or 0) == 5
 
-    rolled_back = asyncio.run(
+    rolled_back = _run(
         reminder_router.rollback_preferences(
             reminder_router.ReminderPreferenceRollbackRequest(history_id=manual_entry.id),
             current_user={"id": "u1", "username": "u1"},
@@ -1708,7 +1720,7 @@ def test_reminder_preference_presets_history_and_rollback(isolated_db):
 
 def test_reminder_analytics_and_audit_logs(isolated_db):
     now = int(time.time())
-    r1 = asyncio.run(
+    r1 = _run(
         reminder_router.create_reminder_endpoint(
             reminder_router.ReminderCreate(
                 type="plan_execution",
@@ -1721,7 +1733,7 @@ def test_reminder_analytics_and_audit_logs(isolated_db):
             current_user={"id": "u1", "username": "u1"},
         )
     )
-    r2 = asyncio.run(
+    r2 = _run(
         reminder_router.create_reminder_endpoint(
             reminder_router.ReminderCreate(
                 type="review",
@@ -1735,14 +1747,14 @@ def test_reminder_analytics_and_audit_logs(isolated_db):
         )
     )
 
-    asyncio.run(
+    _run(
         reminder_router.update_status(
             r1.id,
             reminder_router.ReminderStatusUpdate(status="sent"),
             current_user={"id": "u1", "username": "u1"},
         )
     )
-    asyncio.run(
+    _run(
         reminder_router.update_status(
             r2.id,
             reminder_router.ReminderStatusUpdate(status="failed"),
@@ -1750,7 +1762,7 @@ def test_reminder_analytics_and_audit_logs(isolated_db):
         )
     )
 
-    analytics = asyncio.run(
+    analytics = _run(
         reminder_router.get_reminder_analytics_summary(
             days=14,
             current_user={"id": "u1", "username": "u1"},
@@ -1762,7 +1774,7 @@ def test_reminder_analytics_and_audit_logs(isolated_db):
     assert any(x.key == "plan:test:today_pending" for x in analytics.source_counts)
     assert len(analytics.trend) >= 1
 
-    logs = asyncio.run(
+    logs = _run(
         reminder_router.get_reminder_audit_logs(
             limit=20,
             action=None,
@@ -1777,7 +1789,7 @@ def test_reminder_analytics_and_audit_logs(isolated_db):
 
 def test_reminder_batch_status_and_delete(isolated_db):
     now = int(time.time())
-    r1 = asyncio.run(
+    r1 = _run(
         reminder_router.create_reminder_endpoint(
             reminder_router.ReminderCreate(
                 type="plan_execution",
@@ -1790,7 +1802,7 @@ def test_reminder_batch_status_and_delete(isolated_db):
             current_user={"id": "u1", "username": "u1"},
         )
     )
-    r2 = asyncio.run(
+    r2 = _run(
         reminder_router.create_reminder_endpoint(
             reminder_router.ReminderCreate(
                 type="review",
@@ -1803,7 +1815,7 @@ def test_reminder_batch_status_and_delete(isolated_db):
             current_user={"id": "u1", "username": "u1"},
         )
     )
-    r3 = asyncio.run(
+    r3 = _run(
         reminder_router.create_reminder_endpoint(
             reminder_router.ReminderCreate(
                 type="review",
@@ -1817,7 +1829,7 @@ def test_reminder_batch_status_and_delete(isolated_db):
         )
     )
 
-    status_result = asyncio.run(
+    status_result = _run(
         reminder_router.batch_update_status(
             reminder_router.ReminderBatchStatusUpdateRequest(
                 reminder_ids=[r1.id, r2.id, r3.id, "non-exist-id"],
@@ -1839,7 +1851,7 @@ def test_reminder_batch_status_and_delete(isolated_db):
     assert d1 and d1.get("status") == "sent"
     assert d2 and d2.get("status") == "sent"
 
-    delete_result = asyncio.run(
+    delete_result = _run(
         reminder_router.batch_delete_reminders(
             reminder_router.ReminderBatchDeleteRequest(
                 reminder_ids=[r1.id, r3.id, "non-exist-id"],
@@ -1858,7 +1870,7 @@ def test_reminder_batch_status_and_delete(isolated_db):
     assert db_module.get_reminder(r2.id) is not None
     assert db_module.get_reminder(r3.id) is not None
 
-    logs = asyncio.run(
+    logs = _run(
         reminder_router.get_reminder_audit_logs(
             limit=50,
             action=None,
@@ -2075,7 +2087,7 @@ def test_check_pending_reminders_merges_and_frequency_caps(isolated_db):
 
 
 def test_plan_execution_reminder_suggestion_and_apply_dedup(isolated_db):
-    created = asyncio.run(
+    created = _run(
         plan_router.create_plan(
             plan_router.LearningPlanCreate(
                 target_band=6.5,
@@ -2138,7 +2150,7 @@ def test_plan_execution_reminder_suggestion_and_apply_dedup(isolated_db):
         ],
     )
 
-    suggestions = asyncio.run(
+    suggestions = _run(
         reminder_router.get_plan_reminder_suggestions(
             plan_id=plan_id,
             days=14,
@@ -2154,7 +2166,7 @@ def test_plan_execution_reminder_suggestion_and_apply_dedup(isolated_db):
     assert any("overdue_backlog" in s for s in sources)
     assert any("today_pending" in s for s in sources)
 
-    first_apply = asyncio.run(
+    first_apply = _run(
         reminder_router.apply_plan_reminders(
             reminder_router.PlanReminderApplyRequest(plan_id=plan_id, days=14),
             current_user={"id": "u1", "username": "u1"},
@@ -2165,7 +2177,7 @@ def test_plan_execution_reminder_suggestion_and_apply_dedup(isolated_db):
     created_plan_reminders = [r for r in reminders if r.get("type") == "plan_execution"]
     assert len(created_plan_reminders) >= first_apply.created
 
-    second_apply = asyncio.run(
+    second_apply = _run(
         reminder_router.apply_plan_reminders(
             reminder_router.PlanReminderApplyRequest(plan_id=plan_id, days=14),
             current_user={"id": "u1", "username": "u1"},
@@ -2176,7 +2188,7 @@ def test_plan_execution_reminder_suggestion_and_apply_dedup(isolated_db):
 
 
 def test_diagnostic_session_owner_and_pending_guard_errors(isolated_db):
-    start = asyncio.run(
+    start = _run(
         diagnostic_router.start_diagnostic(
             diagnostic_router.DiagnosticStart(modules=["reading", "listening"]),
             current_user={"id": "u1", "username": "u1"},
@@ -2186,7 +2198,7 @@ def test_diagnostic_session_owner_and_pending_guard_errors(isolated_db):
     pending_qid = start.next_question.question_id
 
     with pytest.raises(Exception) as e1:
-        asyncio.run(
+        _run(
             diagnostic_router.submit_answer(
                 session_id,
                 diagnostic_router.DiagnosticAnswers(
@@ -2198,7 +2210,7 @@ def test_diagnostic_session_owner_and_pending_guard_errors(isolated_db):
     detail_1 = getattr(e1.value, "detail", str(e1.value))
     assert "pending" in str(detail_1).lower()
 
-    ok = asyncio.run(
+    ok = _run(
         diagnostic_router.submit_answer(
             session_id,
             diagnostic_router.DiagnosticAnswers(
@@ -2210,7 +2222,7 @@ def test_diagnostic_session_owner_and_pending_guard_errors(isolated_db):
     assert ok.estimated_ability is not None
 
     with pytest.raises(Exception) as e2:
-        asyncio.run(
+        _run(
             diagnostic_router.get_report(
                 session_id=session_id,
                 current_user={"id": "u2", "username": "u2"},
@@ -2222,13 +2234,13 @@ def test_diagnostic_session_owner_and_pending_guard_errors(isolated_db):
 
 
 def test_diagnostic_bank_health_and_reload(isolated_db):
-    version_info = asyncio.run(
+    version_info = _run(
         diagnostic_router.get_diagnostic_bank_version(current_user={"id": "u1", "username": "u1"})
     )
     assert "version" in version_info
     assert version_info["source"] in {"file", "builtin"}
 
-    health = asyncio.run(
+    health = _run(
         diagnostic_router.get_diagnostic_bank_health(current_user={"id": "u1", "username": "u1"})
     )
     assert health["total_questions"] >= 1
@@ -2236,14 +2248,14 @@ def test_diagnostic_bank_health_and_reload(isolated_db):
     assert health.get("coverage_status") in {"starter", "standard", "strong"}
     assert health.get("recommended_total_questions") == 160
 
-    reloaded = asyncio.run(
+    reloaded = _run(
         diagnostic_router.reload_diagnostic_bank(current_user={"id": "u1", "username": "u1"})
     )
     assert reloaded["total_questions"] >= 1
 
 
 def test_mistakes_due_analysis_export_import(isolated_db):
-    created = asyncio.run(
+    created = _run(
         mistakes_router.create_mistake(
             mistakes_router.MistakeCreate(
                 module="reading",
@@ -2268,12 +2280,12 @@ def test_mistakes_due_analysis_export_import(isolated_db):
     finally:
         conn.close()
 
-    due = asyncio.run(
+    due = _run(
         mistakes_router.list_due_mistakes(module=None, limit=50, current_user={"id": "u1", "username": "u1"})
     )
     assert any(x.id == created.id for x in due)
 
-    by_day = asyncio.run(
+    by_day = _run(
         mistakes_router.list_mistakes(
             module=None,
             question_type=None,
@@ -2285,14 +2297,14 @@ def test_mistakes_due_analysis_export_import(isolated_db):
     )
     assert any(x.id == created.id for x in by_day)
 
-    analysis = asyncio.run(mistakes_router.analysis(current_user={"id": "u1", "username": "u1"}))
+    analysis = _run(mistakes_router.analysis(current_user={"id": "u1", "username": "u1"}))
     assert analysis.total >= 1
     assert isinstance(analysis.by_error_type, dict)
     assert isinstance(analysis.by_error_and_question_type, dict)
     assert analysis.vocabulary_test_wrong_count >= 0
     assert analysis.vocabulary_test_wrong_ratio >= 0
 
-    review_queue = asyncio.run(
+    review_queue = _run(
         mistakes_router.prioritized_review_queue(
             module=None,
             question_type=None,
@@ -2307,7 +2319,7 @@ def test_mistakes_due_analysis_export_import(isolated_db):
     assert hasattr(review_queue[0], "priority_reason")
     assert hasattr(review_queue[0], "expected_mastery_gain")
     assert hasattr(review_queue[0], "projected_mastery_after_review")
-    batch = asyncio.run(
+    batch = _run(
         mistakes_router.batch_review(
             mistakes_router.BatchReviewRequest(
                 mistake_ids=[x.id for x in review_queue[:2]],
@@ -2319,7 +2331,7 @@ def test_mistakes_due_analysis_export_import(isolated_db):
     assert batch.reviewed >= 1
     assert batch.requested >= batch.reviewed
 
-    clusters = asyncio.run(
+    clusters = _run(
         mistakes_router.clusters(
             module=None,
             question_type=None,
@@ -2331,7 +2343,7 @@ def test_mistakes_due_analysis_export_import(isolated_db):
     assert hasattr(clusters[0], "count")
     assert hasattr(clusters[0], "risk_score")
 
-    trends = asyncio.run(
+    trends = _run(
         mistakes_router.trends(
             days=7,
             module=None,
@@ -2345,7 +2357,7 @@ def test_mistakes_due_analysis_export_import(isolated_db):
     assert hasattr(trends[0], "due_snapshot")
     assert sum(getattr(x, "reviewed_count", 0) for x in trends) >= 1
 
-    hotspot_rows = asyncio.run(
+    hotspot_rows = _run(
         mistakes_router.hotspots(
             days=14,
             module=None,
@@ -2358,7 +2370,7 @@ def test_mistakes_due_analysis_export_import(isolated_db):
     assert hasattr(hotspot_rows[0], "error_type")
     assert hasattr(hotspot_rows[0], "risk_score")
 
-    rec_rows = asyncio.run(
+    rec_rows = _run(
         mistakes_router.recommendations(
             days=14,
             module=None,
@@ -2371,7 +2383,7 @@ def test_mistakes_due_analysis_export_import(isolated_db):
     assert hasattr(rec_rows[0], "action")
     assert hasattr(rec_rows[0], "error_type")
 
-    module_rows = asyncio.run(
+    module_rows = _run(
         mistakes_router.module_comparison(
             days=14,
             current_user={"id": "u1", "username": "u1"},
@@ -2382,7 +2394,7 @@ def test_mistakes_due_analysis_export_import(isolated_db):
     assert hasattr(module_rows[0], "unique_error_types")
     assert hasattr(module_rows[0], "risk_index")
 
-    weekly_focus = asyncio.run(
+    weekly_focus = _run(
         mistakes_router.weekly_focus(
             days=14,
             total_daily_minutes=90,
@@ -2393,7 +2405,7 @@ def test_mistakes_due_analysis_export_import(isolated_db):
     assert weekly_focus.total_daily_minutes >= 30
     assert isinstance(weekly_focus.module_allocations, list)
 
-    review_effectiveness = asyncio.run(
+    review_effectiveness = _run(
         mistakes_router.review_effectiveness(
             days=7,
             module=None,
@@ -2406,7 +2418,7 @@ def test_mistakes_due_analysis_export_import(isolated_db):
     assert hasattr(review_effectiveness[0], "avg_mastery_gain")
     assert sum(getattr(x, "review_count", 0) for x in review_effectiveness) >= 1
 
-    exported_json = asyncio.run(
+    exported_json = _run(
         mistakes_router.export_mistakes(
             format="json",
             module=None,
@@ -2417,7 +2429,7 @@ def test_mistakes_due_analysis_export_import(isolated_db):
     assert exported_json["count"] >= 1
     assert isinstance(exported_json["items"], list)
 
-    exported_csv = asyncio.run(
+    exported_csv = _run(
         mistakes_router.export_mistakes(
             format="csv",
             module=None,
@@ -2428,7 +2440,7 @@ def test_mistakes_due_analysis_export_import(isolated_db):
     assert isinstance(exported_csv, Response)
     assert "question_id" in exported_csv.body.decode("utf-8")
 
-    imported = asyncio.run(
+    imported = _run(
         mistakes_router.import_mistakes(
             mistakes_router.MistakeImportPayload(
                 items=[
@@ -2453,7 +2465,7 @@ def test_mistakes_due_analysis_export_import(isolated_db):
 
 
 def test_vocabulary_due_review_stats(isolated_db):
-    created = asyncio.run(
+    created = _run(
         vocabulary_router.add_word(
             vocabulary_router.WordCreate(
                 word="abandon",
@@ -2475,10 +2487,10 @@ def test_vocabulary_due_review_stats(isolated_db):
     finally:
         conn.close()
 
-    due = asyncio.run(vocabulary_router.list_due_vocabulary(limit=100, current_user={"id": "u1", "username": "u1"}))
+    due = _run(vocabulary_router.list_due_vocabulary(limit=100, current_user={"id": "u1", "username": "u1"}))
     assert any(x.id == created.id for x in due)
 
-    reviewed = asyncio.run(
+    reviewed = _run(
         vocabulary_router.mark_word_reviewed(
             vocab_id=created.id,
             mastery_delta=0.15,
@@ -2487,14 +2499,14 @@ def test_vocabulary_due_review_stats(isolated_db):
     )
     assert reviewed.mastery_level >= 0
 
-    stats = asyncio.run(vocabulary_router.vocabulary_summary(current_user={"id": "u1", "username": "u1"}))
+    stats = _run(vocabulary_router.vocabulary_summary(current_user={"id": "u1", "username": "u1"}))
     assert stats.total >= 1
     assert isinstance(stats.by_source_module, dict)
 
 
 def test_vocabulary_strategy_scheduler_behaviour(isolated_db):
     # root strategy: 优先带常见词缀
-    asyncio.run(
+    _run(
         vocabulary_router.add_word(
             vocabulary_router.WordCreate(
                 word="transportation",
@@ -2505,7 +2517,7 @@ def test_vocabulary_strategy_scheduler_behaviour(isolated_db):
             current_user={"id": "u1", "username": "u1"},
         )
     )
-    asyncio.run(
+    _run(
         vocabulary_router.add_word(
             vocabulary_router.WordCreate(
                 word="book",
@@ -2517,7 +2529,7 @@ def test_vocabulary_strategy_scheduler_behaviour(isolated_db):
         )
     )
 
-    root_session = asyncio.run(
+    root_session = _run(
         vocabulary_router.start_learning_session(
             vocabulary_router.LearnSessionRequest(strategy="root", count=1),
             current_user={"id": "u1", "username": "u1"},
@@ -2529,7 +2541,7 @@ def test_vocabulary_strategy_scheduler_behaviour(isolated_db):
     assert root_session.words[0].scheduler_reason
 
     # context strategy: 优先带例句
-    context_session = asyncio.run(
+    context_session = _run(
         vocabulary_router.start_learning_session(
             vocabulary_router.LearnSessionRequest(strategy="context", count=1),
             current_user={"id": "u1", "username": "u1"},
@@ -2548,7 +2560,7 @@ def test_vocabulary_strategy_scheduler_behaviour(isolated_db):
     finally:
         conn.close()
 
-    spaced_session = asyncio.run(
+    spaced_session = _run(
         vocabulary_router.start_learning_session(
             vocabulary_router.LearnSessionRequest(strategy="spaced", count=1),
             current_user={"id": "u1", "username": "u1"},
@@ -2558,7 +2570,7 @@ def test_vocabulary_strategy_scheduler_behaviour(isolated_db):
     assert spaced_session.words[0].word == "book"
     assert spaced_session.words[0].scheduler_score >= 0
 
-    mixed_session = asyncio.run(
+    mixed_session = _run(
         vocabulary_router.start_learning_session(
             vocabulary_router.LearnSessionRequest(strategy="mixed", count=1),
             current_user={"id": "u1", "username": "u1"},
@@ -2567,7 +2579,7 @@ def test_vocabulary_strategy_scheduler_behaviour(isolated_db):
     assert len(mixed_session.words) == 1
     assert mixed_session.strategy == "mixed"
 
-    insights = asyncio.run(
+    insights = _run(
         vocabulary_router.vocabulary_strategy_insights(
             days=30,
             current_user={"id": "u1", "username": "u1"},
@@ -2581,7 +2593,7 @@ def test_vocabulary_strategy_scheduler_behaviour(isolated_db):
 
 
 def test_due_review_reminder_task_is_deduplicated(isolated_db):
-    m = asyncio.run(
+    m = _run(
         mistakes_router.create_mistake(
             mistakes_router.MistakeCreate(
                 module="reading",
@@ -2598,7 +2610,7 @@ def test_due_review_reminder_task_is_deduplicated(isolated_db):
             current_user={"id": "u1", "username": "u1"},
         )
     )
-    v = asyncio.run(
+    v = _run(
         vocabulary_router.add_word(
             vocabulary_router.WordCreate(
                 word="coherent",
@@ -2630,7 +2642,7 @@ def test_due_review_reminder_task_is_deduplicated(isolated_db):
 
 
 def test_vocabulary_test_generate_and_submit(isolated_db):
-    created = asyncio.run(
+    created = _run(
         vocabulary_router.add_word(
             vocabulary_router.WordCreate(
                 word="abandon",
@@ -2643,7 +2655,7 @@ def test_vocabulary_test_generate_and_submit(isolated_db):
     )
     assert created.word == "abandon"
 
-    generated = asyncio.run(
+    generated = _run(
         vocabulary_router.generate_vocab_test(
             vocabulary_router.VocabTestGenerateRequest(mode="spelling", count=1),
             current_user={"id": "u1", "username": "u1"},
@@ -2653,7 +2665,7 @@ def test_vocabulary_test_generate_and_submit(isolated_db):
     assert len(generated.questions) == 1
 
     qid = generated.questions[0].id
-    submitted = asyncio.run(
+    submitted = _run(
         vocabulary_router.submit_vocab_test(
             vocabulary_router.VocabTestSubmitRequest(
                 test_id=generated.test_id,
@@ -2668,7 +2680,7 @@ def test_vocabulary_test_generate_and_submit(isolated_db):
 
 
 def test_vocabulary_test_wrong_answer_creates_mistake(isolated_db):
-    asyncio.run(
+    _run(
         vocabulary_router.add_word(
             vocabulary_router.WordCreate(
                 word="coherent",
@@ -2680,14 +2692,14 @@ def test_vocabulary_test_wrong_answer_creates_mistake(isolated_db):
         )
     )
 
-    generated = asyncio.run(
+    generated = _run(
         vocabulary_router.generate_vocab_test(
             vocabulary_router.VocabTestGenerateRequest(mode="spelling", count=1),
             current_user={"id": "u1", "username": "u1"},
         )
     )
     qid = generated.questions[0].id
-    submitted = asyncio.run(
+    submitted = _run(
         vocabulary_router.submit_vocab_test(
             vocabulary_router.VocabTestSubmitRequest(
                 test_id=generated.test_id,
@@ -2745,7 +2757,7 @@ def test_diagnostic_history_summary_trend(isolated_db):
     finally:
         conn.close()
 
-    summary = asyncio.run(
+    summary = _run(
         diagnostic_router.get_diagnostic_history_summary(limit=10, current_user={"id": "u1", "username": "u1"})
     )
     assert summary.total_reports >= 2
@@ -2755,7 +2767,7 @@ def test_diagnostic_history_summary_trend(isolated_db):
 
 
 def test_diagnostic_report_explainability_fields(isolated_db):
-    start = asyncio.run(
+    start = _run(
         diagnostic_router.start_diagnostic(
             diagnostic_router.DiagnosticStart(modules=["listening", "reading"]),
             current_user={"id": "u1", "username": "u1"},
@@ -2770,7 +2782,7 @@ def test_diagnostic_report_explainability_fields(isolated_db):
     while current is not None and answered < 4:
         expected = str((diagnostic_router.QUESTION_INDEX.get(current.question_id) or {}).get("answer") or "")
         submit_value = expected if answered % 2 == 0 else "wrong"
-        resp = asyncio.run(
+        resp = _run(
             diagnostic_router.submit_answer(
                 sid,
                 diagnostic_router.DiagnosticAnswers(
@@ -2782,7 +2794,7 @@ def test_diagnostic_report_explainability_fields(isolated_db):
         answered += 1
         current = resp.next_question
 
-    report = asyncio.run(
+    report = _run(
         diagnostic_router.get_report(
             session_id=sid,
             current_user={"id": "u1", "username": "u1"},
@@ -2802,7 +2814,7 @@ def test_diagnostic_report_explainability_fields(isolated_db):
 
 
 def test_mistake_csv_export_contains_header(isolated_db):
-    asyncio.run(
+    _run(
         mistakes_router.create_mistake(
             mistakes_router.MistakeCreate(
                 module="reading",
@@ -2819,7 +2831,7 @@ def test_mistake_csv_export_contains_header(isolated_db):
             current_user={"id": "u1", "username": "u1"},
         )
     )
-    exported_csv = asyncio.run(
+    exported_csv = _run(
         mistakes_router.export_mistakes(
             format="csv",
             module=None,
@@ -2837,7 +2849,7 @@ def test_mistake_csv_export_contains_header(isolated_db):
 
 
 def test_mistakes_question_type_filter(isolated_db):
-    asyncio.run(
+    _run(
         mistakes_router.create_mistake(
             mistakes_router.MistakeCreate(
                 module="reading",
@@ -2854,7 +2866,7 @@ def test_mistakes_question_type_filter(isolated_db):
             current_user={"id": "u1", "username": "u1"},
         )
     )
-    asyncio.run(
+    _run(
         mistakes_router.create_mistake(
             mistakes_router.MistakeCreate(
                 module="vocabulary",
@@ -2872,7 +2884,7 @@ def test_mistakes_question_type_filter(isolated_db):
         )
     )
 
-    only_vocab_test = asyncio.run(
+    only_vocab_test = _run(
         mistakes_router.list_mistakes(
             module=None,
             question_type="vocabulary_test",
@@ -2885,7 +2897,7 @@ def test_mistakes_question_type_filter(isolated_db):
 
 
 def test_plan_generate_weekly_tasks_skip_existing_day(isolated_db):
-    created = asyncio.run(
+    created = _run(
         plan_router.create_plan(
             plan_router.LearningPlanCreate(
                 target_band=7.0,
@@ -2898,7 +2910,7 @@ def test_plan_generate_weekly_tasks_skip_existing_day(isolated_db):
     )
     plan_id = created.plan_id
 
-    first = asyncio.run(
+    first = _run(
         plan_router.generate_weekly_tasks(
             plan_id,
             plan_router.WeeklyTaskGenerateRequest(days=3),
@@ -2908,7 +2920,7 @@ def test_plan_generate_weekly_tasks_skip_existing_day(isolated_db):
     assert first.generated_days == 3
     assert first.skipped_days == 0
 
-    second = asyncio.run(
+    second = _run(
         plan_router.generate_weekly_tasks(
             plan_id,
             plan_router.WeeklyTaskGenerateRequest(days=3),
@@ -2924,7 +2936,7 @@ def test_plan_generate_weekly_tasks_skip_existing_day(isolated_db):
 
 
 def test_plan_update_settings_daily_minutes_and_focus_modules(isolated_db):
-    created = asyncio.run(
+    created = _run(
         plan_router.create_plan(
             plan_router.LearningPlanCreate(
                 target_band=7.0,
@@ -2937,7 +2949,7 @@ def test_plan_update_settings_daily_minutes_and_focus_modules(isolated_db):
     )
     plan_id = created.plan_id
 
-    updated = asyncio.run(
+    updated = _run(
         plan_router.update_plan_settings(
             plan_id,
             plan_router.PlanSettingsUpdate(
@@ -2954,7 +2966,7 @@ def test_plan_update_settings_daily_minutes_and_focus_modules(isolated_db):
 
 
 def test_plan_calibration_log_and_report_health(isolated_db):
-    created = asyncio.run(
+    created = _run(
         plan_router.create_plan(
             plan_router.LearningPlanCreate(
                 target_band=7.0,
@@ -2967,7 +2979,7 @@ def test_plan_calibration_log_and_report_health(isolated_db):
     )
     plan_id = created.plan_id
 
-    asyncio.run(
+    _run(
         plan_router.generate_weekly_tasks(
             plan_id,
             plan_router.WeeklyTaskGenerateRequest(days=2),
@@ -2977,7 +2989,7 @@ def test_plan_calibration_log_and_report_health(isolated_db):
     tasks = db_module.get_daily_tasks_by_plan(plan_id)
     first_daily = tasks[0]
     first_task_id = first_daily["tasks"][0]["id"]
-    asyncio.run(
+    _run(
         plan_router.update_progress(
             first_daily["id"],
             plan_router.TaskProgressUpdate(task_id=first_task_id, completed=True, progress=100, time_spent=30),
@@ -2985,7 +2997,7 @@ def test_plan_calibration_log_and_report_health(isolated_db):
         )
     )
 
-    updated = asyncio.run(
+    updated = _run(
         plan_router.update_plan_settings(
             plan_id,
             plan_router.PlanSettingsUpdate(
@@ -3006,7 +3018,7 @@ def test_plan_calibration_log_and_report_health(isolated_db):
     assert latest["before_daily_minutes"] == 100
     assert latest["after_daily_minutes"] == 85
 
-    health = asyncio.run(
+    health = _run(
         report_router.get_current_plan_health(
             plan_id=plan_id,
             days=14,
@@ -3018,7 +3030,7 @@ def test_plan_calibration_log_and_report_health(isolated_db):
     assert health.task_done >= 1
     assert health.health_level in {"healthy", "watch", "at_risk", "unknown"}
 
-    calibration_rows = asyncio.run(
+    calibration_rows = _run(
         report_router.get_current_plan_calibrations(
             plan_id=plan_id,
             limit=10,
@@ -3030,7 +3042,7 @@ def test_plan_calibration_log_and_report_health(isolated_db):
 
 
 def test_plan_intervention_preview_and_apply(isolated_db):
-    created = asyncio.run(
+    created = _run(
         plan_router.create_plan(
             plan_router.LearningPlanCreate(
                 target_band=6.5,
@@ -3043,7 +3055,7 @@ def test_plan_intervention_preview_and_apply(isolated_db):
     )
     plan_id = created.plan_id
 
-    preview = asyncio.run(
+    preview = _run(
         plan_router.get_intervention_preview(
             plan_id=plan_id,
             days=14,
@@ -3056,7 +3068,7 @@ def test_plan_intervention_preview_and_apply(isolated_db):
     assert len(preview.intervention_daily_tasks) >= 1
 
     before_tasks = db_module.get_daily_tasks_by_plan(plan_id)
-    apply_result = asyncio.run(
+    apply_result = _run(
         plan_router.apply_intervention_plan(
             plan_id=plan_id,
             payload=plan_router.InterventionApplyRequest(days=14, remedial_days=3),
@@ -3074,7 +3086,7 @@ def test_plan_intervention_preview_and_apply(isolated_db):
                 added += 1
     assert added >= 3
 
-    intervention_status = asyncio.run(
+    intervention_status = _run(
         report_router.get_current_plan_intervention_status(
             plan_id=plan_id,
             days=14,
@@ -3106,7 +3118,7 @@ def test_chat_translation_generate_and_check(isolated_db, monkeypatch):
     )
     monkeypatch.setattr(chat_router, "translation_agent", fake_translation)
 
-    generated = asyncio.run(
+    generated = _run(
         chat_router.translation_practice(
             chat_router.TranslationPracticeRequest(action="generate", difficulty="hard"),
             current_user={"id": "u1", "username": "u1"},
@@ -3115,7 +3127,7 @@ def test_chat_translation_generate_and_check(isolated_db, monkeypatch):
     assert generated["difficulty"] == "hard"
     assert generated["topic"] == "Technology"
 
-    checked = asyncio.run(
+    checked = _run(
         chat_router.translation_practice(
             chat_router.TranslationPracticeRequest(
                 action="check",
@@ -3129,7 +3141,7 @@ def test_chat_translation_generate_and_check(isolated_db, monkeypatch):
     assert "correct_translation" in checked
 
     with pytest.raises(Exception) as e:
-        asyncio.run(
+        _run(
             chat_router.translation_practice(
                 chat_router.TranslationPracticeRequest(action="check"),
                 current_user={"id": "u1", "username": "u1"},
@@ -3171,7 +3183,7 @@ def test_chat_deep_search_endpoint_structured_response(isolated_db, monkeypatch)
     monkeypatch.setattr(chat_router, "ielts_agent", FakeIeltsAgent())
     monkeypatch.setattr(chat_router, "deep_search_agent", fake_deep)
 
-    response = asyncio.run(
+    response = _run(
         chat_router.deep_search(
             chat_router.DeepSearchRequest(query="雅思写作教育类趋势", max_iterations=2),
             current_user={"id": "u1", "username": "u1"},

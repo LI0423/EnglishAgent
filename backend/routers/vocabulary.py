@@ -1484,7 +1484,7 @@ def _lookup_word_facts(user_id: str, word: str) -> Dict[str, Any]:
 
 
 @router.get("/bank", response_model=List[VocabularyBankItem])
-async def list_bank_vocabulary(
+def list_bank_vocabulary(
     difficulty: Optional[str] = None,
     topic: Optional[str] = None,
     keyword: Optional[str] = None,
@@ -1503,12 +1503,12 @@ async def list_bank_vocabulary(
 
 
 @router.get("/bank/summary", response_model=VocabularyBankSummaryResponse)
-async def bank_vocabulary_summary(current_user: dict = Depends(get_current_user)):
+def bank_vocabulary_summary(current_user: dict = Depends(get_current_user)):
     return VocabularyBankSummaryResponse(**get_ielts_vocabulary_bank_summary())
 
 
 @router.post("/bank/import", response_model=VocabularyBankImportResponse)
-async def import_bank_vocabulary(
+def import_bank_vocabulary(
     payload: VocabularyBankImportRequest,
     current_user: dict = Depends(get_current_user),
 ):
@@ -1552,7 +1552,7 @@ async def import_bank_vocabulary(
 
 
 @router.get("/", response_model=List[WordItem])
-async def list_vocabulary(
+def list_vocabulary(
     limit: int = 100,
     source_module: Optional[str] = None,
     tag: Optional[str] = None,
@@ -1579,7 +1579,7 @@ async def list_vocabulary(
 
 
 @router.get("/due", response_model=List[WordItem])
-async def list_due_vocabulary(
+def list_due_vocabulary(
     limit: int = 100,
     current_user: dict = Depends(get_current_user),
 ):
@@ -1588,7 +1588,7 @@ async def list_due_vocabulary(
 
 
 @router.post("/add", response_model=WordItem)
-async def add_word(
+def add_word(
     payload: WordCreate,
     current_user: dict = Depends(get_current_user),
 ):
@@ -1602,7 +1602,7 @@ async def add_word(
 
 
 @router.post("/learn/session", response_model=LearnSessionResponse)
-async def start_learning_session(
+def start_learning_session(
     payload: LearnSessionRequest,
     current_user: dict = Depends(get_current_user),
 ):
@@ -1621,7 +1621,7 @@ async def start_learning_session(
 
 
 @router.post("/learn/today", response_model=LearnSessionResponse)
-async def start_today_learning_session(
+def start_today_learning_session(
     payload: TodayLearnSessionRequest,
     current_user: dict = Depends(get_current_user),
 ):
@@ -1685,7 +1685,7 @@ async def start_today_learning_session(
 
 
 @router.get("/learn/today/status", response_model=TodayLearningStatusResponse)
-async def get_today_learning_status(
+def get_today_learning_status(
     date_key: str = "",
     current_user: dict = Depends(get_current_user),
 ):
@@ -1698,7 +1698,7 @@ async def get_today_learning_status(
 
 
 @router.post("/learn/today/status", response_model=TodayLearningStatusResponse)
-async def set_today_learning_status(
+def set_today_learning_status(
     payload: TodayLearningStatusRequest,
     current_user: dict = Depends(get_current_user),
 ):
@@ -1712,7 +1712,7 @@ async def set_today_learning_status(
 
 
 @router.post("/book/session", response_model=BookSessionResponse)
-async def start_book_session(payload: BookSessionRequest, current_user: dict = Depends(get_current_user)):
+def start_book_session(payload: BookSessionRequest, current_user: dict = Depends(get_current_user)):
     """词汇本学习：先取到期复习词，不足再补词库中尚未入本的新词。
 
     词库新词只作为「临时词」返回，**不会**自动写入词汇本 —— 是否入本由用户在评分时决定。
@@ -1764,7 +1764,7 @@ async def start_book_session(payload: BookSessionRequest, current_user: dict = D
 
 
 @router.post("/book/grade", response_model=BookGradeResponse)
-async def grade_book_word(payload: BookGradeRequest, current_user: dict = Depends(get_current_user)):
+def grade_book_word(payload: BookGradeRequest, current_user: dict = Depends(get_current_user)):
     """提交一次 3 档自评：按 rating 决定是否入本，并更新 SM2 / 能力曲线。"""
     user_id = str(current_user["id"])
     rating = str(payload.rating or "fuzzy").strip().lower()
@@ -1819,7 +1819,7 @@ async def grade_book_word(payload: BookGradeRequest, current_user: dict = Depend
 
 
 @router.post("/book/collect", response_model=BookCollectResponse)
-async def collect_book_word(payload: BookCollectRequest, current_user: dict = Depends(get_current_user)):
+def collect_book_word(payload: BookCollectRequest, current_user: dict = Depends(get_current_user)):
     """把一个词加入词汇本（划词浮层 / 手动收藏）。幂等：已在本中直接返回。"""
     user_id = str(current_user["id"])
     existing = get_user_vocabulary_by_word(user_id, payload.word)
@@ -1846,14 +1846,14 @@ async def collect_book_word(payload: BookCollectRequest, current_user: dict = De
 
 
 @router.delete("/book/collect/{vocab_id}")
-async def uncollect_book_word(vocab_id: str, current_user: dict = Depends(get_current_user)):
+def uncollect_book_word(vocab_id: str, current_user: dict = Depends(get_current_user)):
     if not delete_vocabulary(vocab_id, str(current_user["id"])):
         raise HTTPException(status_code=404, detail="Vocabulary not found")
     return {"ok": True, "vocab_id": vocab_id}
 
 
 @router.post("/book/seen", response_model=BookSeenResponse)
-async def mark_book_word_seen(payload: BookSeenRequest, current_user: dict = Depends(get_current_user)):
+def mark_book_word_seen(payload: BookSeenRequest, current_user: dict = Depends(get_current_user)):
     action = str(payload.action or "skip").strip().lower()
     if action not in {"skip", "seen"}:
         action = "skip"
@@ -1868,7 +1868,7 @@ async def mark_book_word_seen(payload: BookSeenRequest, current_user: dict = Dep
 
 
 @router.get("/book/summary", response_model=BookSummaryResponse)
-async def book_summary(current_user: dict = Depends(get_current_user)):
+def book_summary(current_user: dict = Depends(get_current_user)):
     """词汇本总览：总数 / 活跃 / 已掌握 / 到期 + 按来源分组。"""
     user_id = str(current_user["id"])
     stats = get_vocabulary_stats(user_id)
@@ -1893,7 +1893,7 @@ async def book_summary(current_user: dict = Depends(get_current_user)):
 
 
 @router.get("/book/list", response_model=BookListResponse)
-async def book_list(
+def book_list(
     source: str = "",
     status: str = "all",
     limit: int = 50,
@@ -1928,7 +1928,7 @@ async def book_list(
 
 
 @router.post("/book/bulk-remove", response_model=BookBulkRemoveResponse)
-async def book_bulk_remove(payload: BookBulkRemoveRequest, current_user: dict = Depends(get_current_user)):
+def book_bulk_remove(payload: BookBulkRemoveRequest, current_user: dict = Depends(get_current_user)):
     """批量移出词汇本（仅限本人数据）。"""
     # 去重 + 上限，避免超长 IN 列表触发 "too many SQL variables"
     ids = list(dict.fromkeys(
@@ -1939,7 +1939,7 @@ async def book_bulk_remove(payload: BookBulkRemoveRequest, current_user: dict = 
 
 
 @router.get("/book/practice/options", response_model=BookPracticeOptionsResponse)
-async def book_practice_options(
+def book_practice_options(
     word: str,
     definition: str = "",
     current_user: dict = Depends(get_current_user),
@@ -1974,7 +1974,7 @@ async def book_practice_options(
 
 
 @router.get("/explain", response_model=WordExplainResponse)
-async def explain_word(word: str, context: str = "", current_user: dict = Depends(get_current_user)):
+def explain_word(word: str, context: str = "", current_user: dict = Depends(get_current_user)):
     """「问老师」L0：直接用词库 / 词汇本数据给出结构化速览（零 LLM、零延迟）。"""
     safe_word = _normalize_word_input(word)
     if not safe_word:
@@ -2029,7 +2029,7 @@ async def ask_about_word(payload: WordExplainAskRequest, current_user: dict = De
 
 
 @router.get("/audio/word", response_model=VocabularyWordAudioResponse)
-async def get_vocabulary_word_audio(
+def get_vocabulary_word_audio(
     word: str,
     current_user: dict = Depends(get_current_user),
 ):
@@ -2057,7 +2057,7 @@ async def get_vocabulary_word_audio(
 
 
 @router.post("/{vocab_id}/review", response_model=WordReviewResponse)
-async def mark_word_reviewed(
+def mark_word_reviewed(
     vocab_id: str,
     mastery_delta: float = 0.15,
     quality: Optional[int] = None,
@@ -2161,12 +2161,12 @@ async def generate_output_prompt(
 
 
 @router.get("/stats/summary", response_model=VocabularyStatsResponse)
-async def vocabulary_summary(current_user: dict = Depends(get_current_user)):
+def vocabulary_summary(current_user: dict = Depends(get_current_user)):
     return VocabularyStatsResponse(**get_vocabulary_stats(current_user["id"]))
 
 
 @router.get("/strategy/insights", response_model=List[VocabularyStrategyInsightItem])
-async def vocabulary_strategy_insights(
+def vocabulary_strategy_insights(
     days: int = 14,
     current_user: dict = Depends(get_current_user),
 ):
@@ -2175,7 +2175,7 @@ async def vocabulary_strategy_insights(
 
 
 @router.get("/scenarios", response_model=List[VocabularyScenarioPack])
-async def list_vocabulary_scenarios(
+def list_vocabulary_scenarios(
     module: Optional[str] = None,
     topic: Optional[str] = None,
     current_user: dict = Depends(get_current_user),
@@ -2207,7 +2207,7 @@ async def list_vocabulary_scenarios(
 
 
 @router.post("/scenarios/import", response_model=VocabularyScenarioImportResponse)
-async def import_vocabulary_scenario(
+def import_vocabulary_scenario(
     payload: VocabularyScenarioImportRequest,
     current_user: dict = Depends(get_current_user),
 ):
@@ -2262,7 +2262,7 @@ async def import_vocabulary_scenario(
 
 
 @router.post("/collect", response_model=VocabularyAutoCollectResponse)
-async def auto_collect_vocabulary(
+def auto_collect_vocabulary(
     payload: VocabularyAutoCollectRequest,
     current_user: dict = Depends(get_current_user),
 ):
@@ -2320,7 +2320,7 @@ async def auto_collect_vocabulary(
 
 
 @router.post("/context/replay/generate", response_model=ContextReplayGenerateResponse)
-async def generate_context_replay(
+def generate_context_replay(
     payload: ContextReplayGenerateRequest,
     current_user: dict = Depends(get_current_user),
 ):
@@ -2410,7 +2410,7 @@ async def generate_context_replay(
 
 
 @router.post("/context/replay/submit", response_model=ContextReplaySubmitResponse)
-async def submit_context_replay(
+def submit_context_replay(
     payload: ContextReplaySubmitRequest,
     current_user: dict = Depends(get_current_user),
 ):
@@ -2488,7 +2488,7 @@ async def submit_context_replay(
 
 
 @router.get("/context/replay/retry-queue", response_model=List[ContextReplayRetryQueueItem])
-async def get_context_replay_retry_queue(
+def get_context_replay_retry_queue(
     limit: int = 30,
     current_user: dict = Depends(get_current_user),
 ):
@@ -2552,7 +2552,7 @@ async def get_context_replay_retry_queue(
 
 
 @router.post("/test/generate", response_model=VocabTestGenerateResponse)
-async def generate_vocab_test(
+def generate_vocab_test(
     payload: VocabTestGenerateRequest,
     current_user: dict = Depends(get_current_user),
 ):
@@ -2624,7 +2624,7 @@ async def generate_vocab_test(
 
 
 @router.post("/test/submit", response_model=VocabTestSubmitResponse)
-async def submit_vocab_test(
+def submit_vocab_test(
     payload: VocabTestSubmitRequest,
     current_user: dict = Depends(get_current_user),
 ):
@@ -2701,7 +2701,7 @@ async def submit_vocab_test(
 
 
 @router.post("/wrong/review-queue", response_model=List[WrongReviewQueueItem])
-async def get_wrong_review_queue(
+def get_wrong_review_queue(
     payload: WrongReviewQueueRequest,
     current_user: dict = Depends(get_current_user),
 ):
