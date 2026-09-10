@@ -1,6 +1,13 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { Cell, Line, LineChart, Pie, PieChart, ResponsiveContainer, Tooltip, XAxis, YAxis, CartesianGrid } from 'recharts';
-import { getCurrentUser, getDashboardOverview } from '../utils/api';
+import {
+  completeTodayLearningTask,
+  getCurrentUser,
+  getDashboardOverview,
+  getGrowthInsights,
+  getTodayLearningPlan,
+} from '../utils/api';
 import SidebarMenu from '../components/layout/SidebarMenu';
 import TopNav from '../components/layout/TopNav';
 
@@ -56,6 +63,13 @@ const emptyDashboard = {
     weekly_new: 0,
     due_review: 0,
   },
+  growth: {
+    tracked_skills: 0,
+    average_mastery: 0,
+    due_review_count: 0,
+    weak_skills: [],
+    strong_skills: [],
+  },
   modules: [],
   trend: [],
   checkin_calendar: emptyCheckinCalendar,
@@ -63,20 +77,36 @@ const emptyDashboard = {
   today_tasks: [],
 };
 
+const emptySmartPlan = {
+  title: '今日智能学习安排',
+  summary: '完成几次练习后，系统会给出更贴合你的安排。',
+  tasks: [],
+};
+
+const emptyGrowthInsights = {
+  abilities: [],
+  due_memory_count: 0,
+};
+
 const Home = () => {
+  const navigate = useNavigate();
   const [username, setUsername] = useState('同学');
   const [dashboard, setDashboard] = useState(emptyDashboard);
+  const [smartPlan, setSmartPlan] = useState(emptySmartPlan);
+  const [growthInsights, setGrowthInsights] = useState(emptyGrowthInsights);
+  const [completingSmartTask, setCompletingSmartTask] = useState('');
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
 
-  useEffect(() => {
-    const fetchData = async () => {
+  const fetchData = useCallback(async () => {
       setLoading(true);
       setError('');
       try {
-        const [user, overview] = await Promise.all([
+        const [user, overview, plan, insights] = await Promise.all([
           getCurrentUser().catch(() => null),
           getDashboardOverview(),
+          getTodayLearningPlan(6).catch(() => emptySmartPlan),
+          getGrowthInsights(8).catch(() => emptyGrowthInsights),
         ]);
         const nextUsername = user?.username || overview?.summary?.username || '同学';
         setUsername(nextUsername);
@@ -92,24 +122,47 @@ const Home = () => {
             ...emptyDashboard.vocabulary,
             ...(overview?.vocabulary || {}),
           },
+          growth: {
+            ...emptyDashboard.growth,
+            ...(overview?.growth || {}),
+          },
           checkin_calendar: {
             ...emptyCheckinCalendar,
             ...(overview?.checkin_calendar || {}),
           },
+        });
+        setSmartPlan({
+          ...emptySmartPlan,
+          ...(plan || {}),
+          tasks: Array.isArray(plan?.tasks) ? plan.tasks : [],
+        });
+        setGrowthInsights({
+          ...emptyGrowthInsights,
+          ...(insights || {}),
+          abilities: Array.isArray(insights?.abilities) ? insights.abilities : [],
         });
       } catch (err) {
         setError(typeof err === 'string' ? err : '首页数据加载失败');
       } finally {
         setLoading(false);
       }
-    };
-    fetchData();
   }, []);
+
+  useEffect(() => {
+    fetchData();
+  }, [fetchData]);
 
   const summary = dashboard.summary || emptyDashboard.summary;
   const vocabulary = dashboard.vocabulary || emptyDashboard.vocabulary;
+  const growth = dashboard.growth || emptyDashboard.growth;
   const checkinCalendar = dashboard.checkin_calendar || emptyCheckinCalendar;
   const totalCompletion = Math.max(0, Math.min(100, Number(summary.total_completion || 0)));
+  const growthMastery = Math.round(Math.max(0, Math.min(1, Number(growth.average_mastery || 0))) * 100);
+  const weakSkills = Array.isArray(growth.weak_skills) ? growth.weak_skills.slice(0, 4) : [];
+  const smartTasks = Array.isArray(smartPlan.tasks) ? smartPlan.tasks.slice(0, 6) : [];
+  const insightAbilities = Array.isArray(growthInsights.abilities)
+    ? growthInsights.abilities.slice(0, 4)
+    : [];
   const modules = (dashboard.modules || []).map((item) => ({
     ...item,
     icon: moduleIcons[item.module] || '•',
@@ -137,6 +190,25 @@ const Home = () => {
     ? (new Date(`${calendarDays[0].date}T00:00:00`).getDay() + 6) % 7
     : 0;
   const todayStatusText = statusLabels[checkinCalendar.today_status] || '无计划';
+  const goToRoute = (route) => {
+    if (typeof route === 'string' && route.startsWith('/')) {
+      navigate(route);
+    }
+  };
+  const onCompleteSmartTask = async (taskId) => {
+    const id = String(taskId || '').trim();
+    if (!id) return;
+    setCompletingSmartTask(id);
+    setError('');
+    try {
+      await completeTodayLearningTask(id);
+      await fetchData();
+    } catch (err) {
+      setError(typeof err === 'string' ? err : '智能任务完成失败');
+    } finally {
+      setCompletingSmartTask('');
+    }
+  };
 
   return (
     <div className="home-page web-dashboard">
@@ -195,6 +267,104 @@ const Home = () => {
                 <h3>总分预测</h3>
                 <p className="big-number">{summary.current_band ? Number(summary.current_band).toFixed(1) : '暂无'}</p>
                 <p className="small-text">目标: {summary.target_band || 6.5}</p>
+              </div>
+            </section>
+
+            <section className="growth-overview-section">
+              <div className="growth-overview-head">
+                <div>
+                  <h2>成长概览</h2>
+                  <p>根据最近练习表现，动态整理当前掌握情况和下一步重点。</p>
+                </div>
+                <div className="growth-mastery-badge">{growthMastery}%</div>
+              </div>
+              <div className="growth-overview-grid">
+                <div className="growth-metric">
+                  <span>已追踪能力点</span>
+                  <strong>{growth.tracked_skills || 0}</strong>
+                </div>
+                <div className="growth-metric">
+                  <span>平均掌握度</span>
+                  <strong>{growthMastery}%</strong>
+                </div>
+                <div className="growth-metric">
+                  <span>建议复习</span>
+                  <strong>{growth.due_review_count || 0}</strong>
+                </div>
+              </div>
+              <div className="growth-focus-list">
+                {weakSkills.length > 0 ? weakSkills.map((skill) => (
+                  <div key={skill.skill_key} className="growth-focus-item">
+                    <div>
+                      <span>{formatSkillLabel(skill.skill_key)}</span>
+                      <small>{formatSkillCategory(skill.category)} · 已练 {skill.exposure_count || 0} 次</small>
+                    </div>
+                    <strong>{Math.round(Number(skill.mastery || 0) * 100)}%</strong>
+                  </div>
+                )) : (
+                  <div className="growth-focus-empty">完成几次练习后，这里会显示你的优先提升点。</div>
+                )}
+              </div>
+            </section>
+
+            <section className="smart-plan-section">
+              <div className="smart-plan-head">
+                <div>
+                  <h2>{smartPlan.title || '今日智能学习安排'}</h2>
+                  <p>{smartPlan.summary || emptySmartPlan.summary}</p>
+                </div>
+                <div className="smart-plan-count">{smartTasks.length || 0} 项</div>
+              </div>
+              <div className="smart-plan-grid">
+                <div className="smart-task-list">
+                  {smartTasks.length > 0 ? smartTasks.map((task, index) => (
+                    <div
+                      key={task.id || `${task.type || 'task'}-${task.title || index}`}
+                      className={`smart-task-item ${task.completed ? 'completed' : ''}`}
+                    >
+                      <div className="smart-task-rank">{index + 1}</div>
+                      <div className="smart-task-body">
+                        <div className="smart-task-topline">
+                          <span>{moduleLabel(task.module || '') || '学习'}</span>
+                          <strong>{task.title}</strong>
+                        </div>
+                        <p>{task.reason || '根据最近练习情况安排。'}</p>
+                      </div>
+                      <div className="smart-task-actions">
+                        {task.route && (
+                          <button className="smart-task-action" onClick={() => goToRoute(task.route)}>
+                            开始
+                          </button>
+                        )}
+                        <button
+                          className="smart-task-action"
+                          disabled={Boolean(task.completed) || completingSmartTask === task.id}
+                          onClick={() => onCompleteSmartTask(task.id)}
+                        >
+                          {task.completed ? '已完成' : (completingSmartTask === task.id ? '同步中...' : '完成')}
+                        </button>
+                      </div>
+                    </div>
+                  )) : (
+                    <div className="smart-task-empty">完成一组练习后，这里会出现今日优先安排。</div>
+                  )}
+                </div>
+                <div className="smart-insight-panel">
+                  <div className="smart-insight-stat">
+                    <span>待稳定内容</span>
+                    <strong>{growthInsights.due_memory_count || 0}</strong>
+                  </div>
+                  <div className="smart-insight-list">
+                    {insightAbilities.length > 0 ? insightAbilities.map((item) => (
+                      <div key={item.ability_key} className={`smart-insight-item ${item.risk_level || 'normal'}`}>
+                        <span>{formatAbilityLabel(item.ability_key)}</span>
+                        <strong>{Math.round(Number(item.current_score || 0) * 100)}%</strong>
+                      </div>
+                    )) : (
+                      <p>暂无明显波动，先按今日任务推进。</p>
+                    )}
+                  </div>
+                </div>
               </div>
             </section>
 
@@ -259,7 +429,7 @@ const Home = () => {
                     </div>
                     <h3>{module.name}</h3>
                     <p>今日已练习 {module.todayCount || 0}/{module.targetCount || 0}题</p>
-                    <button className="module-button" onClick={() => { window.location.href = module.route; }}>开始练习</button>
+                    <button className="module-button" onClick={() => goToRoute(module.route)}>开始练习</button>
                   </div>
                 ))}
               </div>
@@ -308,7 +478,12 @@ const Home = () => {
                   <div key={recommendation.id} className="recommendation-card">
                     <h3>{recommendation.title}</h3>
                     <p>{recommendation.description}</p>
-                    <button className="recommendation-button">查看详情</button>
+                    <button
+                      className="recommendation-button"
+                      onClick={() => goToRoute(recommendation.route)}
+                    >
+                      去练习
+                    </button>
                   </div>
                 ))}
               </div>
@@ -321,6 +496,11 @@ const Home = () => {
                   <div key={task.id} className={`task-item ${task.completed ? 'completed' : ''}`}>
                     <input type="checkbox" checked={Boolean(task.completed)} readOnly />
                     <span className="task-title">{task.title}</span>
+                    {task.route && (
+                      <button className="task-action-btn" onClick={() => goToRoute(task.route)}>
+                        开始
+                      </button>
+                    )}
                   </div>
                 ))}
                 {(dashboard.today_tasks || []).length === 0 && (
@@ -336,5 +516,61 @@ const Home = () => {
     </div>
   );
 };
+
+const formatSkillLabel = (skillKey = '') => {
+  const text = String(skillKey || '');
+  if (text.startsWith('module:')) {
+    return moduleLabel(text.replace('module:', ''));
+  }
+  if (text.startsWith('topic:')) {
+    return `话题：${text.replace('topic:', '')}`;
+  }
+  if (text.startsWith('word:')) {
+    return `词汇：${text.replace('word:', '')}`;
+  }
+  const parts = text.split(':');
+  if (parts.length >= 2) {
+    return `${moduleLabel(parts[0])}：${parts.slice(1).join(' / ')}`;
+  }
+  return text || '能力点';
+};
+
+const moduleLabel = (key = '') => ({
+  listening: '听力',
+  reading: '阅读',
+  writing: '写作',
+  speaking: '口语',
+  translation: '翻译',
+  vocabulary: '词汇',
+  mistakes: '错题',
+})[key] || key;
+
+const formatSkillCategory = (category = '') => ({
+  module: '模块',
+  skill: '能力',
+  topic: '话题',
+  mode: '练习形式',
+  word: '词汇',
+  difficulty: '难度',
+})[category] || '能力';
+
+const formatAbilityLabel = (key = '') => ({
+  vocabulary: '词汇积累',
+  mistake_review: '错题复盘',
+  listening_detail: '听力细节',
+  reading_accuracy: '阅读准确性',
+  writing_task_response: '写作回应',
+  writing_coherence: '写作连贯',
+  writing_grammar: '写作语法',
+  writing_lexical_resource: '写作词汇',
+  speaking_coherence: '口语连贯',
+  speaking_fluency: '口语流利度',
+  speaking_grammar: '口语语法',
+  speaking_vocabulary: '口语词汇',
+  translation_accuracy: '翻译准确性',
+  grammar: '语法能力',
+  lexical: '词汇丰富度',
+  pronunciation: '发音能力',
+})[key] || String(key || '能力点').replaceAll('_', ' ');
 
 export default Home;

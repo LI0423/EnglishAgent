@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import SidebarMenu from '../components/layout/SidebarMenu';
 import {
   addVocabularyWord,
@@ -8,24 +9,27 @@ import {
   generateVocabularyTest,
   getContextReplayRetryQueue,
   getDueVocabulary,
+  getTodayVocabularyLearningStatus,
   getVocabularyBankSummary,
   getVocabularyList,
   getVocabularyScenarios,
   getVocabularyStrategyInsights,
   getVocabularyStats,
+  getVocabularyWordAudio,
   importVocabularyScenario,
   getPrioritizedWrongReviewQueue,
   normalizeUiError,
   reviewVocabularyWord,
+  setTodayVocabularyLearningStatus,
   startTodayVocabularySession,
-  startVocabularySession,
   submitVocabularyLearningAttempt,
   submitContextReplay,
   submitVocabularyTest,
 } from '../utils/api';
-import { MetricCard, MetricGrid, ToolbarRow } from '../components/layout/DesktopUI';
+import { MetricCard, MetricGrid } from '../components/layout/DesktopUI';
 
 import TopNav from "../components/layout/TopNav";
+const API_BASE = String(import.meta.env.VITE_API_URL || 'http://127.0.0.1:8000').replace(/\/+$/, '');
 const emptyWord = {
   word: '',
   definition: '',
@@ -157,51 +161,38 @@ const parseWordMeta = (wordRow) => {
   return { source, module, topics: uniqTopics, chips };
 };
 
-const learnButtons = [
-  { label: '不认识', delta: -0.2, rating: 'unknown' },
-  { label: '模糊', delta: 0.05, rating: 'fuzzy' },
-  { label: '认识', delta: 0.2, rating: 'known' },
+const todayRatingChoices = [
+  { label: '完全忘了', rating: 'forgot', quality: 1 },
+  { label: '有点模糊', rating: 'hard', quality: 2 },
+  { label: '想起来了', rating: 'recalled', quality: 3 },
+  { label: '比较熟', rating: 'familiar', quality: 4 },
+  { label: '很轻松', rating: 'easy', quality: 5 },
 ];
 
 const reviewButtons = [
-  { label: '再复习', delta: -0.2 },
-  { label: '较难', delta: -0.05 },
-  { label: '掌握', delta: 0.12 },
-  { label: '熟练', delta: 0.22 },
+  { label: '完全忘了', delta: -0.2, quality: 1, hint: '稍后再巩固' },
+  { label: '有点模糊', delta: -0.05, quality: 2, hint: '短间隔复习' },
+  { label: '想起来了', delta: 0.08, quality: 3, hint: '明天左右' },
+  { label: '比较熟', delta: 0.14, quality: 4, hint: '间隔拉长' },
+  { label: '很轻松', delta: 0.22, quality: 5, hint: '长期巩固' },
 ];
 
-const todaySteps = [
-  { key: 'recall', label: '主动回忆' },
-  { key: 'cloze', label: '例句填空' },
-  { key: 'output', label: '造句输出' },
-];
-
-const learningModeOptions = [
-  { value: 'auto', label: '智能推荐' },
-  { value: 'cognitive', label: '认知模式' },
-  { value: 'consolidation', label: '巩固模式' },
-  { value: 'output', label: '输出模式' },
-];
-
-const learningModeLabelMap = Object.fromEntries(learningModeOptions.map((item) => [item.value, item.label]));
-
-const learningModeSteps = {
-  cognitive: [
-    { key: 'recall', label: '主动回忆' },
-  ],
-  consolidation: [
-    { key: 'cloze', label: '例句填空' },
-    { key: 'collocation', label: '搭配回忆' },
-  ],
-  output: [
-    { key: 'translation', label: '短句转换' },
-    { key: 'output', label: '造句输出' },
-  ],
+const formatReviewTime = (ts) => {
+  if (!ts) return '';
+  const date = new Date(Number(ts) * 1000);
+  if (Number.isNaN(date.getTime())) return '';
+  return date.toLocaleString('zh-CN', {
+    month: 'numeric',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  });
 };
 
-const initialStepForMode = (mode) => {
-  const steps = learningModeSteps[mode] || todaySteps;
-  return steps[0]?.key || 'recall';
+const nextPracticeStepForQuality = (quality) => {
+  if (quality <= 2) return 'recognition';
+  if (quality === 3) return 'cloze';
+  return 'output';
 };
 
 const todaySessionStorageKey = 'vocab_today_learning_session_v1';
@@ -214,18 +205,12 @@ const localDateKey = () => {
   return `${year}-${month}-${day}`;
 };
 
-const resolveAutoLearningMode = (wordRow) => {
-  const mastery = Number(wordRow?.mastery_level || 0);
-  const examples = Array.isArray(wordRow?.examples) ? wordRow.examples : [];
-  if (mastery < 0.28) return 'cognitive';
-  if (mastery < 0.68 || examples.length > 0) return 'consolidation';
-  return 'output';
-};
-
 const getPrimaryExample = (wordRow) => {
   const first = (wordRow?.examples || [])[0];
   return String(first || '').trim();
 };
+
+const getWordDefinition = (wordRow) => String(wordRow?.definition || '').trim() || '暂无释义';
 
 const maskWordInExample = (sentence, word) => {
   const text = String(sentence || '').trim();
@@ -237,8 +222,327 @@ const maskWordInExample = (sentence, word) => {
   return `${text}  (${target})`;
 };
 
+const hashText = (value) => String(value || '').split('').reduce((sum, ch) => sum + ch.charCodeAt(0), 0);
+
+const buildRecognitionOptions = (targetWord, allWords = []) => {
+  const targetId = String(targetWord?.id ?? '');
+  const wordText = String(targetWord?.word ?? '').trim();
+  // 只要还有目标词（即使缺 id）就至少给出正确项，避免识别步骤无选项卡死。
+  if (!targetId && !wordText) return [];
+  const key = targetId || `word:${wordText.toLowerCase()}`;
+  const seed = hashText(wordText || key);
+  const correct = {
+    key,
+    value: wordText,
+    label: getWordDefinition(targetWord) || wordText || '（正确项）',
+    correct: true,
+  };
+  const distractors = (Array.isArray(allWords) ? allWords : [])
+    .filter(
+      (item) =>
+        String(item?.id ?? '') !== targetId &&
+        String(item?.word ?? '').trim().toLowerCase() !== wordText.toLowerCase() &&
+        String(item?.definition ?? '').trim(),
+    )
+    // 用带种子的排序让干扰项随目标词变化，避免每次都取同样的前 12 个词。
+    .sort((a, b) => (hashText(String(a?.id ?? '')) + seed) - (hashText(String(b?.id ?? '')) + seed))
+    .slice(0, 3)
+    .map((item) => ({
+      key: String(item.id),
+      value: String(item.word || ''),
+      label: getWordDefinition(item),
+      correct: false,
+    }));
+  return [correct, ...distractors].sort(
+    (a, b) => ((hashText(a.key) + seed) % 97) - ((hashText(b.key) + seed) % 97),
+  );
+};
+
+const definitionStopwords = new Set([
+  'the', 'and', 'for', 'with', 'that', 'this', 'from', 'into', 'used', 'use',
+  'thing', 'person', 'people', 'something', 'someone', '暂无释义',
+]);
+
+const extractDefinitionKeywords = (definition) => {
+  const raw = String(definition || '').trim();
+  if (!raw) return [];
+  const english = raw
+    .toLowerCase()
+    .match(/[a-z][a-z'-]{3,}/g) || [];
+  const chinese = raw
+    .split(/[，。；;,.、/（）()：:\s]+/)
+    .map((x) => x.trim())
+    .filter((x) => /[\u4e00-\u9fff]/.test(x) && x.length >= 2);
+  const keywords = [...english, ...chinese]
+    .map((x) => x.replace(/^to\s+/, '').trim())
+    .filter((x) => x && !definitionStopwords.has(x));
+  return Array.from(new Set(keywords)).slice(0, 8);
+};
+
+const evaluateRecallAgainstDefinition = (answer, definition) => {
+  const text = String(answer || '').trim().toLowerCase();
+  const keywords = extractDefinitionKeywords(definition);
+  if (!text) {
+    return {
+      score: 0,
+      matched: [],
+      keywords,
+      suggestedRating: 'forgot',
+      message: '',
+    };
+  }
+  if (keywords.length === 0) {
+    return {
+      score: 0.35,
+      matched: [],
+      keywords,
+      suggestedRating: 'hard',
+      message: '',
+    };
+  }
+  const matched = keywords.filter((keyword) => text.includes(keyword.toLowerCase()));
+  const score = matched.length / keywords.length;
+  if (score >= 0.72) {
+    return {
+      score,
+      matched,
+      keywords,
+      suggestedRating: 'familiar',
+      message: '',
+    };
+  }
+  if (score >= 0.42) {
+    return {
+      score,
+      matched,
+      keywords,
+      suggestedRating: 'recalled',
+      message: '',
+    };
+  }
+  if (score >= 0.18) {
+    return {
+      score,
+      matched,
+      keywords,
+      suggestedRating: 'hard',
+      message: '',
+    };
+  }
+  return {
+    score,
+    matched,
+    keywords,
+    suggestedRating: 'forgot',
+    message: '',
+  };
+};
+
+const escapeRegExp = (value) => String(value || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+const cleanupIssueCorrection = (value) => String(value || '')
+  .replace(/^[\s'"‘’“”]+|[\s'"‘’“”，。；;]+$/g, '')
+  .trim();
+
+const extractSentenceIssues = (feedback) => {
+  const text = String(feedback || '');
+  const issues = [];
+  const patterns = [
+    /['‘’"]([^'‘’"]{1,80})['‘’"]\s*(?:应为|应该为|应改为|改为|换成|→|->)\s*['‘’"]([^'‘’"]{1,120})['‘’"]/g,
+    /(?:把|将)\s*['‘’"]([^'‘’"]{1,80})['‘’"]\s*(?:改为|换成|改成)\s*['‘’"]([^'‘’"]{1,120})['‘’"]/g,
+  ];
+  patterns.forEach((pattern) => {
+    let match = pattern.exec(text);
+    while (match) {
+      const phrase = String(match[1] || '').trim();
+      const correction = cleanupIssueCorrection(match[2]);
+      if (phrase && /[A-Za-z]/.test(phrase)) {
+        issues.push({
+          phrase,
+          correction,
+          reason: match[0],
+        });
+      }
+      match = pattern.exec(text);
+    }
+  });
+  return Array.from(new Set(issues.map((x) => x.phrase.toLowerCase())))
+    .map((lower) => issues.find((x) => x.phrase.toLowerCase() === lower))
+    .filter(Boolean)
+    .slice(0, 5);
+};
+
+const formatSentenceIssueTooltip = (issue) => {
+  const correction = String(issue?.correction || '').trim();
+  const reason = String(issue?.reason || '').trim();
+  if (correction) return `建议改为：${correction}\n原因：${reason}`;
+  return reason || '这里需要调整';
+};
+
+const renderAnnotatedSentence = (sentence, feedback) => {
+  const text = String(sentence || '').replace(/\s+/g, ' ').trim();
+  const issues = extractSentenceIssues(feedback);
+  if (!text || issues.length === 0) return text || '本轮没有提交造句。';
+  const ranges = [];
+  issues.forEach((issue, issueIndex) => {
+    const pattern = new RegExp(escapeRegExp(issue.phrase), 'i');
+    const match = pattern.exec(text);
+    if (!match) return;
+    const start = match.index;
+    const end = start + match[0].length;
+    if (ranges.some((range) => start < range.end && end > range.start)) return;
+    ranges.push({ start, end, issue, issueIndex, value: match[0] });
+  });
+  if (ranges.length === 0) return text;
+  ranges.sort((a, b) => a.start - b.start);
+  const parts = [];
+  let cursor = 0;
+  ranges.forEach((range) => {
+    if (range.start > cursor) parts.push(text.slice(cursor, range.start));
+    parts.push(
+      <span
+        className={`vocab-sentence-mark issue-${range.issueIndex % 4}`}
+        data-tooltip={formatSentenceIssueTooltip(range.issue)}
+        key={`${range.start}-${range.end}`}
+        tabIndex={0}
+      >
+        {range.value}
+      </span>
+    );
+    cursor = range.end;
+  });
+  if (cursor < text.length) parts.push(text.slice(cursor));
+  return parts;
+};
+
+let activeVocabularyAudio = null;
+
+const toAudioSrc = (url) => {
+  const raw = String(url || '').trim();
+  if (!raw) return '';
+  if (raw.startsWith('http://') || raw.startsWith('https://')) return raw;
+  if (raw.startsWith('/')) return `${API_BASE}${raw}`;
+  return `${API_BASE}/${raw}`;
+};
+
+const playWordAudio = async (word) => {
+  const text = String(word || '').trim();
+  if (!text || typeof window === 'undefined') return null;
+  const result = await getVocabularyWordAudio(text);
+  const audioUrl = toAudioSrc(result?.audio_url);
+  if (!audioUrl) return null;
+  if (activeVocabularyAudio) {
+    activeVocabularyAudio.pause();
+    activeVocabularyAudio = null;
+  }
+  const audio = new Audio(audioUrl);
+  activeVocabularyAudio = audio;
+  try {
+    await audio.play();
+  } catch (err) {
+    // 播放失败时同步清空全局引用，避免残留一个无法播放的实例。
+    if (activeVocabularyAudio === audio) {
+      activeVocabularyAudio = null;
+    }
+    throw err;
+  }
+  return audio;
+};
+
+const PronunciationLine = ({ word, pronunciation, strong = true }) => {
+  const [audioState, setAudioState] = useState('idle');
+  const audioRef = useRef(null);
+  const mountedRef = useRef(true);
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      const audio = audioRef.current;
+      if (audio) {
+        audio.onended = null;
+        audio.onerror = null;
+        audio.onpause = null;
+        audio.pause();
+      }
+      if (activeVocabularyAudio === audio) {
+        activeVocabularyAudio = null;
+      }
+    };
+  }, []);
+
+  if (!pronunciation) return null;
+
+  const setSafeAudioState = (nextState) => {
+    if (mountedRef.current) setAudioState(nextState);
+  };
+
+  const handlePlayAudio = async () => {
+    if (audioState !== 'idle') return;
+    setAudioState('loading');
+    try {
+      const audio = await playWordAudio(word);
+      if (!audio) {
+        setSafeAudioState('idle');
+        return;
+      }
+      audioRef.current = audio;
+      audio.onended = () => setSafeAudioState('idle');
+      audio.onerror = () => setSafeAudioState('idle');
+      audio.onpause = () => setSafeAudioState('idle');
+      setSafeAudioState('playing');
+    } catch {
+      setSafeAudioState('idle');
+    }
+  };
+
+  const isBusy = audioState !== 'idle';
+  const audioLabel = audioState === 'loading'
+    ? '正在准备发音'
+    : audioState === 'playing'
+      ? '正在播放发音'
+      : `播放 ${word} 的英文发音`;
+
+  return (
+    <p className="vocab-pronunciation-line">
+      {strong ? <strong>发音：</strong> : '发音：'}
+      <span className="vocab-pronunciation-text">/{pronunciation}/</span>
+      <button
+        aria-label={audioLabel}
+        aria-busy={audioState === 'loading'}
+        className={`vocab-audio-btn ${audioState === 'loading' ? 'is-loading' : ''} ${audioState === 'playing' ? 'is-playing' : ''}`}
+        disabled={isBusy}
+        onClick={handlePlayAudio}
+        title={audioLabel}
+        type="button"
+      >
+        <svg aria-hidden="true" className="vocab-audio-icon" fill="none" height="14" viewBox="0 0 24 24" width="14">
+          <path
+            d="M11 5 6.5 8.5H3.75A1.75 1.75 0 0 0 2 10.25v3.5c0 .97.78 1.75 1.75 1.75H6.5L11 19V5Z"
+            stroke="currentColor"
+            strokeLinejoin="round"
+            strokeWidth="2"
+          />
+          <path
+            d="M15.5 8.5a5 5 0 0 1 0 7M18.5 5.5a9 9 0 0 1 0 13"
+            stroke="currentColor"
+            strokeLinecap="round"
+            strokeWidth="2"
+          />
+        </svg>
+        <span aria-hidden="true" className="vocab-audio-wave">
+          <span />
+          <span />
+          <span />
+        </span>
+      </button>
+    </p>
+  );
+};
+
 function Vocabulary() {
 
+  const navigate = useNavigate();
   const [words, setWords] = useState([]);
   const [dueWords, setDueWords] = useState([]);
   const [stats, setStats] = useState({ total: 0, due_count: 0, avg_mastery: 0, by_source_module: {} });
@@ -255,21 +559,26 @@ function Vocabulary() {
   const [todayCount, setTodayCount] = useState(10);
   const [todayTopic, setTodayTopic] = useState('');
   const [todayDifficulty, setTodayDifficulty] = useState('');
-  const [todayLearningMode, setTodayLearningMode] = useState('auto');
   const [todayStep, setTodayStep] = useState('recall');
   const [todayRecallAnswer, setTodayRecallAnswer] = useState('');
   const [todayClozeAnswer, setTodayClozeAnswer] = useState('');
   const [todayPracticeAnswer, setTodayPracticeAnswer] = useState('');
   const [todayOutputAnswer, setTodayOutputAnswer] = useState('');
+  const [todayRecognitionAnswer, setTodayRecognitionAnswer] = useState('');
+  const [todaySelfRating, setTodaySelfRating] = useState('');
+  const [todayRecallEvaluation, setTodayRecallEvaluation] = useState(null);
   const [todayOutputHintVisible, setTodayOutputHintVisible] = useState(false);
   const [todayOutputPrompt, setTodayOutputPrompt] = useState('');
   const [todayOutputPromptLoading, setTodayOutputPromptLoading] = useState(false);
   const [todayAttemptFeedback, setTodayAttemptFeedback] = useState('');
   const [todayAttemptResult, setTodayAttemptResult] = useState(null);
+  const [todayLearningCompleted, setTodayLearningCompleted] = useState(false);
+  const [todayCompletionLoaded, setTodayCompletionLoaded] = useState(false);
 
   const [reviewQueue, setReviewQueue] = useState([]);
   const [reviewing, setReviewing] = useState(false);
   const [reviewMode, setReviewMode] = useState('due'); // due | wrong
+  const [reviewNotice, setReviewNotice] = useState('');
   const [wrongWordIds, setWrongWordIds] = useState([]);
   const [wrongPriorityQueue, setWrongPriorityQueue] = useState([]);
 
@@ -325,10 +634,14 @@ function Vocabulary() {
   const currentReviewWord = reviewQueue[0] || null;
   const currentLearnExample = getPrimaryExample(currentLearnWord);
   const currentLearnCloze = maskWordInExample(currentLearnExample, currentLearnWord?.word);
-  const activeLearningMode = todayLearningMode === 'auto'
-    ? resolveAutoLearningMode(currentLearnWord)
-    : todayLearningMode;
-  const activeTodaySteps = learningModeSteps[activeLearningMode] || todaySteps;
+  const submittedOutputSentence = [todayPracticeAnswer, todayOutputAnswer]
+    .map((x) => String(x || '').trim())
+    .filter(Boolean)
+    .join('\n');
+  const currentRecognitionOptions = useMemo(
+    () => buildRecognitionOptions(currentLearnWord, words),
+    [currentLearnWord, words],
+  );
   const wrongWords = useMemo(
     () => wrongWordIds.map((id) => wordById.get(String(id))).filter(Boolean),
     [wrongWordIds, wordById],
@@ -361,6 +674,24 @@ function Vocabulary() {
       localStorage.removeItem(todaySessionStorageKey);
     } catch {
       // Ignore storage errors so learning flow stays usable.
+    }
+  };
+
+  const clearTodayCompletion = async () => {
+    setTodayLearningCompleted(false);
+    try {
+      await setTodayVocabularyLearningStatus({ dateKey: localDateKey(), completed: false });
+    } catch {
+      // Keep the local visible state usable if Redis/API is temporarily unavailable.
+    }
+  };
+
+  const markTodayLearningCompleted = async () => {
+    setTodayLearningCompleted(true);
+    try {
+      await setTodayVocabularyLearningStatus({ dateKey: localDateKey(), completed: true });
+    } catch {
+      // Keep the local visible state usable if Redis/API is temporarily unavailable.
     }
   };
 
@@ -471,6 +802,30 @@ function Vocabulary() {
   }, []);
 
   useEffect(() => {
+    let cancelled = false;
+    const loadTodayCompletion = async () => {
+      try {
+        const status = await getTodayVocabularyLearningStatus(localDateKey());
+        if (!cancelled) {
+          setTodayLearningCompleted(Boolean(status?.completed));
+        }
+      } catch {
+        if (!cancelled) {
+          setTodayLearningCompleted(false);
+        }
+      } finally {
+        if (!cancelled) {
+          setTodayCompletionLoaded(true);
+        }
+      }
+    };
+    loadTodayCompletion();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
     loadContextRetryQueue();
   }, [words]);
 
@@ -502,17 +857,15 @@ function Vocabulary() {
       setTodayCount(saved.todayCount || 10);
       setTodayTopic(saved.todayTopic || '');
       setTodayDifficulty(saved.todayDifficulty || '');
-      setTodayLearningMode(saved.todayLearningMode || 'auto');
-      const restoredMode = (saved.todayLearningMode || 'auto') === 'auto'
-        ? resolveAutoLearningMode(savedSession[savedIndex])
-        : saved.todayLearningMode;
-      const restoredSteps = learningModeSteps[restoredMode] || todaySteps;
-      const restoredStepKeys = restoredSteps.map((step) => step.key);
-      setTodayStep(restoredStepKeys.includes(saved.todayStep) ? saved.todayStep : initialStepForMode(restoredMode));
+      const restoredStepKeys = ['recall', 'reveal', 'recognition', 'cloze', 'output', 'result'];
+      setTodayStep(restoredStepKeys.includes(saved.todayStep) ? saved.todayStep : 'recall');
       setTodayRecallAnswer(saved.todayRecallAnswer || '');
       setTodayClozeAnswer(saved.todayClozeAnswer || '');
       setTodayPracticeAnswer(saved.todayPracticeAnswer || '');
       setTodayOutputAnswer(saved.todayOutputAnswer || '');
+      setTodayRecognitionAnswer(saved.todayRecognitionAnswer || '');
+      setTodaySelfRating(saved.todaySelfRating || '');
+      setTodayRecallEvaluation(saved.todayRecallEvaluation || null);
       setTodayOutputHintVisible(Boolean(saved.todayOutputHintVisible));
       setTodayOutputPrompt(saved.todayOutputPrompt || '');
       setTodayAttemptResult(saved.todayAttemptResult || null);
@@ -539,12 +892,14 @@ function Vocabulary() {
       todayCount,
       todayTopic,
       todayDifficulty,
-      todayLearningMode,
       todayStep,
       todayRecallAnswer,
       todayClozeAnswer,
       todayPracticeAnswer,
       todayOutputAnswer,
+      todayRecognitionAnswer,
+      todaySelfRating,
+      todayRecallEvaluation,
       todayOutputHintVisible,
       todayOutputPrompt,
       todayAttemptResult,
@@ -563,12 +918,14 @@ function Vocabulary() {
     todayCount,
     todayTopic,
     todayDifficulty,
-    todayLearningMode,
     todayStep,
     todayRecallAnswer,
     todayClozeAnswer,
     todayPracticeAnswer,
     todayOutputAnswer,
+    todayRecognitionAnswer,
+    todaySelfRating,
+    todayRecallEvaluation,
     todayOutputHintVisible,
     todayOutputPrompt,
     todayAttemptResult,
@@ -707,29 +1064,15 @@ function Vocabulary() {
     }
   };
 
-  const onStartSession = async (strategy = 'spaced') => {
-    try {
-      setError('');
-      setLearning(true);
-      setLearnIndex(0);
-      setTodayStep('recall');
-      const session = await startVocabularySession(strategy, 10);
-      setLearnStrategy(session?.strategy || strategy);
-      setLearnSession(session.words || []);
-      const insightRows = await getVocabularyStrategyInsights(14);
-      setStrategyInsights(insightRows || []);
-    } catch (err) {
-      setError(typeof err === 'string' ? err : '开启学习会话失败');
-      setLearning(false);
-    }
-  };
-
   const resetTodayInputs = () => {
     clearTodayAutoAdvance();
     setTodayRecallAnswer('');
     setTodayClozeAnswer('');
     setTodayPracticeAnswer('');
     setTodayOutputAnswer('');
+    setTodayRecognitionAnswer('');
+    setTodaySelfRating('');
+    setTodayRecallEvaluation(null);
     setTodayOutputHintVisible(false);
     setTodayOutputPrompt('');
     setTodayOutputPromptLoading(false);
@@ -741,6 +1084,7 @@ function Vocabulary() {
     try {
       setError('');
       if (!silent) clearSuccess();
+      await clearTodayCompletion();
       setLearning(true);
       setLearnIndex(0);
       resetTodayInputs();
@@ -752,14 +1096,12 @@ function Vocabulary() {
       setLearnStrategy(session?.strategy || 'today_active_recall');
       const sessionWords = session.words || [];
       setLearnSession(sessionWords);
-      const firstWord = sessionWords[0] || null;
-      const firstMode = todayLearningMode === 'auto' ? resolveAutoLearningMode(firstWord) : todayLearningMode;
-      setTodayStep(initialStepForMode(firstMode));
+      setTodayStep('recall');
       const insightRows = await getVocabularyStrategyInsights(14);
       setStrategyInsights(insightRows || []);
       if (!session?.words?.length) {
         setLearning(false);
-        if (!silent) showSuccess('暂无可学习词汇，请调整话题、难度或稍后再试。');
+        if (!silent) showSuccess('暂时没有可学习词汇，请稍后再试。');
       }
     } catch (err) {
       setError(typeof err === 'string' ? err : '开启今日学习失败');
@@ -767,34 +1109,72 @@ function Vocabulary() {
     }
   };
 
-  const onLearnRate = async (delta, rating = 'fuzzy') => {
+  const onChooseTodayRating = (choice) => {
+    setTodaySelfRating(choice.rating);
+    setTodayStep(nextPracticeStepForQuality(choice.quality));
+  };
+
+  const submitRecallAndReveal = (fallbackRating = '') => {
     if (!currentLearnWord) return;
+    const evaluation = evaluateRecallAgainstDefinition(todayRecallAnswer, currentLearnWord.definition);
+    const rating = fallbackRating || evaluation.suggestedRating || 'hard';
+    setTodayRecallEvaluation(evaluation);
+    setTodaySelfRating(rating);
+    setTodayStep('reveal');
+  };
+
+  const roundSubmittingRef = useRef(false);
+  const submitTodayLearningRound = async (overrides = {}) => {
+    if (!currentLearnWord || roundSubmittingRef.current) return;
+    roundSubmittingRef.current = true;
+    clearTodayAutoAdvance();
     try {
       const isTodaySession = learnStrategy === 'today_active_recall';
       let result = null;
       if (isTodaySession) {
+        const recognitionAnswer = overrides.recognitionAnswer ?? todayRecognitionAnswer;
+        const recognitionOption = currentRecognitionOptions.find((item) => item.value === recognitionAnswer);
         result = await submitVocabularyLearningAttempt({
           vocab_id: currentLearnWord.id,
           session_id: '',
           strategy: learnStrategy,
           recall_text: todayRecallAnswer,
-          cloze_answer: todayClozeAnswer,
+          cloze_answer: todayStep === 'recognition'
+            ? (recognitionOption?.correct ? currentLearnWord.word : recognitionAnswer)
+            : todayClozeAnswer,
           output_sentence: [todayPracticeAnswer, todayOutputAnswer].filter(Boolean).join('\n'),
-          self_rating: rating,
+          self_rating: todaySelfRating || 'fuzzy',
         });
       } else {
-        result = await reviewVocabularyWord(currentLearnWord.id, delta);
+        result = await reviewVocabularyWord(currentLearnWord.id, 0.1);
       }
       setTodayReviewed((x) => x + 1);
       if (isTodaySession && result?.feedback) {
         setTodayAttemptFeedback(result.feedback);
         setTodayAttemptResult(result);
+        setTodayStep('result');
         return;
       }
       await advanceLearningWord(false);
     } catch (err) {
       setError(typeof err === 'string' ? err : '学习反馈保存失败');
+    } finally {
+      roundSubmittingRef.current = false;
     }
+  };
+
+  const onChooseRecognition = (option) => {
+    setTodayRecognitionAnswer(option.value);
+    clearTodayAutoAdvance();
+    todayAutoAdvanceTimerRef.current = window.setTimeout(() => {
+      todayAutoAdvanceTimerRef.current = null;
+      submitTodayLearningRound({ recognitionAnswer: option.value });
+    }, 500);
+  };
+
+  const onSkipRecognition = () => {
+    clearTodayAutoAdvance();
+    advanceLearningWord(false);
   };
 
   const onToggleOutputHint = async () => {
@@ -822,15 +1202,14 @@ function Vocabulary() {
         setLearnSession([]);
         setLearnIndex(0);
         clearStoredTodaySession();
-        if (showDoneMessage) showSuccess('学习会话完成');
+        await markTodayLearningCompleted();
+        if (showDoneMessage) showSuccess('已完成今日学习计划');
         await loadWords();
         return;
       }
       setLearnIndex((x) => x + 1);
       resetTodayInputs();
-      const nextWord = learnSession[learnIndex + 1];
-      const nextMode = todayLearningMode === 'auto' ? resolveAutoLearningMode(nextWord) : todayLearningMode;
-      setTodayStep(initialStepForMode(nextMode));
+      setTodayStep('recall');
     } catch (err) {
       setError(typeof err === 'string' ? err : '切换下一词失败');
     }
@@ -838,6 +1217,8 @@ function Vocabulary() {
 
   useEffect(() => {
     if (!todaySessionHydratedRef.current || todaySessionRestoredRef.current) return;
+    if (!todayCompletionLoaded) return;
+    if (todayLearningCompleted) return;
     if (todayAutoStartedRef.current) return;
     todayAutoStartedRef.current = true;
     todayAutoStartTimerRef.current = window.setTimeout(() => {
@@ -850,10 +1231,11 @@ function Vocabulary() {
         todayAutoStartTimerRef.current = null;
       }
     };
-  }, []);
+  }, [todayCompletionLoaded, todayLearningCompleted]);
 
   const startReview = async (mode = 'due') => {
     setReviewMode(mode);
+    setReviewNotice('');
     try {
       if (mode === 'wrong') {
         const prioritized = await loadWrongPriorityQueue(wrongWordIds);
@@ -875,10 +1257,16 @@ function Vocabulary() {
     }
   };
 
-  const onReviewRate = async (delta) => {
-    if (!currentReviewWord) return;
+  const reviewSubmittingRef = useRef(false);
+  const onReviewRate = async (choice) => {
+    if (!currentReviewWord || reviewSubmittingRef.current) return;
+    reviewSubmittingRef.current = true;
     try {
-      await reviewVocabularyWord(currentReviewWord.id, delta);
+      const result = await reviewVocabularyWord(currentReviewWord.id, choice.delta, choice.quality);
+      const nextTime = formatReviewTime(result?.next_review_date);
+      setReviewNotice(
+        `${currentReviewWord.word} 已记录为「${choice.label}」${nextTime ? `，下次约 ${nextTime}` : ''}`
+      );
       setTodayReviewed((x) => x + 1);
       const next = reviewQueue.slice(1);
       setReviewQueue(next);
@@ -888,6 +1276,8 @@ function Vocabulary() {
       await loadWords();
     } catch (err) {
       setError(typeof err === 'string' ? err : '复习记录失败');
+    } finally {
+      reviewSubmittingRef.current = false;
     }
   };
 
@@ -948,6 +1338,8 @@ function Vocabulary() {
             <p>新词学习、复习巩固、场景词包与测试统一管理。</p>
           </div>
           <div className="web-page-head-actions">
+            <button className="vocab-btn vocab-btn-primary" onClick={() => navigate('/vocabulary/study?mode=auto&count=10')}>词库学习</button>
+            <button className="vocab-btn vocab-btn-secondary" onClick={() => navigate('/vocabulary/book')}>词汇本管理</button>
             <button className="vocab-btn vocab-btn-secondary" onClick={loadWords}>刷新词汇</button>
           </div>
         </div>
@@ -956,7 +1348,6 @@ function Vocabulary() {
           <MetricGrid className="vocab-overview-grid">
             <MetricCard label="词汇总数" value={stats.total || 0} />
             <MetricCard label="到期复习" value={stats.due_count || 0} />
-            <MetricCard label="平均掌握度" value={`${Math.round((stats.avg_mastery || 0) * 100)}%`} />
             <MetricCard label="今日已练" value={todayReviewed} />
             <MetricCard label="错词待复习" value={wrongWords.length} />
           </MetricGrid>
@@ -964,52 +1355,6 @@ function Vocabulary() {
 
         <div className="card vocab-card vocab-card-primary-learning">
           <h3>今日学习</h3>
-          <div className="vocab-learning-hero">
-            <div>
-              <strong>推荐路径：智能推荐</strong>
-              <p>进入页面后会自动准备今日词；根据掌握情况选择认知、巩固或输出训练。</p>
-            </div>
-            <div className="vocab-learning-hero-steps">
-              <span>选词</span>
-              <span>回忆</span>
-              <span>语境</span>
-              <span>输出</span>
-              <span>复习</span>
-            </div>
-          </div>
-          <ToolbarRow className="vocab-actions-row">
-            <select value={todayTopic} onChange={(e) => setTodayTopic(e.target.value)}>
-              <option value="">全部话题</option>
-              {(bankSummary.topics || []).slice(0, 16).map((item) => (
-                <option key={item.topic} value={item.topic}>{topicLabel(item.topic)}</option>
-              ))}
-            </select>
-            <select value={todayDifficulty} onChange={(e) => setTodayDifficulty(e.target.value)}>
-              <option value="">智能难度</option>
-              <option value="easy">基础</option>
-              <option value="medium">进阶</option>
-              <option value="hard">高阶</option>
-            </select>
-            <select value={todayLearningMode} onChange={(e) => setTodayLearningMode(e.target.value)}>
-              {learningModeOptions.map((item) => (
-                <option key={item.value} value={item.value}>{item.label}</option>
-              ))}
-            </select>
-            <input
-              type="number"
-              min="3"
-              max="20"
-              value={todayCount}
-              onChange={(e) => setTodayCount(e.target.value)}
-              style={{ width: 90 }}
-            />
-            <button className="vocab-btn vocab-btn-primary" onClick={onStartTodaySession}>
-              重新安排今日学习
-            </button>
-            <button className="vocab-btn vocab-btn-secondary" onClick={() => onStartSession('mixed')}>
-              快速复习
-            </button>
-          </ToolbarRow>
           {strategyInsights.length > 0 && (
             <p style={{ marginTop: 8, fontSize: 13, color: '#4a5568' }}>
               近14天已完成 {strategySummary.sessions} 次词汇学习，共练习 {strategySummary.words} 个词。
@@ -1017,39 +1362,95 @@ function Vocabulary() {
           )}
           {learning && currentLearnWord && (
             <div className="vocab-focus-panel">
-              <p>
-                进度：{learnIndex + 1}/{learnSession.length}
-                {' · '}
-                学习形式：{todayLearningMode === 'auto' ? `智能推荐：${learningModeLabelMap[activeLearningMode]}` : learningModeLabelMap[activeLearningMode]}
-              </p>
-              <div className="vocab-chip-wrap" style={{ margin: '8px 0 12px' }}>
-                {activeTodaySteps.map((step) => (
-                  <button
-                    key={step.key}
-                    className={`vocab-step-chip${todayStep === step.key ? ' active' : ''}`}
-                    onClick={() => setTodayStep(step.key)}
-                    type="button"
-                  >
-                    {step.label}
-                  </button>
-                ))}
+              <div className="vocab-round-head">
+                <span>第 {learnIndex + 1} / {learnSession.length} 个</span>
+                {todaySelfRating && (
+                  <strong>{todayRatingChoices.find((item) => item.rating === todaySelfRating)?.label}</strong>
+                )}
               </div>
               {todayStep === 'recall' && (
-                <div>
-                  <h4 style={{ marginBottom: 6 }}>{currentLearnWord.word}</h4>
-                  <p style={{ color: '#64748b' }}>先不要看答案，写下你能想到的释义、搭配或使用场景。</p>
+                <div className="vocab-round-card">
+                  <h4>{currentLearnWord.word}</h4>
+                  <p>你记得它是什么意思吗？先主动回忆，再看答案。</p>
                   <textarea
                     rows={4}
                     value={todayRecallAnswer}
                     onChange={(e) => setTodayRecallAnswer(e.target.value)}
-                    placeholder="例如：意思、常见搭配、在哪类雅思话题中使用..."
+                    placeholder="写下你想到的释义、搭配或使用场景..."
                     style={{ width: '100%' }}
                   />
+                  <div className="vocab-actions-row">
+                    <button
+                      className="vocab-btn vocab-btn-secondary"
+                      type="button"
+                      onClick={() => submitRecallAndReveal('forgot')}
+                    >
+                      想不起来
+                    </button>
+                    <button className="vocab-btn vocab-btn-primary" type="button" onClick={() => submitRecallAndReveal()}>
+                      提交回忆并核对
+                    </button>
+                  </div>
+                </div>
+              )}
+              {todayStep === 'reveal' && (
+                <div className="vocab-round-card">
+                  <h4>{currentLearnWord.word}</h4>
+                  {todayRecallAnswer.trim() && (
+                    <p><strong>你的回忆：</strong>{todayRecallAnswer.trim()}</p>
+                  )}
+                  <p><strong>释义：</strong>{getWordDefinition(currentLearnWord)}</p>
+                  {currentLearnWord.part_of_speech && <p><strong>词性：</strong>{currentLearnWord.part_of_speech}</p>}
+                  <PronunciationLine word={currentLearnWord.word} pronunciation={currentLearnWord.pronunciation} />
+                  {currentLearnExample && <p><strong>例句：</strong>{currentLearnExample}</p>}
+                  <div className="vocab-rating-grid">
+                    {todayRatingChoices.map((choice) => (
+                      <button
+                        className={`vocab-btn vocab-btn-secondary${todaySelfRating === choice.rating ? ' active' : ''}`}
+                        key={choice.rating}
+                        type="button"
+                        onClick={() => onChooseTodayRating(choice)}
+                      >
+                        {choice.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+              {todayStep === 'recognition' && (
+                <div className="vocab-round-card">
+                  <h4>选出最接近的意思</h4>
+                  <p style={{ color: '#64748b' }}>目标词：{currentLearnWord.word}</p>
+                  <div className="vocab-choice-grid">
+                    {currentRecognitionOptions.map((option) => (
+                      <button
+                        className={`vocab-choice-option${todayRecognitionAnswer === option.value ? ' active' : ''}`}
+                        key={option.key}
+                        type="button"
+                        onClick={() => onChooseRecognition(option)}
+                      >
+                        {option.label}
+                      </button>
+                    ))}
+                  </div>
+                  {currentRecognitionOptions.length === 0 && (
+                    <p style={{ color: '#b45309' }}>暂无候选释义，可跳过本题。</p>
+                  )}
+                  {todayRecognitionAnswer && todayRecognitionAnswer !== String(currentLearnWord.word || '') && (
+                    <p style={{ color: '#b45309' }}>
+                      正确释义：{getWordDefinition(currentLearnWord)}
+                    </p>
+                  )}
+                  <div className="vocab-actions-row" style={{ marginTop: 12 }}>
+                    <button className="vocab-btn vocab-btn-secondary" type="button" onClick={onSkipRecognition}>
+                      跳过这题
+                    </button>
+                  </div>
                 </div>
               )}
               {todayStep === 'cloze' && (
-                <div>
-                  <h4 style={{ marginBottom: 6 }}>例句填空</h4>
+                <div className="vocab-round-card">
+                  <h4>例句填空</h4>
                   <p>{currentLearnCloze || `根据释义写出目标词：${currentLearnWord.definition || currentLearnWord.word}`}</p>
                   <input
                     value={todayClozeAnswer}
@@ -1060,51 +1461,23 @@ function Vocabulary() {
                   {todayClozeAnswer.trim() && (
                     <p style={{ color: todayClozeAnswer.trim().toLowerCase() === String(currentLearnWord.word || '').toLowerCase() ? '#047857' : '#b45309' }}>
                       {todayClozeAnswer.trim().toLowerCase() === String(currentLearnWord.word || '').toLowerCase()
-                        ? '填得对，继续把它用出来。'
+                        ? '填得对。'
                         : `目标词是：${currentLearnWord.word}`}
                     </p>
                   )}
-                  <button className="vocab-btn vocab-btn-primary" type="button" onClick={() => setTodayStep('output')}>
-                    进入造句
-                  </button>
-                </div>
-              )}
-              {todayStep === 'collocation' && (
-                <div>
-                  <h4 style={{ marginBottom: 6 }}>搭配回忆</h4>
-                  <p style={{ color: '#64748b' }}>写出一个你认为和目标词自然搭配的短语，或者用它补全一个表达。</p>
-                  <input
-                    value={todayPracticeAnswer}
-                    onChange={(e) => setTodayPracticeAnswer(e.target.value)}
-                    placeholder={`例如：常见动词 + ${currentLearnWord.word} / ${currentLearnWord.word} + 常见名词`}
-                    style={{ width: '100%', marginBottom: 8 }}
-                  />
-                  {todayPracticeAnswer.trim() && !todayPracticeAnswer.toLowerCase().includes(String(currentLearnWord.word || '').toLowerCase()) && (
-                    <p style={{ color: '#b45309' }}>建议把目标词放进搭配里。</p>
-                  )}
-                </div>
-              )}
-              {todayStep === 'translation' && (
-                <div>
-                  <h4 style={{ marginBottom: 6 }}>短句转换</h4>
-                  <p style={{ color: '#64748b' }}>
-                    用目标词表达这个意思：{currentLearnWord.definition || `使用 ${currentLearnWord.word} 写一个短句`}
-                  </p>
-                  <textarea
-                    rows={4}
-                    value={todayPracticeAnswer}
-                    onChange={(e) => setTodayPracticeAnswer(e.target.value)}
-                    placeholder={`用 ${currentLearnWord.word} 写一个自然的英文短句`}
-                    style={{ width: '100%' }}
-                  />
-                  {todayPracticeAnswer.trim() && !todayPracticeAnswer.toLowerCase().includes(String(currentLearnWord.word || '').toLowerCase()) && (
-                    <p style={{ color: '#b45309' }}>建议在短句中使用目标词。</p>
-                  )}
+                  <div className="vocab-actions-row">
+                    <button className="vocab-btn vocab-btn-secondary" type="button" onClick={() => setTodayStep('output')}>
+                      再造一句
+                    </button>
+                    <button className="vocab-btn vocab-btn-primary" type="button" onClick={() => submitTodayLearningRound()}>
+                      提交填空并获取反馈
+                    </button>
+                  </div>
                 </div>
               )}
               {todayStep === 'output' && (
-                <div>
-                  <h4 style={{ marginBottom: 6 }}>造句输出</h4>
+                <div className="vocab-round-card">
+                  <h4>造句输出</h4>
                   <p style={{ color: '#64748b' }}>目标词：{currentLearnWord.word}</p>
                   <button
                     className="vocab-btn vocab-btn-secondary"
@@ -1132,43 +1505,60 @@ function Vocabulary() {
                   {todayOutputAnswer.trim() && !todayOutputAnswer.toLowerCase().includes(String(currentLearnWord.word || '').toLowerCase()) && (
                     <p style={{ color: '#b45309' }}>建议把目标词自然放进句子里。</p>
                   )}
+                  <div className="vocab-actions-row">
+                    {!todayOutputAnswer.trim() && (
+                      <button className="vocab-btn vocab-btn-secondary" type="button" onClick={() => submitTodayLearningRound()}>
+                        跳过输出
+                      </button>
+                    )}
+                    <button
+                      className="vocab-btn vocab-btn-primary"
+                      disabled={!todayOutputAnswer.trim()}
+                      type="button"
+                      onClick={() => submitTodayLearningRound()}
+                    >
+                      提交造句并获取反馈
+                    </button>
+                  </div>
                 </div>
               )}
-              <div className="vocab-actions-row">
-                {learnButtons.map((b) => (
-                  <button
-                    className="vocab-btn vocab-btn-secondary"
-                    key={b.label}
-                    disabled={Boolean(todayAttemptResult)}
-                    onClick={() => onLearnRate(b.delta, b.rating)}
-                  >
-                    {b.label}
-                  </button>
-                ))}
-              </div>
               {todayAttemptResult && (
                 <div className="vocab-learning-result">
                   <div>
                     <strong>{currentLearnWord.word}</strong>
                     <p>释义：{currentLearnWord.definition || '暂无释义'}</p>
                     {currentLearnWord.part_of_speech && <p>词性：{currentLearnWord.part_of_speech}</p>}
-                    {currentLearnWord.pronunciation && <p>发音：/{currentLearnWord.pronunciation}/</p>}
+                    <PronunciationLine word={currentLearnWord.word} pronunciation={currentLearnWord.pronunciation} strong={false} />
                     {currentLearnExample && <p>例句：{currentLearnExample}</p>}
-                    {(todayAttemptResult.output_feedback || todayAttemptResult.output_suggestion) && (
-                      <div>
-                        {todayAttemptResult.output_feedback && <p>句子反馈：{todayAttemptResult.output_feedback}</p>}
-                        {todayAttemptResult.output_suggestion && <p>参考表达：{todayAttemptResult.output_suggestion}</p>}
+                    {(submittedOutputSentence || todayAttemptResult.output_feedback || todayAttemptResult.output_suggestion) && (
+                      <div className="vocab-output-review">
+                        <div className="vocab-output-compare">
+                          <div className="vocab-output-box reference">
+                            <span>参考表达</span>
+                            <p>{todayAttemptResult.output_suggestion || currentLearnExample || '暂无参考表达'}</p>
+                          </div>
+                          <div className="vocab-output-box user">
+                            <span>你的句子</span>
+                            <p>{renderAnnotatedSentence(submittedOutputSentence, todayAttemptResult.output_feedback)}</p>
+                          </div>
+                        </div>
+                        <div className="vocab-output-feedback">
+                          <span>点评</span>
+                          <p>{todayAttemptResult.output_feedback || '这轮没有造句内容，建议下一次尝试用目标词写一个完整句子。'}</p>
+                        </div>
                       </div>
                     )}
                   </div>
-                  <button className="vocab-btn vocab-btn-primary" type="button" onClick={() => advanceLearningWord(true)}>
-                    {learnIndex + 1 >= learnSession.length ? '完成学习' : '进入下一题'}
-                  </button>
+                  <div className="vocab-learning-result-actions">
+                    <button className="vocab-btn vocab-btn-primary" type="button" onClick={() => advanceLearningWord(true)}>
+                      {learnIndex + 1 >= learnSession.length ? '完成学习' : '进入下一题'}
+                    </button>
+                  </div>
                 </div>
               )}
             </div>
           )}
-          {!learning && <p>正在准备今日学习；也可以调整话题、难度和数量后重新安排。</p>}
+          {!learning && <p>{todayLearningCompleted ? '已完成今日学习计划' : '正在准备今日学习。'}</p>}
         </div>
 
         <div className="card vocab-card">
@@ -1179,7 +1569,6 @@ function Vocabulary() {
           </div>
           {reviewing && currentReviewWord && (
             <div className="vocab-focus-panel">
-              <p>模式：{reviewMode === 'wrong' ? '错词专项' : '到期复习'}</p>
               {reviewMode === 'wrong' && (
                 <p>
                   记忆风险：{Math.round(Number(currentReviewWord.priority_score || 0) * 100)}%
@@ -1194,11 +1583,15 @@ function Vocabulary() {
               )}
               <div className="vocab-actions-row">
                 {reviewButtons.map((b) => (
-                  <button className="vocab-btn vocab-btn-secondary" key={b.label} onClick={() => onReviewRate(b.delta)}>{b.label}</button>
+                  <button className="vocab-btn vocab-btn-secondary vocab-review-choice" key={b.label} onClick={() => onReviewRate(b)}>
+                    <span>{b.label}</span>
+                    <small>{b.hint}</small>
+                  </button>
                 ))}
               </div>
             </div>
           )}
+          {reviewNotice && <p className="vocab-review-notice">{reviewNotice}</p>}
           {!reviewing && (
             <p>
               当前待复习：{dueWords.length}，错词待复习：{wrongWords.length}

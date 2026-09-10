@@ -23,7 +23,7 @@ function Speaking() {
 
   const [sessions, setSessions] = useState([]);
   const [currentSessionId, setCurrentSessionId] = useState('');
-  const [currentMode, setCurrentMode] = useState('coach');
+  const currentMode = 'coach';
   const [parts, setParts] = useState([]);
   const [partIndex, setPartIndex] = useState(1);
   const [turnText, setTurnText] = useState('');
@@ -271,11 +271,6 @@ function Speaking() {
           <PageSection title="会话与模式">
             <ToolbarRow>
               <button onClick={onCreateSession}>创建对练会话</button>
-              <label>模式：</label>
-              <select value={currentMode} onChange={(e) => setCurrentMode(e.target.value)}>
-                <option value="coach">教练模式</option>
-                <option value="exam">考试模式</option>
-              </select>
               <label>
                 <input
                   type="checkbox"

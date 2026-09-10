@@ -64,6 +64,25 @@ const dateTextOffset = (offsetDays = 0) => {
 
 const MISTAKES_QUEUE_SORT_STORAGE_KEY = 'mistakes_queue_sort_by_v1';
 
+const mistakeReviewChoices = [
+  { label: '还不会', delta: -0.12, quality: 1 },
+  { label: '勉强想起', delta: -0.04, quality: 2 },
+  { label: '已理解', delta: 0.14, quality: 4 },
+  { label: '很稳', delta: 0.22, quality: 5 },
+];
+
+const formatReviewTime = (ts) => {
+  if (!ts) return '';
+  const date = new Date(Number(ts) * 1000);
+  if (Number.isNaN(date.getTime())) return '';
+  return date.toLocaleString('zh-CN', {
+    month: 'numeric',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  });
+};
+
 function Mistakes() {
   const location = useLocation();
   const navigate = useNavigate();
@@ -235,10 +254,12 @@ function Mistakes() {
     navigate(`/mistakes${nextSearch ? `?${nextSearch}` : ''}`, { replace: true });
   }, [moduleFilter, questionTypeFilter, errorTypeFilter, createdFrom, createdTo, nextReviewFrom, nextReviewTo, queueSortBy, queueKeyword, queuePage, queuePageSize, navigate, location.search]);
 
-  const loadData = async () => {
+  const loadData = async ({ preserveSuccess = false } = {}) => {
     setLoading(true);
     setError('');
-    setSuccess('');
+    if (!preserveSuccess) {
+      setSuccess('');
+    }
     try {
       const [mistakeRows, statRows, dueRows, analysisRows] = await Promise.all([
         getMistakes(
@@ -286,17 +307,18 @@ function Mistakes() {
       };
       await createMistake(payload);
       setForm(emptyForm);
-      await loadData();
+      await loadData({ preserveSuccess: true });
     } catch (err) {
       setError(typeof err === 'string' ? err : '创建错题失败');
     }
   };
 
-  const onReview = async (id) => {
+  const onReview = async (id, choice = mistakeReviewChoices[2]) => {
     try {
-      await reviewMistake(id, 0.2);
-      setSuccess('已完成 1 条复习');
-      await loadData();
+      const result = await reviewMistake(id, choice.delta, choice.quality);
+      const nextTime = formatReviewTime(result?.next_review_date);
+      setSuccess(`已记录为「${choice.label}」${nextTime ? `，下次约 ${nextTime}` : ''}`);
+      await loadData({ preserveSuccess: true });
     } catch (err) {
       setError(typeof err === 'string' ? err : '复习标记失败');
     }
@@ -307,9 +329,9 @@ function Mistakes() {
     if (ids.length === 0) return;
     try {
       setError('');
-      const result = await batchReviewMistakes(ids, 0.2);
-      setSuccess(`批量复习完成：${result.reviewed}/${result.requested}`);
-      await loadData();
+      const result = await batchReviewMistakes(ids, 0.14, 4);
+      setSuccess(`已按「已理解」批量复习：${result.reviewed}/${result.requested}`);
+      await loadData({ preserveSuccess: true });
     } catch (err) {
       setError(typeof err === 'string' ? err : '批量复习失败');
     }
@@ -810,7 +832,13 @@ function Mistakes() {
                     <td>{item.error_type}</td>
                     <td>{Math.round((item.mastery_level || 0) * 100)}%</td>
                     <td>
-                      <button onClick={() => onReview(item.id)}>标记已复习</button>
+                      <div className="mistake-review-actions">
+                        {mistakeReviewChoices.map((choice) => (
+                          <button key={choice.label} onClick={() => onReview(item.id, choice)}>
+                            {choice.label}
+                          </button>
+                        ))}
+                      </div>
                     </td>
                   </tr>
                 ))}

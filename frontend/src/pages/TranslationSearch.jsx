@@ -16,10 +16,8 @@ const TranslationSearch = () => {
   const [userData, setUserData] = useState({ username: '同学' });
   const [tab, setTab] = useState('translation');
 
-  const [practiceMode, setPracticeMode] = useState('blind');
+  const practiceMode = 'blind';
   const [difficulty, setDifficulty] = useState('easy');
-  const [difficultyRecommendation, setDifficultyRecommendation] = useState(null);
-  const [difficultyTouched, setDifficultyTouched] = useState(false);
   const [direction, setDirection] = useState('zh_to_en');
   const [topic, setTopic] = useState('education');
   const [question, setQuestion] = useState(null);
@@ -30,23 +28,13 @@ const TranslationSearch = () => {
   const [showQuestionHint, setShowQuestionHint] = useState(false);
   const [translationError, setTranslationError] = useState('');
   const [translationSaveMessage, setTranslationSaveMessage] = useState('');
-  const [modeSwitchMessage, setModeSwitchMessage] = useState('');
 
   const [searchQuery, setSearchQuery] = useState('');
   const [searchResult, setSearchResult] = useState(null);
   const [searchLoading, setSearchLoading] = useState(false);
   const [searchError, setSearchError] = useState('');
-  const [searchMaxIterations, setSearchMaxIterations] = useState(3);
+  const searchMaxIterations = 3;
   const [searchSaveMessage, setSearchSaveMessage] = useState('');
-
-  const topicOptions = [
-    { value: 'education', label: '教育' },
-    { value: 'environment', label: '环境' },
-    { value: 'technology', label: '科技' },
-    { value: 'society', label: '社会' },
-    { value: 'work', label: '工作' },
-    { value: 'health', label: '健康' },
-  ];
 
   const practiceModeConfig = {
     blind: {
@@ -55,27 +43,9 @@ const TranslationSearch = () => {
       title: '先独立翻译，再复盘考点',
       description: '题目前不展示训练重点，避免提前暴露考点；提交批改后再展示本题词汇、句型和语法复盘。',
     },
-    guided: {
-      label: '词汇句型造句',
-      badge: '当前：造句',
-      title: '先看目标表达，再完成造句',
-      description: '提前展示本题要练的词汇和句型，适合围绕目标表达进行主动输出训练。',
-    },
   };
 
   const currentMode = practiceModeConfig[practiceMode];
-
-  const handlePracticeModeChange = (mode) => {
-    if (mode === practiceMode) return;
-    const nextMode = practiceModeConfig[mode];
-    setPracticeMode(mode);
-    setShowQuestionHint(false);
-    setTranslationInput('');
-    setTranslationResult(null);
-    setTranslationError('');
-    setTranslationSaveMessage('');
-    setModeSwitchMessage(`已切换到${nextMode.label}，作答区和批改结果已重置。`);
-  };
 
   useEffect(() => {
     const fetchUserData = async () => {
@@ -95,23 +65,15 @@ const TranslationSearch = () => {
     const fetchRecommendation = async () => {
       try {
         const data = await getDifficultyRecommendation('translation');
-        setDifficultyRecommendation(data);
-        if (!difficultyTouched && data?.recommended_difficulty) {
+        if (data?.recommended_difficulty) {
           setDifficulty(data.recommended_difficulty);
         }
       } catch {
-        setDifficultyRecommendation({
-          recommended_difficulty: 'easy',
-          label: '基础',
-          reason: '暂时无法读取能力画像，先从基础难度开始。',
-          confidence: 0,
-          sample_count: 0,
-          source: 'fallback',
-        });
+        setDifficulty('easy');
       }
     };
     fetchRecommendation();
-  }, [difficultyTouched]);
+  }, []);
 
   const overall = useMemo(
     () => Number(translationResult?.overall || 0).toFixed(1),
@@ -122,7 +84,6 @@ const TranslationSearch = () => {
     setTranslationError('');
     setTranslationResult(null);
     setTranslationSaveMessage('');
-    setModeSwitchMessage('');
     setShowQuestionHint(false);
     setGeneratingQuestion(true);
     try {
@@ -173,7 +134,6 @@ const TranslationSearch = () => {
     }
     setTranslationError('');
     setTranslationSaveMessage('');
-    setModeSwitchMessage('');
     setCheckingTranslation(true);
     try {
       const data = await checkTranslationAnswer({
@@ -189,8 +149,7 @@ const TranslationSearch = () => {
       setTranslationResult(data);
       try {
         const recommendation = await getDifficultyRecommendation('translation');
-        setDifficultyRecommendation(recommendation);
-        if (!difficultyTouched && recommendation?.recommended_difficulty) {
+        if (recommendation?.recommended_difficulty) {
           setDifficulty(recommendation.recommended_difficulty);
         }
       } catch {
@@ -408,28 +367,6 @@ const TranslationSearch = () => {
             {tab === 'translation' && (
               <section className="card ts-panel">
                 <h3>翻译练习</h3>
-                <div className="ts-mode-switch" aria-label="翻译练习模式">
-                  <button
-                    type="button"
-                    className={`ts-mode-btn${practiceMode === 'blind' ? ' active' : ''}`}
-                    aria-pressed={practiceMode === 'blind'}
-                    onClick={() => handlePracticeModeChange('blind')}
-                  >
-                    <span>盲译练习</span>
-                    <small>批改后看考点</small>
-                    {practiceMode === 'blind' && <em>当前模式</em>}
-                  </button>
-                  <button
-                    type="button"
-                    className={`ts-mode-btn${practiceMode === 'guided' ? ' active' : ''}`}
-                    aria-pressed={practiceMode === 'guided'}
-                    onClick={() => handlePracticeModeChange('guided')}
-                  >
-                    <span>词汇句型造句</span>
-                    <small>先看目标表达</small>
-                    {practiceMode === 'guided' && <em>当前模式</em>}
-                  </button>
-                </div>
                 <div className={`ts-mode-summary ${practiceMode}`}>
                   <span className="ts-mode-badge">{currentMode.badge}</span>
                   <div>
@@ -438,76 +375,18 @@ const TranslationSearch = () => {
                   </div>
                 </div>
                 <div className="ts-form-grid">
-                  <label>
-                    方向
-                    <select value={direction} onChange={(e) => setDirection(e.target.value)}>
-                      <option value="zh_to_en">中译英</option>
-                      <option value="en_to_zh">英译中</option>
-                    </select>
-                  </label>
-                  <label>
-                    主题
-                    <select value={topic} onChange={(e) => setTopic(e.target.value)}>
-                      {topicOptions.map((item) => (
-                        <option key={item.value} value={item.value}>{item.label}</option>
-                      ))}
-                    </select>
-                  </label>
-                  <label>
-                    难度
-                    <select
-                      value={difficulty}
-                      onChange={(e) => {
-                        setDifficultyTouched(true);
-                        setDifficulty(e.target.value);
-                      }}
-                    >
-                      <option value="easy">基础</option>
-                      <option value="medium">进阶</option>
-                      <option value="hard">高阶</option>
-                    </select>
-                  </label>
                   <button type="button" className="ts-primary-btn" onClick={handleGenerateQuestion} disabled={generatingQuestion}>
                     {generatingQuestion ? '生成中...' : '生成题目'}
                   </button>
                 </div>
-                {difficultyRecommendation && (
-                  <div className="ts-difficulty-recommendation">
-                    <span>智能推荐：{difficultyRecommendation.label || '基础'}</span>
-                    <p>{difficultyRecommendation.reason}</p>
-                    {difficultyTouched && (
-                      <button
-                        type="button"
-                        className="ts-inline-link"
-                        onClick={() => {
-                          setDifficultyTouched(false);
-                          setDifficulty(difficultyRecommendation.recommended_difficulty || 'easy');
-                        }}
-                      >
-                        恢复推荐难度
-                      </button>
-                    )}
-                  </div>
-                )}
-
                 {(question?.source_sentence || question?.chinese_sentence) && (
                   <div className="ts-result-card ts-question-card">
-                    <p className="ts-meta">
-                      主题：{question.topic || topic} ｜ 难度：{question.difficulty || difficulty} ｜
-                      方向：{(question.direction || direction) === 'zh_to_en' ? '中译英' : '英译中'}
-                    </p>
+                    <p className="ts-meta">系统已根据当前成长曲线安排本题。</p>
                     <div className="ts-question-mode-line">
                       <span className="ts-mode-badge">{currentMode.badge}</span>
                       <span>{currentMode.title}</span>
                     </div>
-                    {modeSwitchMessage && <p className="ts-mode-reset-note">{modeSwitchMessage}</p>}
                     <p className="ts-strong">题目：{question.source_sentence || question.chinese_sentence}</p>
-                    {practiceMode === 'guided' && getFocusPoints().length > 0 && (
-                      <div className="ts-guided-targets">
-                        <p className="ts-meta">请尽量使用下面的目标表达完成造句。</p>
-                        {renderFocusReview()}
-                      </div>
-                    )}
                     {practiceMode === 'blind' && (
                       <div className="ts-action-row">
                         <button type="button" className="ts-secondary-btn" onClick={() => setShowQuestionHint((v) => !v)}>
@@ -530,18 +409,14 @@ const TranslationSearch = () => {
                     <textarea
                       className="ts-translation-input"
                       placeholder={
-                        practiceMode === 'guided'
-                          ? ((question.direction || direction) === 'zh_to_en' ? '请结合目标词汇和句型写出英文句子...' : '请结合目标表达写出自然中文句子...')
-                          : ((question.direction || direction) === 'zh_to_en' ? '请输入你的英文译文...' : '请输入你的中文译文...')
+                        (question.direction || direction) === 'zh_to_en' ? '请输入你的英文译文...' : '请输入你的中文译文...'
                       }
                       value={translationInput}
                       onChange={(e) => setTranslationInput(e.target.value)}
                     />
                     <div className="ts-submit-row">
                       <p className="ts-meta">
-                        {practiceMode === 'blind'
-                          ? '建议先独立完成，再查看提示或提交批改。'
-                          : '重点看目标词汇和句型是否用得准确、自然。'}
+                        建议先独立完成，再查看提示或提交批改。
                       </p>
                       <button type="button" className="ts-primary-btn" onClick={handleCheckTranslation} disabled={checkingTranslation}>
                         {checkingTranslation ? '批改中...' : '提交批改'}
@@ -627,16 +502,6 @@ const TranslationSearch = () => {
                       onChange={(e) => setSearchQuery(e.target.value)}
                     />
                   </label>
-                  <label>
-                    迭代轮次
-                    <input
-                      type="number"
-                      min={1}
-                      max={6}
-                      value={searchMaxIterations}
-                      onChange={(e) => setSearchMaxIterations(e.target.value)}
-                    />
-                  </label>
                   <button type="button" className="ts-primary-btn" onClick={handleDeepSearch} disabled={searchLoading}>
                     {searchLoading ? '检索中...' : '开始深搜'}
                   </button>
@@ -648,25 +513,6 @@ const TranslationSearch = () => {
                   <div className="ts-result-card">
                     <h4>结论摘要</h4>
                     <p className="ts-pre">{searchResult.search?.final_summary || searchResult.response}</p>
-                    <p className="ts-meta">
-                      迭代轮次：{Array.isArray(searchResult.search?.iterations) ? searchResult.search.iterations.length : 0}
-                    </p>
-                    {Array.isArray(searchResult.search?.iterations) && searchResult.search.iterations.length > 0 && (
-                      <>
-                        <h4>搜索过程</h4>
-                        <div className="ts-iteration-list">
-                          {searchResult.search.iterations.map((item) => (
-                            <div key={item.iteration} className="ts-mini-card">
-                              <h5>第 {item.iteration} 轮</h5>
-                              <p className="ts-strong">{item.query}</p>
-                              <p className="ts-meta">
-                                来源：{(item.sources || []).map((source) => `${source.type}(${(source.results || []).length})`).join(' / ') || '无'}
-                              </p>
-                            </div>
-                          ))}
-                        </div>
-                      </>
-                    )}
                     {Array.isArray(searchResult.search?.citations) && searchResult.search.citations.length > 0 && (
                       <>
                         <h4>参考来源</h4>
@@ -678,11 +524,6 @@ const TranslationSearch = () => {
                           ))}
                         </ul>
                       </>
-                    )}
-                    {searchResult.rag && (
-                      <p className="ts-meta">
-                        RAG状态：accepted={String(searchResult.rag.accepted)}，iterations={searchResult.rag.iterations ?? 0}
-                      </p>
                     )}
                     <div className="ts-action-row">
                       <button type="button" className="ts-secondary-btn" onClick={handleGenerateTranslationFromSearch}>

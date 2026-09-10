@@ -25,11 +25,11 @@ function Reading() {
   const [synonyms, setSynonyms] = useState(null);
   const [longSentences, setLongSentences] = useState([]);
   const [quizVersion, setQuizVersion] = useState(null);
-  const [quizConfig, setQuizConfig] = useState({ count: 3, difficulty: '', questionType: '' });
+  const quizConfig = { count: 3, difficulty: '', questionType: '' };
   const [quiz, setQuiz] = useState(null);
   const [quizAnswers, setQuizAnswers] = useState({});
   const [quizResult, setQuizResult] = useState(null);
-  const [strategyConfig, setStrategyConfig] = useState({ mode: 'skim', count: 3, difficulty: '' });
+  const [strategyConfig] = useState({ mode: 'mixed', count: 3, difficulty: '' });
   const [strategySession, setStrategySession] = useState(null);
   const [strategyAnswers, setStrategyAnswers] = useState({});
   const [strategySpent, setStrategySpent] = useState({});
@@ -258,48 +258,7 @@ function Reading() {
 
           <div className="card" style={{ marginTop: 16 }} ref={quizCardRef}>
             <h3>阅读测验</h3>
-            <p style={{ fontSize: 12, color: '#666' }}>
-              题库版本: {quizVersion?.version || '-'} ({quizVersion?.source || '-'})
-            </p>
             <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 12, flexWrap: 'wrap' }}>
-              <label>
-                题数
-                <input
-                  type="number"
-                  min={1}
-                  max={20}
-                  value={quizConfig.count}
-                  onChange={(e) => setQuizConfig((prev) => ({ ...prev, count: e.target.value }))}
-                  style={{ marginLeft: 6, width: 80 }}
-                />
-              </label>
-              <label>
-                难度
-                <select
-                  value={quizConfig.difficulty}
-                  onChange={(e) => setQuizConfig((prev) => ({ ...prev, difficulty: e.target.value }))}
-                  style={{ marginLeft: 6 }}
-                >
-                  <option value="">全部</option>
-                  <option value="basic">basic</option>
-                  <option value="intermediate">intermediate</option>
-                  <option value="advanced">advanced</option>
-                </select>
-              </label>
-              <label>
-                题型
-                <select
-                  value={quizConfig.questionType}
-                  onChange={(e) => setQuizConfig((prev) => ({ ...prev, questionType: e.target.value }))}
-                  style={{ marginLeft: 6 }}
-                >
-                  <option value="">全部</option>
-                  <option value="tfng">tfng</option>
-                  <option value="heading_matching">heading_matching</option>
-                  <option value="attitude">attitude</option>
-                  <option value="inference">inference</option>
-                </select>
-              </label>
               <button onClick={handleGenerateQuiz}>生成测验</button>
             </div>
 
@@ -310,9 +269,6 @@ function Reading() {
                   <div key={q.id} style={{ border: '1px solid #eee', borderRadius: 8, padding: 10, marginBottom: 10 }}>
                     <p style={{ marginBottom: 8 }}>
                       {idx + 1}. {q.prompt}
-                    </p>
-                    <p style={{ fontSize: 12, color: '#666', marginBottom: 8 }}>
-                      type: {q.question_type} | difficulty: {q.difficulty}
                     </p>
                     <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
                       {(q.options || []).map((opt) => (
@@ -371,44 +327,7 @@ function Reading() {
 
           <div className="card" style={{ marginTop: 16 }}>
             <h3>阅读策略训练（略读/扫读）</h3>
-            <p style={{ fontSize: 12, color: '#666' }}>skim：主旨提炼 | scan：定位信息 | mixed：组合训练</p>
             <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 12, flexWrap: 'wrap' }}>
-              <label>
-                模式
-                <select
-                  value={strategyConfig.mode}
-                  onChange={(e) => setStrategyConfig((prev) => ({ ...prev, mode: e.target.value }))}
-                  style={{ marginLeft: 6 }}
-                >
-                  <option value="skim">skim</option>
-                  <option value="scan">scan</option>
-                  <option value="mixed">mixed</option>
-                </select>
-              </label>
-              <label>
-                题数
-                <input
-                  type="number"
-                  min={1}
-                  max={10}
-                  value={strategyConfig.count}
-                  onChange={(e) => setStrategyConfig((prev) => ({ ...prev, count: e.target.value }))}
-                  style={{ marginLeft: 6, width: 80 }}
-                />
-              </label>
-              <label>
-                难度
-                <select
-                  value={strategyConfig.difficulty}
-                  onChange={(e) => setStrategyConfig((prev) => ({ ...prev, difficulty: e.target.value }))}
-                  style={{ marginLeft: 6 }}
-                >
-                  <option value="">全部</option>
-                  <option value="basic">basic</option>
-                  <option value="intermediate">intermediate</option>
-                  <option value="advanced">advanced</option>
-                </select>
-              </label>
               <button onClick={handleGenerateStrategy}>生成策略训练</button>
             </div>
 

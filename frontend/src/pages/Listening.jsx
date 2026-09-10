@@ -36,11 +36,11 @@ function Listening() {
   const [libraryVersion, setLibraryVersion] = useState(null);
   const [quizVersion, setQuizVersion] = useState(null);
   const [status, setStatus] = useState({});
-  const [quizConfig, setQuizConfig] = useState({ count: 3, difficulty: '' });
+  const quizConfig = { count: 3, difficulty: '' };
   const [quiz, setQuiz] = useState(null);
   const [quizAnswers, setQuizAnswers] = useState({});
   const [quizResult, setQuizResult] = useState(null);
-  const [intensiveConfig, setIntensiveConfig] = useState({ count: 4, difficulty: '', mode: 'mixed' });
+  const intensiveConfig = { count: 4, difficulty: '', mode: 'mixed' };
   const [intensiveSession, setIntensiveSession] = useState(null);
   const [intensiveAnswers, setIntensiveAnswers] = useState({});
   const [intensiveResult, setIntensiveResult] = useState(null);
@@ -412,30 +412,6 @@ function Listening() {
           <div className="card listening-card" ref={quizCardRef}>
             <h3>听力测验</h3>
             <div className="listening-actions">
-              <label>
-                题数
-                <input
-                  className="plan-input listening-number-input"
-                  type="number"
-                  min={1}
-                  max={20}
-                  value={quizConfig.count}
-                  onChange={(e) => setQuizConfig((prev) => ({ ...prev, count: e.target.value }))}
-                />
-              </label>
-              <label>
-                难度
-                <select
-                  className="plan-input"
-                  value={quizConfig.difficulty}
-                  onChange={(e) => setQuizConfig((prev) => ({ ...prev, difficulty: e.target.value }))}
-                >
-                  <option value="">全部</option>
-                  <option value="easy">easy</option>
-                  <option value="intermediate">intermediate</option>
-                  <option value="advanced">advanced</option>
-                </select>
-              </label>
               <button className="plan-filter-btn" onClick={handleGenerateQuiz}>生成测验</button>
             </div>
 
@@ -446,9 +422,6 @@ function Listening() {
                   <div key={q.id} className="listening-question-card">
                     <p className="listening-question-title">
                       {idx + 1}. {q.prompt}
-                    </p>
-                    <p className="listening-subtle">
-                      audio: {q.audio_id} | difficulty: {q.difficulty}
                     </p>
                     {q.audio_url && <audio className="listening-audio" controls src={toAudioSrc(q.audio_url)} />}
                     <div className="listening-option-list">
@@ -532,44 +505,7 @@ function Listening() {
 
           <div className="card listening-card">
             <h3>精听句段训练</h3>
-            <p className="listening-subtle">模式：dictation（填空）/ keyword（关键词）/ mixed（混合）</p>
             <div className="listening-actions">
-              <label>
-                题数
-                <input
-                  className="plan-input listening-number-input"
-                  type="number"
-                  min={1}
-                  max={20}
-                  value={intensiveConfig.count}
-                  onChange={(e) => setIntensiveConfig((prev) => ({ ...prev, count: e.target.value }))}
-                />
-              </label>
-              <label>
-                难度
-                <select
-                  className="plan-input"
-                  value={intensiveConfig.difficulty}
-                  onChange={(e) => setIntensiveConfig((prev) => ({ ...prev, difficulty: e.target.value }))}
-                >
-                  <option value="">全部</option>
-                  <option value="easy">easy</option>
-                  <option value="intermediate">intermediate</option>
-                  <option value="advanced">advanced</option>
-                </select>
-              </label>
-              <label>
-                模式
-                <select
-                  className="plan-input"
-                  value={intensiveConfig.mode}
-                  onChange={(e) => setIntensiveConfig((prev) => ({ ...prev, mode: e.target.value }))}
-                >
-                  <option value="mixed">mixed</option>
-                  <option value="dictation">dictation</option>
-                  <option value="keyword">keyword</option>
-                </select>
-              </label>
               <button className="plan-filter-btn" onClick={handleGenerateIntensive}>生成精听训练</button>
             </div>
 

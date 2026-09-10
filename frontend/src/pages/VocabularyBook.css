@@ -1,0 +1,191 @@
+/* 词汇本管理页（vb- 前缀） */
+
+.vb-page {
+  min-height: 100vh;
+  background: #f9fafb;
+  color: #111827;
+}
+
+.vb-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 16px 20px 12px;
+  border-bottom: 1px solid #e5e7eb;
+  background: #ffffff;
+}
+
+.vb-header-title { font-size: 16px; font-weight: 600; }
+.vb-header-meta { margin-left: auto; font-size: 13px; color: #6b7280; }
+
+.vb-link-btn {
+  border: 1px solid #d1d5db;
+  background: #ffffff;
+  color: #374151;
+  border-radius: 8px;
+  padding: 6px 12px;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.vb-link-btn:hover { background: #f3f4f6; }
+
+.vb-body { max-width: 880px; margin: 0 auto; padding: 20px 16px 64px; }
+
+.vb-stats {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+  margin-bottom: 16px;
+}
+
+.vb-stat {
+  background: #ffffff;
+  border: 1px solid #e5e7eb;
+  border-radius: 12px;
+  padding: 12px 14px;
+}
+
+.vb-stat-num { font-size: 22px; font-weight: 700; }
+.vb-stat-label { font-size: 12px; color: #6b7280; margin-top: 2px; }
+
+.vb-filters { margin-bottom: 12px; }
+
+.vb-row { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+
+.vb-chip {
+  border: 1px solid #e5e7eb;
+  background: #ffffff;
+  border-radius: 999px;
+  padding: 5px 12px;
+  font-size: 13px;
+  color: #374151;
+  cursor: pointer;
+}
+
+.vb-chip:hover { background: #f3f4f6; }
+.vb-chip.is-active { background: #4a6cf7; border-color: #4a6cf7; color: #ffffff; }
+
+.vb-tabs { display: flex; gap: 4px; margin: 12px 0; }
+
+.vb-tab {
+  border: none;
+  background: transparent;
+  color: #6b7280;
+  font-size: 14px;
+  padding: 6px 12px;
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+.vb-tab.is-active { background: #eef2ff; color: #3b5bdb; font-weight: 600; }
+
+.vb-bulkbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  background: #eef2ff;
+  border: 1px solid #c7d2fe;
+  border-radius: 10px;
+  padding: 9px 12px;
+  margin-bottom: 10px;
+  font-size: 13px;
+  color: #3b5bdb;
+}
+
+.vb-bulkbar button {
+  margin-left: auto;
+  border: none;
+  background: #dc2626;
+  color: #ffffff;
+  border-radius: 8px;
+  padding: 7px 14px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.vb-bulkbar button:disabled { opacity: 0.55; cursor: not-allowed; }
+
+.vb-list {
+  background: #ffffff;
+  border: 1px solid #e5e7eb;
+  border-radius: 14px;
+  overflow: hidden;
+}
+
+.vb-list-head,
+.vb-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 11px 14px;
+}
+
+.vb-list-head {
+  background: #f9fafb;
+  border-bottom: 1px solid #e5e7eb;
+  font-size: 12px;
+  color: #6b7280;
+}
+
+.vb-item + .vb-item { border-top: 1px solid #f3f4f6; }
+.vb-item:hover { background: #fafbff; }
+
+.vb-check { flex: none; width: 16px; height: 16px; cursor: pointer; }
+
+.vb-word { flex: none; width: 140px; font-weight: 600; word-break: break-word; }
+
+.vb-def {
+  flex: 1;
+  min-width: 0;
+  font-size: 13px;
+  color: #4b5563;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.vb-source { flex: none; font-size: 12px; color: #6b7280; width: 76px; }
+
+.vb-mastery { flex: none; width: 92px; }
+
+.vb-mastery-bar {
+  height: 6px;
+  border-radius: 3px;
+  background: #e5e7eb;
+  overflow: hidden;
+}
+
+.vb-mastery-fill { height: 100%; background: #4a6cf7; }
+
+.vb-mastery-text { font-size: 11px; color: #6b7280; margin-top: 3px; }
+
+.vb-badges { flex: none; display: flex; gap: 4px; }
+
+.vb-badge { font-size: 11px; border-radius: 999px; padding: 2px 8px; font-weight: 600; }
+.vb-badge.due { background: #fef3c7; color: #b45309; }
+.vb-badge.mastered { background: #d1fae5; color: #047857; }
+
+.vb-status { text-align: center; color: #6b7280; font-size: 14px; padding: 28px 0; }
+.vb-error { color: #dc2626; font-size: 14px; padding: 10px 0; }
+
+.vb-more {
+  display: block;
+  margin: 14px auto 0;
+  border: 1px solid #d1d5db;
+  background: #ffffff;
+  border-radius: 9px;
+  padding: 9px 18px;
+  font-size: 14px;
+  cursor: pointer;
+}
+
+.vb-more:hover { background: #f3f4f6; }
+
+@media (max-width: 640px) {
+  .vb-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .vb-word { width: 100px; }
+  .vb-source, .vb-mastery { display: none; }
+  .vb-def { white-space: normal; }
+}

@@ -1,0 +1,383 @@
+/* 词汇本学习流（3 档卡片）—— 前缀 vs- 避免与全局样式冲突 */
+
+.vs-page {
+  min-height: 100vh;
+  background: #f9fafb;
+  color: #111827;
+  display: flex;
+  flex-direction: column;
+}
+
+.vs-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 16px 20px 12px;
+  border-bottom: 1px solid #e5e7eb;
+  background: #ffffff;
+}
+
+.vs-header-title {
+  font-size: 16px;
+  font-weight: 600;
+}
+
+.vs-header-meta {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 13px;
+  color: #6b7280;
+}
+
+.vs-chip {
+  display: inline-flex;
+  align-items: center;
+  padding: 3px 10px;
+  border-radius: 999px;
+  background: #eef2ff;
+  color: #3b5bdb;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.vs-link-btn {
+  border: 1px solid #d1d5db;
+  background: #ffffff;
+  color: #374151;
+  border-radius: 8px;
+  padding: 6px 12px;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.vs-link-btn:hover {
+  background: #f3f4f6;
+}
+
+.vs-progress {
+  height: 4px;
+  background: #e5e7eb;
+}
+
+.vs-progress-bar {
+  height: 100%;
+  background: #4a6cf7;
+  transition: width 0.2s ease;
+}
+
+.vs-body {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 28px 16px 64px;
+}
+
+.vs-card {
+  width: min(680px, 100%);
+  background: #ffffff;
+  border: 1px solid #e5e7eb;
+  border-radius: 18px;
+  padding: 40px 28px;
+  box-shadow: 0 10px 30px rgba(15, 23, 42, 0.06);
+  text-align: center;
+}
+
+.vs-card.is-front {
+  cursor: pointer;
+}
+
+.vs-card.is-front:hover {
+  border-color: #c7d2fe;
+}
+
+.vs-word {
+  font-size: 44px;
+  font-weight: 700;
+  letter-spacing: -0.5px;
+  margin: 0 0 8px;
+  word-break: break-word;
+}
+
+.vs-phonetic {
+  font-size: 15px;
+  color: #6b7280;
+  margin: 0 0 18px;
+}
+
+.vs-hint {
+  font-size: 14px;
+  color: #9ca3af;
+}
+
+.vs-definition {
+  font-size: 20px;
+  font-weight: 600;
+  margin: 4px 0 10px;
+}
+
+.vs-meta-line {
+  font-size: 14px;
+  color: #6b7280;
+  margin: 4px 0;
+}
+
+.vs-example {
+  margin: 14px auto 0;
+  max-width: 560px;
+  font-size: 15px;
+  line-height: 1.7;
+  color: #374151;
+  background: #f9fafb;
+  border-left: 3px solid #c7d2fe;
+  border-radius: 8px;
+  padding: 12px 14px;
+  text-align: left;
+}
+
+.vs-audio-btn {
+  margin: 0 auto 6px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border: 1px solid #d1d5db;
+  background: #ffffff;
+  border-radius: 999px;
+  padding: 6px 14px;
+  font-size: 13px;
+  color: #374151;
+  cursor: pointer;
+}
+
+.vs-audio-btn:hover {
+  background: #f3f4f6;
+}
+
+.vs-actions {
+  margin-top: 26px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  justify-content: center;
+}
+
+.vs-rating-grid {
+  margin-top: 26px;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.vs-rating-btn {
+  border-radius: 14px;
+  border: 1px solid #e5e7eb;
+  background: #ffffff;
+  padding: 16px 10px;
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  align-items: center;
+  transition: transform 0.08s ease, border-color 0.15s ease, background 0.15s ease;
+}
+
+.vs-rating-btn:hover:not(:disabled) {
+  transform: translateY(-1px);
+}
+
+.vs-rating-btn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.vs-rating-btn .vs-rating-label {
+  font-size: 16px;
+  font-weight: 700;
+}
+
+.vs-rating-btn .vs-rating-hint {
+  font-size: 12px;
+  color: #9ca3af;
+}
+
+.vs-rating-btn.tone-danger:hover:not(:disabled) { border-color: #fca5a5; background: #fef2f2; }
+.vs-rating-btn.tone-warn:hover:not(:disabled) { border-color: #fcd34d; background: #fffbeb; }
+.vs-rating-btn.tone-ok:hover:not(:disabled) { border-color: #6ee7b7; background: #ecfdf5; }
+
+.vs-btn {
+  border: none;
+  border-radius: 10px;
+  padding: 11px 20px;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.vs-btn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.vs-btn-primary { background: #4a6cf7; color: #ffffff; }
+.vs-btn-primary:hover:not(:disabled) { background: #3a5be7; }
+.vs-btn-ghost { background: #ffffff; color: #374151; border: 1px solid #d1d5db; }
+.vs-btn-ghost:hover:not(:disabled) { background: #f3f4f6; }
+
+.vs-feedback-title {
+  font-size: 18px;
+  font-weight: 700;
+  margin-bottom: 6px;
+}
+
+.vs-collect-state {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 12px;
+  padding: 8px 14px;
+  border-radius: 10px;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.vs-collect-state.is-in { background: #ecfdf5; color: #047857; }
+.vs-collect-state.is-out { background: #f3f4f6; color: #6b7280; }
+
+.vs-nextline {
+  margin-top: 18px;
+  font-size: 13px;
+  color: #9ca3af;
+}
+
+.vs-status {
+  text-align: center;
+  color: #6b7280;
+  font-size: 15px;
+}
+
+.vs-error {
+  color: #dc2626;
+  background: #fef2f2;
+  border: 1px solid #fecaca;
+  border-radius: 10px;
+  padding: 14px 16px;
+  font-size: 14px;
+}
+
+.vs-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  justify-content: center;
+  margin: 18px 0 6px;
+}
+
+.vs-summary-item {
+  min-width: 96px;
+  background: #f9fafb;
+  border: 1px solid #e5e7eb;
+  border-radius: 12px;
+  padding: 12px 14px;
+}
+
+.vs-summary-item .vs-summary-num {
+  font-size: 22px;
+  font-weight: 700;
+}
+
+.vs-summary-item .vs-summary-label {
+  font-size: 12px;
+  color: #6b7280;
+  margin-top: 2px;
+}
+
+.vs-practice-tag {
+  display: inline-block;
+  margin-bottom: 14px;
+  padding: 4px 12px;
+  border-radius: 999px;
+  background: #eef2ff;
+  color: #3b5bdb;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.vs-choice-grid {
+  margin-top: 20px;
+  display: grid;
+  gap: 10px;
+}
+
+.vs-choice-option {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  text-align: left;
+  border: 1px solid #e5e7eb;
+  background: #ffffff;
+  border-radius: 12px;
+  padding: 14px 16px;
+  font-size: 15px;
+  color: #111827;
+  cursor: pointer;
+}
+
+.vs-choice-option:hover:not(:disabled) {
+  border-color: #c7d2fe;
+  background: #f8faff;
+}
+
+.vs-choice-option:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.vs-choice-key {
+  flex: none;
+  width: 22px;
+  height: 22px;
+  border-radius: 6px;
+  background: #eef2ff;
+  color: #3b5bdb;
+  font-size: 12px;
+  font-weight: 700;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.vs-spell-form {
+  margin-top: 20px;
+  display: flex;
+  gap: 10px;
+  justify-content: center;
+}
+
+.vs-spell-input {
+  flex: 1;
+  max-width: 320px;
+  border: 1px solid #d1d5db;
+  border-radius: 10px;
+  padding: 11px 14px;
+  font-size: 16px;
+  letter-spacing: 0.02em;
+}
+
+.vs-practice-result {
+  margin-top: 10px;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.vs-practice-result.is-ok { color: #047857; }
+.vs-practice-result.is-bad { color: #b45309; }
+
+@media (max-width: 560px) {
+  .vs-word { font-size: 34px; }
+  .vs-card { padding: 28px 18px; }
+  .vs-rating-grid { grid-template-columns: 1fr; }
+  .vs-spell-form { flex-direction: column; }
+  .vs-spell-input { max-width: none; }
+}

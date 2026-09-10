@@ -17,6 +17,8 @@ const ReminderCenter = lazy(() => import('./pages/ReminderCenter'))
 const Diagnostic = lazy(() => import('./pages/Diagnostic'))
 const Mistakes = lazy(() => import('./pages/Mistakes'))
 const Vocabulary = lazy(() => import('./pages/Vocabulary'))
+const VocabularyStudy = lazy(() => import('./pages/VocabularyStudy'))
+const VocabularyBook = lazy(() => import('./pages/VocabularyBook'))
 const Achievements = lazy(() => import('./pages/Achievements'))
 const Community = lazy(() => import('./pages/Community'))
 const StudyGroups = lazy(() => import('./pages/StudyGroups'))
@@ -88,6 +90,8 @@ function App() {
           <Route path="/writing" element={protectedRoute(<Writing />)} />
           <Route path="/mistakes" element={protectedRoute(<Mistakes />)} />
           <Route path="/vocabulary" element={protectedRoute(<Vocabulary />)} />
+          <Route path="/vocabulary/study" element={protectedRoute(<VocabularyStudy />)} />
+          <Route path="/vocabulary/book" element={protectedRoute(<VocabularyBook />)} />
           <Route path="/community" element={protectedRoute(<Community />)} />
           <Route path="/groups" element={protectedRoute(<StudyGroups />)} />
           <Route path="/payment" element={protectedRoute(<PaymentCenter />)} />

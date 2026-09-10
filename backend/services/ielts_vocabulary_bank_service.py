@@ -3,8 +3,10 @@ from __future__ import annotations
 import json
 import logging
 import random
+import time
 from typing import Any, Dict, Iterable, List
 
+from backend.db import get_user_vocabulary
 from backend.postgres import init_ielts_vocabulary_bank, pg_cursor
 
 
@@ -159,7 +161,16 @@ def upsert_word_records(records: Iterable[Dict[str, Any]]) -> int:
     return count
 
 
-def select_translation_core_words(difficulty: str = "medium", topic: str = "general", limit: int = 3) -> List[Dict[str, Any]]:
+def select_translation_core_words(
+    difficulty: str = "medium",
+    topic: str = "general",
+    limit: int = 3,
+    user_id: str = "",
+) -> List[Dict[str, Any]]:
+    personalized = _select_personal_vocabulary_words(user_id, topic=topic, limit=limit)
+    if len(personalized) >= limit:
+        return personalized[:limit]
+
     try:
         init_ielts_vocabulary_bank()
         safe_difficulty = difficulty if difficulty in {"easy", "medium", "hard"} else "medium"
@@ -183,7 +194,69 @@ def select_translation_core_words(difficulty: str = "medium", topic: str = "gene
         seen.add(word)
         candidates.append(dict(row))
     random.shuffle(candidates)
-    return candidates[:limit]
+    merged = personalized[:]
+    seen = {str(item.get("head_word") or "").strip().lower() for item in merged}
+    for item in candidates:
+        word = str(item.get("head_word") or "").strip().lower()
+        if not word or word in seen:
+            continue
+        merged.append(item)
+        seen.add(word)
+        if len(merged) >= limit:
+            break
+    return merged[:limit]
+
+
+def _select_personal_vocabulary_words(user_id: str, topic: str = "general", limit: int = 3) -> List[Dict[str, Any]]:
+    if not user_id:
+        return []
+    try:
+        words = get_user_vocabulary(str(user_id), 1000)
+    except Exception as exc:
+        logger.warning("Personal vocabulary selection skipped: %s", exc)
+        return []
+
+    safe_topic = str(topic or "general").strip().lower() or "general"
+    now_ts = int(time.time())
+    candidates: List[Dict[str, Any]] = []
+    for row in words:
+        word = str(row.get("word") or "").strip()
+        if not word or word.lower() in LOW_VALUE_WORDS:
+            continue
+        tags = {str(tag or "").strip().lower() for tag in (row.get("tags") or []) if str(tag or "").strip()}
+        if safe_topic != "general" and safe_topic not in tags:
+            continue
+        mastery = float(row.get("mastery_level") or 0.0)
+        next_review = int(row.get("next_review_date") or 0)
+        due_bonus = 1.0 if next_review and next_review <= now_ts else 0.0
+        priority = due_bonus + max(0.0, 1.0 - mastery)
+        candidates.append(
+            {
+                "word_id": str(row.get("id") or ""),
+                "book_id": "personal_vocabulary",
+                "word_rank": int(100000 - priority * 1000),
+                "head_word": word,
+                "definition_cn": str(row.get("definition") or ""),
+                "definition_en": "",
+                "part_of_speech": str(row.get("part_of_speech") or ""),
+                # 个人词库的 examples 是纯字符串列表，这里归一化成 bank 同构，避免下游按 dict 取值报错
+                "examples": [
+                    x if isinstance(x, dict) else {"english": str(x or ""), "chinese": ""}
+                    for x in (row.get("examples") or [])
+                ],
+                "phrases": [],
+                "synonyms": [],
+                "related_words": [],
+                "uk_phone": str(row.get("pronunciation") or ""),
+                "us_phone": "",
+                "difficulty": "medium",
+                "topics": sorted(tags) or ["general"],
+                "tags": ["personal", *sorted(tags)],
+                "_priority": priority,
+            }
+        )
+    candidates.sort(key=lambda item: (-float(item.get("_priority") or 0.0), str(item.get("head_word") or "")))
+    return candidates[:max(0, int(limit or 3))]
 
 
 def list_ielts_vocabulary_bank(
@@ -256,6 +329,70 @@ def get_ielts_vocabulary_bank_by_ids(word_ids: List[str]) -> List[Dict[str, Any]
         return []
 
 
+def get_ielts_vocabulary_bank_by_head_word(word: str) -> Dict[str, Any] | None:
+    """按词头精确查询。
+
+    不能用 keyword LIKE 查询代替：它按 difficulty/word_rank 排序后截断，
+    已存在的词（如 port/light/face）常常不在前若干条里，导致被误判为"未找到"。
+    """
+    clean = str(word or "").strip().lower()
+    if not clean:
+        return None
+    try:
+        init_ielts_vocabulary_bank()
+        with pg_cursor() as cur:
+            cur.execute(
+                """
+                SELECT word_id, book_id, word_rank, head_word, definition_cn, definition_en,
+                       part_of_speech, examples, phrases, synonyms, related_words,
+                       uk_phone, us_phone, difficulty, topics, tags
+                FROM ielts_vocabulary_bank
+                WHERE lower(head_word) = %s
+                LIMIT 1
+                """,
+                (clean,),
+            )
+            row = cur.fetchone()
+        return dict(row) if row else None
+    except Exception as exc:
+        logger.warning("PostgreSQL IELTS vocabulary exact lookup skipped: %s", exc)
+        return None
+
+
+def sample_word_definitions(exclude: str = "", limit: int = 3) -> List[str]:
+    """随机采样若干释义，作为「再认」练习的干扰项。
+
+    固定取词库前 N 条会让所有题目共用同一组干扰项（实测全部是 easy 段同一批词），
+    使"不认识 → 再认"练习退化为"认位置"。
+    """
+    safe_limit = max(1, min(int(limit or 3), 10))
+    try:
+        init_ielts_vocabulary_bank()
+        with pg_cursor() as cur:
+            cur.execute(
+                """
+                SELECT definition_cn FROM (
+                  SELECT DISTINCT definition_cn
+                  FROM ielts_vocabulary_bank
+                  WHERE definition_cn IS NOT NULL AND definition_cn <> ''
+                    AND definition_cn <> %s
+                ) AS candidates
+                ORDER BY random()
+                LIMIT %s
+                """,
+                (str(exclude or ""), safe_limit),
+            )
+            rows = cur.fetchall()
+        return [
+            str(row.get("definition_cn") or "").strip()
+            for row in rows
+            if str(row.get("definition_cn") or "").strip()
+        ]
+    except Exception as exc:
+        logger.warning("PostgreSQL definition sampling skipped: %s", exc)
+        return []
+
+
 def get_ielts_vocabulary_bank_summary() -> Dict[str, Any]:
     try:
         init_ielts_vocabulary_bank()
@@ -313,6 +450,23 @@ def _query_candidates(cur, difficulty: str, topic: str, limit: int) -> List[Dict
     return list(cur.fetchall())
 
 
+def _example_text(item: Any) -> str:
+    """兼容两种例句形态：bank 的 {english, chinese} 字典 与 个人词库的纯字符串。"""
+    if isinstance(item, dict):
+        english = str(item.get("english") or "").strip()
+        chinese = str(item.get("chinese") or "").strip()
+        return " / ".join(x for x in [english, chinese] if x)
+    return str(item or "").strip()
+
+
+def _phrase_text(item: Any) -> str:
+    if isinstance(item, dict):
+        phrase = str(item.get("phrase") or "").strip()
+        chinese = str(item.get("chinese") or "").strip()
+        return " / ".join(x for x in [phrase, chinese] if x)
+    return str(item or "").strip()
+
+
 def format_core_words_for_prompt(words: List[Dict[str, Any]]) -> str:
     parts = []
     for word in words:
@@ -320,10 +474,14 @@ def format_core_words_for_prompt(words: List[Dict[str, Any]]) -> str:
         phrases = word.get("phrases") or []
         example_text = ""
         if isinstance(examples, list) and examples:
-            example_text = f"例句: {examples[0].get('english', '')} / {examples[0].get('chinese', '')}"
+            text = _example_text(examples[0])
+            if text:
+                example_text = f"例句: {text}"
         phrase_text = ""
         if isinstance(phrases, list) and phrases:
-            phrase_text = "搭配: " + "; ".join(x.get("phrase", "") for x in phrases[:3] if x.get("phrase"))
+            texts = [t for t in (_phrase_text(x) for x in phrases[:3]) if t]
+            if texts:
+                phrase_text = "搭配: " + "; ".join(texts)
         parts.append(
             f"- {word.get('head_word')} ({word.get('part_of_speech') or 'word'}): "
             f"{word.get('definition_cn') or word.get('definition_en') or ''} {phrase_text} {example_text}".strip()

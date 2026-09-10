@@ -1,16 +1,27 @@
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
+from fastapi.concurrency import run_in_threadpool
+from pydantic import BaseModel, Field
 from typing import List, Optional, Dict, Any
 from uuid import uuid4
+import json
+import os
 import random
+import threading
 import time
 import math
 import re
+from datetime import datetime, timedelta
 
 from ..deps import get_current_user
 from ..db import (
     save_vocabulary,
     get_user_vocabulary,
+    get_user_vocabulary_by_word,
+    get_user_vocabulary_word_set,
+    get_vocabulary_mastery_counts,
+    get_vocabulary_page,
+    delete_vocabulary,
+    delete_vocabulary_bulk,
     get_due_vocabulary,
     get_vocabulary_by_id,
     review_vocabulary,
@@ -18,14 +29,21 @@ from ..db import (
     save_vocabulary_strategy_session,
     get_vocabulary_strategy_insights,
     save_vocabulary_learning_attempt,
+    save_learning_event,
     save_mistake,
     get_user_mistakes,
 )
 from ..services.ielts_vocabulary_bank_service import (
+    get_ielts_vocabulary_bank_by_head_word,
     get_ielts_vocabulary_bank_by_ids,
     get_ielts_vocabulary_bank_summary,
     list_ielts_vocabulary_bank,
+    sample_word_definitions,
+    LOW_VALUE_WORDS,
 )
+from ..services.ability_service import get_difficulty_recommendation, record_practice_result
+from ..redis_client import clear_timed_state, get_timed_state, set_timed_state
+from ..services.tts_service import get_tts_service
 
 try:
     from models.generator_model import GeneratorModel
@@ -37,10 +55,65 @@ router = APIRouter()
 test_runtime: Dict[str, Dict[str, Any]] = {}
 context_replay_runtime: Dict[str, Dict[str, Any]] = {}
 _vocab_llm = None
+_tts_service = get_tts_service()
 
 
 def _model_dump(payload: BaseModel) -> dict:
     return payload.model_dump() if hasattr(payload, "model_dump") else payload.dict()
+
+
+def _primary_topic(word_row: Dict[str, Any]) -> str:
+    """从 tags 解析 topic:xxx。
+
+    旧实现把所有非黑名单 tag 当作话题返回，而词库词的 tags 形如
+    ["ielts_bank", "difficulty:easy", "topic:work", ...] —— 会把 "ielts_bank" 当话题，
+    导致喂给成长引擎的 topic 恒错。
+    """
+    for tag in word_row.get("tags") or []:
+        text = str(tag or "").strip().lower()
+        if text.startswith("topic:"):
+            value = text.split(":", 1)[1].strip()
+            if value and value != "general":
+                return value
+    return "general"
+
+
+def _word_difficulty_tag(word_row: Dict[str, Any]) -> str:
+    """vocabulary 表没有 difficulty 列，难度只能来自 difficulty:xxx 标签。"""
+    for tag in word_row.get("tags") or []:
+        text = str(tag or "").strip().lower()
+        if text.startswith("difficulty:"):
+            value = text.split(":", 1)[1].strip()
+            if value:
+                return value
+    return "medium"
+
+
+def _today_date_key() -> str:
+    return datetime.now().strftime("%Y-%m-%d")
+
+
+def _normalize_date_key(value: str = "") -> str:
+    raw = str(value or "").strip()
+    if re.fullmatch(r"\d{4}-\d{2}-\d{2}", raw):
+        return raw
+    return _today_date_key()
+
+
+def _seconds_until_next_day(date_key: str = "") -> int:
+    safe_key = _normalize_date_key(date_key)
+    try:
+        day = datetime.strptime(safe_key, "%Y-%m-%d")
+    except ValueError:
+        day = datetime.now()
+    next_day = day + timedelta(days=1)
+    ttl = int((next_day - datetime.now()).total_seconds())
+    return max(3600, ttl)
+
+
+def _today_learning_status_key(user_id: str, date_key: str = "") -> str:
+    safe_key = _normalize_date_key(date_key)
+    return f"vocabulary:today_learning:completed:{user_id}:{safe_key}"
 
 
 class WordCreate(BaseModel):
@@ -78,6 +151,24 @@ class TodayLearnSessionRequest(BaseModel):
     count: int = 10
     topic: str = ""
     difficulty: str = ""
+
+
+class TodayLearningStatusRequest(BaseModel):
+    date_key: str = ""
+    completed: bool = True
+
+
+class TodayLearningStatusResponse(BaseModel):
+    date_key: str
+    completed: bool
+
+
+class VocabularyWordAudioResponse(BaseModel):
+    word: str
+    audio_url: str
+    cached: bool = False
+    storage: str = ""
+    backend: str = ""
 
 
 class LearnSessionWordItem(WordItem):
@@ -118,6 +209,182 @@ class LearningAttemptSubmitResponse(BaseModel):
     feedback: str
     output_feedback: str = ""
     output_suggestion: str = ""
+
+
+class BookSessionRequest(BaseModel):
+    count: int = 10
+    topic: str = ""
+    difficulty: str = ""
+    mode: str = "auto"  # auto | review | bank
+
+
+class BookStudyWordItem(BaseModel):
+    key: str
+    word: str
+    definition: str = ""
+    examples: List[str] = []
+    pronunciation: str = ""
+    part_of_speech: str = ""
+    tags: List[str] = []
+    source_module: str = ""
+    in_book: bool = False
+    due: bool = False
+    mastery_level: float = 0.0
+    next_review_date: int = 0
+    difficulty: str = ""
+    topics: List[str] = []
+    vocab_id: str = ""
+    bank_word_id: str = ""
+
+
+class BookSessionResponse(BaseModel):
+    session_id: str
+    mode: str
+    due_count: int = 0
+    new_count: int = 0
+    words: List[BookStudyWordItem] = []
+
+
+class BookGradeRequest(BaseModel):
+    rating: str = "fuzzy"  # forgot | fuzzy | familiar
+    # None → 按 rating 决定默认是否入本；True/False → 用户显式覆盖
+    collect: Optional[bool] = None
+    # 深度练习结果（不认识→再认 / 模糊→拼写）；None 表示未做练习
+    practice_correct: Optional[bool] = None
+    vocab_id: str = ""
+    bank_word_id: str = ""
+    word: str = ""
+    definition: str = ""
+    examples: List[str] = []
+    pronunciation: str = ""
+    part_of_speech: str = ""
+    source_module: str = "ielts_bank"
+    topic: str = ""
+    difficulty: str = ""
+
+
+class BookGradeResponse(BaseModel):
+    vocab_id: str = ""
+    in_book: bool = False
+    collected: bool = False
+    skipped: bool = False
+    next_review_date: int = 0
+    next_review_label: str = ""
+    mastery_level: float = 0.0
+    mastery_delta: float = 0.0
+
+
+class BookCollectRequest(BaseModel):
+    word: str
+    definition: str = ""
+    examples: List[str] = []
+    pronunciation: str = ""
+    part_of_speech: str = ""
+    source_module: str = "manual"
+    bank_word_id: str = ""
+    context: str = ""
+
+
+class BookCollectResponse(BaseModel):
+    vocab_id: str
+    word: str
+    in_book: bool = True
+    already: bool = False
+
+
+class BookSeenRequest(BaseModel):
+    word: str
+    bank_word_id: str = ""
+    source_module: str = "ielts_bank"
+    action: str = "skip"  # skip | seen
+
+
+class BookSeenResponse(BaseModel):
+    ok: bool = True
+    action: str = "skip"
+
+
+class BookPracticeOption(BaseModel):
+    definition: str
+    correct: bool = False
+
+
+class BookPracticeOptionsResponse(BaseModel):
+    word: str
+    options: List[BookPracticeOption] = []
+
+
+class BookGroupItem(BaseModel):
+    source_module: str
+    label: str
+    count: int = 0
+
+
+class BookSummaryResponse(BaseModel):
+    total: int = 0
+    active_count: int = 0
+    mastered_count: int = 0
+    due_count: int = 0
+    avg_mastery: float = 0.0
+    groups: List[BookGroupItem] = []
+
+
+class BookListItem(BaseModel):
+    id: str
+    word: str
+    definition: str = ""
+    pronunciation: str = ""
+    part_of_speech: str = ""
+    source_module: str = ""
+    mastery_level: float = 0.0
+    next_review_date: int = 0
+    created_at: int = 0
+    mastered: bool = False
+    due: bool = False
+
+
+class BookListResponse(BaseModel):
+    total: int = 0
+    items: List[BookListItem] = []
+
+
+class BookBulkRemoveRequest(BaseModel):
+    vocab_ids: List[str] = []
+
+
+class BookBulkRemoveResponse(BaseModel):
+    removed: int = 0
+
+
+class WordExplainResponse(BaseModel):
+    word: str
+    found: bool = False
+    in_book: bool = False
+    vocab_id: str = ""
+    bank_word_id: str = ""
+    pronunciation: str = ""
+    part_of_speech: str = ""
+    definitions: List[str] = []
+    examples: List[str] = []
+    phrases: List[str] = []
+    synonyms: List[str] = []
+    related_words: List[str] = []
+    difficulty: str = ""
+    topics: List[str] = []
+    context: str = ""
+
+
+class WordExplainAskRequest(BaseModel):
+    word: str = Field(..., max_length=64)
+    question: str = Field(..., max_length=500)
+    context: str = Field(default="", max_length=500)
+    definition: str = Field(default="", max_length=300)
+    history: List[Dict[str, str]] = []
+
+
+class WordExplainAskResponse(BaseModel):
+    answer: str
+    llm: bool = False
 
 
 class OutputPromptRequest(BaseModel):
@@ -512,8 +779,55 @@ def _forgetting_priority(word: dict, now_ts: int) -> tuple[float, str]:
     return round(float(priority), 6), reason
 
 
+def _normalize_word_input(token: str) -> str:
+    """清洗「用户提交的单词」：保留非 ASCII（café / naïve / 3D），只去空白与首尾标点。
+
+    `_normalize_word_token` 的正则是为「从句子抽 token」设计的，直接用于用户输入
+    会把 café 变成 caf、3D 变成 d，导致查词与发音都错。
+    """
+    raw = " ".join(str(token or "").split())
+    return raw.strip(".,;:!?\"'()[]{}").lower()
+
+
 def _normalize_word_token(token: str) -> str:
     return re.sub(r"[^a-zA-Z\-']", "", str(token or "")).lower().strip("-'")
+
+
+# 单词发音是同步调用付费 TTS，这里做一层按用户的滑动窗口限流，防止脚本刷接口。
+# 音频本身由 tts_service 按内容哈希落盘缓存，重复单词不会重复合成。
+_RATE_LOCK = threading.Lock()
+_RATE_BUCKETS: Dict[str, List[float]] = {}
+_TTS_RATE_LIMIT = max(1, int(os.environ.get("VOCABULARY_AUDIO_RATE_LIMIT", "60") or 60))
+_TTS_RATE_WINDOW = max(1, int(os.environ.get("VOCABULARY_AUDIO_RATE_WINDOW_SECONDS", "60") or 60))
+_LLM_RATE_LIMIT = max(1, int(os.environ.get("VOCABULARY_LLM_RATE_LIMIT", "30") or 30))
+_LLM_RATE_WINDOW = max(1, int(os.environ.get("VOCABULARY_LLM_RATE_WINDOW_SECONDS", "60") or 60))
+
+
+def _allow_rate_request(user_id: str, scope: str, limit: int, window: int) -> bool:
+    now = time.time()
+    safe_limit = max(1, int(limit or 1))
+    safe_window = max(1, int(window or 1))
+    key = f"{scope}:{str(user_id or 'anonymous')}"
+    with _RATE_LOCK:
+        bucket = [t for t in _RATE_BUCKETS.get(key, []) if now - t < safe_window]
+        if len(bucket) >= safe_limit:
+            _RATE_BUCKETS[key] = bucket
+            return False
+        bucket.append(now)
+        _RATE_BUCKETS[key] = bucket
+        if len(_RATE_BUCKETS) > 5000:
+            # 防止长期运行下 key 无界增长：清理已过期的用户桶。
+            for stale in [k for k, v in _RATE_BUCKETS.items() if not v or now - v[-1] > safe_window]:
+                _RATE_BUCKETS.pop(stale, None)
+        return True
+
+
+def _allow_tts_request(user_id: str) -> bool:
+    return _allow_rate_request(user_id, "tts", _TTS_RATE_LIMIT, _TTS_RATE_WINDOW)
+
+
+def _allow_llm_request(user_id: str) -> bool:
+    return _allow_rate_request(user_id, "llm", _LLM_RATE_LIMIT, _LLM_RATE_WINDOW)
 
 
 def _extract_candidate_words(text: str, max_words: int = 20) -> List[str]:
@@ -686,11 +1000,68 @@ def _generate_output_prompt_sentence(word_row: Dict[str, Any], topic: str = "") 
     return fallback
 
 
-def _assess_output_sentence(sentence: str, word: str) -> Dict[str, str]:
+def _extract_json_payload(raw: str) -> Optional[Dict[str, Any]]:
+    text = str(raw or "").strip()
+    if not text:
+        return None
+    text = re.sub(r"^```(?:json)?\s*", "", text, flags=re.IGNORECASE)
+    text = re.sub(r"\s*```$", "", text)
+    match = re.search(r"\{.*\}", text, flags=re.DOTALL)
+    if match:
+        text = match.group(0)
+    try:
+        data = json.loads(text)
+    except Exception:
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def _llm_assess_output_sentence(sentence: str, word: str, definition: str = "") -> Optional[Dict[str, str]]:
+    text = str(sentence or "").strip()
+    target = str(word or "").strip()
+    if not text or not target:
+        return None
+    llm = _get_vocab_llm()
+    if llm is None:
+        return None
+    prompt = f"""
+你是雅思词汇造句批改老师。请审核用户英文句子是否自然、语法是否基本正确、目标词是否用得合适。
+
+只输出 JSON，不要 Markdown，不要解释 JSON 外的内容。字段：
+- output_feedback: 中文，1-2句，明确说明句子是否可用，以及最重要的一处修改建议；如果句子很好，也要说好在哪里。
+- output_suggestion: 英文，给出一版更自然或修正后的句子。必须包含目标词。
+
+目标词：{target}
+目标词释义：{definition or target}
+用户句子：{text}
+"""
+    try:
+        _, raw = llm.communicate(prompt, temperature=0.2, max_tokens=220)
+        data = _extract_json_payload(raw)
+    except Exception:
+        return None
+    if not data:
+        return None
+    feedback = str(data.get("output_feedback") or "").strip()
+    suggestion = str(data.get("output_suggestion") or "").strip()
+    if not feedback:
+        return None
+    if suggestion and not _contains_word(suggestion, target):
+        suggestion = ""
+    return {
+        "output_feedback": feedback[:220],
+        "output_suggestion": suggestion[:260],
+    }
+
+
+def _assess_output_sentence(sentence: str, word: str, definition: str = "") -> Dict[str, str]:
     lines = [x.strip() for x in str(sentence or "").splitlines() if x.strip()]
     text = lines[-1] if lines else ""
     if not text:
         return {"output_feedback": "", "output_suggestion": ""}
+    llm_assessment = _llm_assess_output_sentence(text, word, definition)
+    if llm_assessment:
+        return llm_assessment
 
     issues: List[str] = []
     tokens = re.findall(r"[A-Za-z][A-Za-z'-]*", text)
@@ -735,22 +1106,46 @@ def _score_learning_attempt(word_row: Dict[str, Any], payload: LearningAttemptSu
     cloze_answer = str(payload.cloze_answer or "").strip()
     output_sentence = str(payload.output_sentence or "").strip()
     self_rating = str(payload.self_rating or "fuzzy").strip().lower()
-    if self_rating not in {"unknown", "fuzzy", "known"}:
+    rating_score_map = {
+        "unknown": 0.0,
+        "forgot": 0.0,
+        "fuzzy": 0.35,
+        "hard": 0.35,
+        "recalled": 0.58,
+        "known": 0.76,
+        "familiar": 0.76,
+        "easy": 1.0,
+    }
+    rating_delta_map = {
+        "unknown": -0.14,
+        "forgot": -0.16,
+        "fuzzy": -0.02,
+        "hard": -0.02,
+        "recalled": 0.06,
+        "known": 0.14,
+        "familiar": 0.14,
+        "easy": 0.2,
+    }
+    if self_rating not in rating_score_map:
         self_rating = "fuzzy"
 
     recall_completed = len(recall_text) >= 2
     cloze_correct = bool(cloze_answer) and cloze_answer.lower() == word.lower()
     output_uses_word = _contains_word(output_sentence, word)
-    output_assessment = _assess_output_sentence(output_sentence, word)
+    output_assessment = _assess_output_sentence(
+        output_sentence,
+        word,
+        str(word_row.get("definition") or ""),
+    )
 
-    rating_score = {"unknown": 0.0, "fuzzy": 0.5, "known": 1.0}[self_rating]
+    rating_score = rating_score_map[self_rating]
     quality_score = (
         (0.22 if recall_completed else 0.0)
         + (0.28 if cloze_correct else 0.0)
         + (0.25 if output_uses_word else 0.0)
         + rating_score * 0.25
     )
-    delta = {"unknown": -0.14, "fuzzy": 0.04, "known": 0.14}[self_rating]
+    delta = rating_delta_map[self_rating]
     delta += 0.03 if recall_completed else -0.03
     if cloze_answer:
         delta += 0.06 if cloze_correct else -0.05
@@ -772,34 +1167,29 @@ def _score_learning_attempt(word_row: Dict[str, Any], payload: LearningAttemptSu
     else:
         feedback_bits.append("本轮处于巩固阶段")
 
-    current_mastery = max(0.0, min(1.0, float(word_row.get("mastery_level") or 0.0)))
-    projected_mastery = max(0.0, min(1.0, current_mastery + delta))
     if quality_score <= 0.25:
-        interval_seconds = 4 * 3600
-        next_review_label = "约4小时后复习"
+        sm2_quality = 1
+        next_review_label = "稍后会更快复习"
     elif quality_score <= 0.45:
-        interval_seconds = 12 * 3600
-        next_review_label = "约12小时后复习"
+        sm2_quality = 2
+        next_review_label = "会进入短间隔巩固"
     elif quality_score <= 0.65:
-        interval_seconds = 24 * 3600
-        next_review_label = "明天复习"
+        sm2_quality = 3
+        next_review_label = "明天左右复习"
     elif quality_score <= 0.82:
-        interval_seconds = 3 * 24 * 3600
-        next_review_label = "约3天后复习"
-    elif projected_mastery >= 0.85:
-        interval_seconds = 14 * 24 * 3600
-        next_review_label = "约14天后复习"
+        sm2_quality = 4
+        next_review_label = "间隔会适当拉长"
     else:
-        interval_seconds = 7 * 24 * 3600
-        next_review_label = "约7天后复习"
+        sm2_quality = 5
+        next_review_label = "间隔会明显拉长"
 
     return {
         "recall_completed": recall_completed,
         "cloze_correct": cloze_correct,
         "output_uses_word": output_uses_word,
         "quality_score": round(quality_score, 4),
+        "sm2_quality": sm2_quality,
         "mastery_delta": round(delta, 4),
-        "review_interval_seconds": interval_seconds,
         "next_review_label": next_review_label,
         "self_rating": self_rating,
         "feedback": "；".join(feedback_bits),
@@ -872,6 +1262,225 @@ def _bank_row_to_vocab_data(row: Dict[str, Any], source_module: str = "ielts_ban
         "source_module": source_module or "ielts_bank",
         "mastery_level": 0.0,
     }
+
+
+# ── 词汇本学习闭环：3 档自评 + rating-driven 准入 ──────────────────────────
+_BOOK_RATING_QUALITY = {
+    "forgot": 1,
+    "unknown": 1,
+    "fuzzy": 2,
+    "hard": 2,
+    "recalled": 3,
+    "familiar": 5,
+    "known": 5,
+    "easy": 5,
+}
+# 不认识 / 模糊 → 默认纳入词汇本；认识 → 默认不纳入（用户可手动加入）
+_BOOK_DEFAULT_COLLECT_RATINGS = {"forgot", "unknown", "fuzzy", "hard"}
+
+# 词汇本来源展示名
+_BOOK_SOURCE_LABELS = {
+    "ielts_bank": "词库",
+    "manual": "手动添加",
+    "reading": "阅读随文",
+    "listening": "听力随文",
+    "writing": "写作",
+    "speaking": "口语",
+    "translation": "翻译",
+    "translation_search": "翻译",
+    "auto_collect": "自动收录",
+    "unknown": "其他",
+}
+
+
+def _book_quality(rating: str) -> int:
+    return _BOOK_RATING_QUALITY.get(str(rating or "").strip().lower(), 3)
+
+
+# 自评叠加一次深度练习后的最终 quality（答对上调、答错下调）
+# 「模糊」本身不算通过（quality 2）；只有练习答对才升到 3。
+_BOOK_PRACTICE_QUALITY = {
+    ("forgot", True): 2,
+    ("forgot", False): 1,
+    ("fuzzy", True): 3,
+    ("fuzzy", False): 2,
+    ("familiar", True): 5,
+    ("familiar", False): 2,
+}
+
+
+def _book_quality_with_practice(rating: str, practice_correct: Optional[bool]) -> int:
+    if practice_correct is not None:
+        key = (str(rating or "").strip().lower(), bool(practice_correct))
+        if key in _BOOK_PRACTICE_QUALITY:
+            return _BOOK_PRACTICE_QUALITY[key]
+    return _book_quality(rating)
+
+
+def _book_default_collect(rating: str) -> bool:
+    return str(rating or "").strip().lower() in _BOOK_DEFAULT_COLLECT_RATINGS
+
+
+def _book_collect_data(payload: Any) -> Dict[str, Any]:
+    """优先用词库补齐词条信息，否则回落到前端传来的字段。"""
+    bank_word_id = str(getattr(payload, "bank_word_id", "") or "").strip()
+    if bank_word_id:
+        rows = get_ielts_vocabulary_bank_by_ids([bank_word_id])
+        if rows:
+            source = str(getattr(payload, "source_module", "") or "ielts_bank")
+            return _bank_row_to_vocab_data(rows[0], source_module=source)
+    return {
+        "word": str(getattr(payload, "word", "") or "").strip(),
+        "definition": str(getattr(payload, "definition", "") or ""),
+        "examples": list(getattr(payload, "examples", []) or []),
+        "pronunciation": str(getattr(payload, "pronunciation", "") or ""),
+        "part_of_speech": str(getattr(payload, "part_of_speech", "") or ""),
+        "tags": [],
+        "source_module": str(getattr(payload, "source_module", "") or "manual"),
+        "mastery_level": 0.0,
+    }
+
+
+def _record_book_seen(
+    user_id: str,
+    word: str,
+    bank_word_id: str = "",
+    source_module: str = "",
+    action: str = "skip",
+    rating: str = "",
+) -> None:
+    """只记「见过」，不做任何掌握度 / SM2 变更。"""
+    safe_word = str(word or "").strip()
+    if not safe_word:
+        return
+    properties: Dict[str, Any] = {
+        "word": safe_word.lower(),
+        "bank_word_id": str(bank_word_id or ""),
+        "source_module": str(source_module or ""),
+        "action": str(action or "skip"),
+    }
+    if rating:
+        properties["rating"] = str(rating)
+    try:
+        save_learning_event(
+            str(uuid4()),
+            str(user_id),
+            {
+                "event_type": "vocabulary_seen",
+                "event_name": "vocabulary_seen",
+                "properties": properties,
+                "timestamp": int(time.time()),
+            },
+        )
+    except Exception:
+        return
+
+
+def _vocab_row_to_study_item(row: Dict[str, Any], now: int) -> BookStudyWordItem:
+    next_review = int(row.get("next_review_date") or 0)
+    return BookStudyWordItem(
+        key=f"vocab:{row.get('id')}",
+        word=str(row.get("word") or ""),
+        definition=str(row.get("definition") or ""),
+        examples=row.get("examples") or [],
+        pronunciation=str(row.get("pronunciation") or ""),
+        part_of_speech=str(row.get("part_of_speech") or ""),
+        tags=row.get("tags") or [],
+        source_module=str(row.get("source_module") or ""),
+        in_book=True,
+        due=next_review <= now,
+        mastery_level=float(row.get("mastery_level") or 0.0),
+        next_review_date=next_review,
+        vocab_id=str(row.get("id") or ""),
+    )
+
+
+def _bank_row_to_study_item(row: Dict[str, Any]) -> BookStudyWordItem:
+    item = _bank_row_to_item(row)
+    tags = [f"difficulty:{item.difficulty}", *(f"topic:{t}" for t in item.topics)]
+    return BookStudyWordItem(
+        key=f"bank:{item.word_id or item.word.strip().lower()}",
+        word=item.word,
+        definition=item.definition,
+        examples=item.examples,
+        pronunciation=item.pronunciation,
+        part_of_speech=item.part_of_speech,
+        tags=tags,
+        source_module="ielts_bank",
+        in_book=False,
+        due=False,
+        mastery_level=0.0,
+        next_review_date=0,
+        difficulty=item.difficulty,
+        topics=item.topics,
+        bank_word_id=item.word_id,
+    )
+
+
+def _lookup_word_facts(user_id: str, word: str) -> Dict[str, Any]:
+    """先查用户词汇本，再查词库，组装「问老师」的结构化速览。"""
+    normalized = _normalize_word_input(word)
+    facts: Dict[str, Any] = {
+        "word": normalized,
+        "found": False,
+        "in_book": False,
+        "vocab_id": "",
+        "bank_word_id": "",
+        "pronunciation": "",
+        "part_of_speech": "",
+        "definitions": [],
+        "examples": [],
+        "phrases": [],
+        "synonyms": [],
+        "related_words": [],
+        "difficulty": "",
+        "topics": [],
+    }
+    if not normalized:
+        return facts
+
+    row = get_user_vocabulary_by_word(user_id, normalized)
+    if row:
+        definition = str(row.get("definition") or "").strip()
+        facts.update({
+            "word": str(row.get("word") or normalized),
+            "found": True,
+            "in_book": True,
+            "vocab_id": str(row.get("id") or ""),
+            "pronunciation": str(row.get("pronunciation") or ""),
+            "part_of_speech": str(row.get("part_of_speech") or ""),
+            "definitions": [definition] if definition else [],
+            "examples": [str(x) for x in (row.get("examples") or [])][:3],
+        })
+        return facts
+
+    raw = get_ielts_vocabulary_bank_by_head_word(normalized)
+    if raw is None:
+        # 精确未命中时再用 LIKE 兜底（处理词形/拼写差异）
+        rows = list_ielts_vocabulary_bank(keyword=normalized, limit=8)
+        match = next(
+            (r for r in rows if str(r.get("head_word") or "").strip().lower() == normalized),
+            None,
+        )
+        raw = dict(match) if match else None
+    if raw:
+        item = _bank_row_to_item(raw)
+        definitions = [x for x in [item.definition, str(raw.get("definition_en") or "").strip()] if x]
+        facts.update({
+            "word": item.word or normalized,
+            "found": True,
+            "bank_word_id": item.word_id,
+            "pronunciation": item.pronunciation,
+            "part_of_speech": item.part_of_speech,
+            "definitions": definitions,
+            "examples": item.examples[:3],
+            "phrases": item.phrases[:5],
+            "synonyms": [str(x).strip() for x in (raw.get("synonyms") or []) if str(x).strip()][:6],
+            "related_words": [str(x).strip() for x in (raw.get("related_words") or []) if str(x).strip()][:6],
+            "difficulty": item.difficulty,
+            "topics": item.topics,
+        })
+    return facts
 
 
 @router.get("/bank", response_model=List[VocabularyBankItem])
@@ -1017,19 +1626,27 @@ async def start_today_learning_session(
     current_user: dict = Depends(get_current_user),
 ):
     user_id = current_user["id"]
+    clear_timed_state(_today_learning_status_key(str(user_id), _today_date_key()))
     count = max(1, min(int(payload.count or 10), 30))
+    requested_difficulty = str(payload.difficulty or "").strip().lower()
+    effective_difficulty = requested_difficulty or get_difficulty_recommendation(
+        str(user_id),
+        module="vocabulary",
+    ).get("recommended_difficulty", "easy")
     all_words = get_user_vocabulary(user_id, 5000)
     filtered_words = [
         word for word in all_words
-        if _word_matches_learning_filters(word, topic=payload.topic, difficulty=payload.difficulty)
+        if _word_matches_learning_filters(word, topic=payload.topic, difficulty=effective_difficulty)
     ]
-    selected_pool = filtered_words if (payload.topic or payload.difficulty) else all_words
+    if not filtered_words and not requested_difficulty and not payload.topic:
+        filtered_words = all_words
+    selected_pool = filtered_words if (payload.topic or effective_difficulty) else all_words
     selected = _pick_words_by_strategy(selected_pool, "mixed", count)
 
     if len(selected) < count:
         existing_words = {str(w.get("word", "")).strip().lower() for w in all_words}
         bank_rows = list_ielts_vocabulary_bank(
-            difficulty=payload.difficulty or "",
+            difficulty=effective_difficulty or "",
             topic=payload.topic or "",
             keyword="",
             limit=max(20, (count - len(selected)) * 6),
@@ -1052,9 +1669,11 @@ async def start_today_learning_session(
             all_words = get_user_vocabulary(user_id, 5000)
             filtered_words = [
                 word for word in all_words
-                if _word_matches_learning_filters(word, topic=payload.topic, difficulty=payload.difficulty)
+                if _word_matches_learning_filters(word, topic=payload.topic, difficulty=effective_difficulty)
             ]
-            selected_pool = filtered_words if (payload.topic or payload.difficulty) else all_words
+            if not filtered_words and not requested_difficulty and not payload.topic:
+                filtered_words = all_words
+            selected_pool = filtered_words if (payload.topic or effective_difficulty) else all_words
             selected = _pick_words_by_strategy(selected_pool, "mixed", count)
 
     save_vocabulary_strategy_session(user_id, "today_active_recall", selected)
@@ -1065,10 +1684,383 @@ async def start_today_learning_session(
     )
 
 
+@router.get("/learn/today/status", response_model=TodayLearningStatusResponse)
+async def get_today_learning_status(
+    date_key: str = "",
+    current_user: dict = Depends(get_current_user),
+):
+    safe_date_key = _normalize_date_key(date_key)
+    key = _today_learning_status_key(str(current_user["id"]), safe_date_key)
+    return TodayLearningStatusResponse(
+        date_key=safe_date_key,
+        completed=get_timed_state(key) == "completed",
+    )
+
+
+@router.post("/learn/today/status", response_model=TodayLearningStatusResponse)
+async def set_today_learning_status(
+    payload: TodayLearningStatusRequest,
+    current_user: dict = Depends(get_current_user),
+):
+    safe_date_key = _normalize_date_key(payload.date_key)
+    key = _today_learning_status_key(str(current_user["id"]), safe_date_key)
+    if payload.completed:
+        set_timed_state(key, "completed", _seconds_until_next_day(safe_date_key))
+    else:
+        clear_timed_state(key)
+    return TodayLearningStatusResponse(date_key=safe_date_key, completed=payload.completed)
+
+
+@router.post("/book/session", response_model=BookSessionResponse)
+async def start_book_session(payload: BookSessionRequest, current_user: dict = Depends(get_current_user)):
+    """词汇本学习：先取到期复习词，不足再补词库中尚未入本的新词。
+
+    词库新词只作为「临时词」返回，**不会**自动写入词汇本 —— 是否入本由用户在评分时决定。
+    """
+    user_id = str(current_user["id"])
+    now = int(time.time())
+    count = max(1, min(int(payload.count or 10), 30))
+    mode = str(payload.mode or "auto").strip().lower()
+    if mode not in {"auto", "review", "bank"}:
+        mode = "auto"
+
+    words: List[BookStudyWordItem] = []
+    due_count = 0
+
+    if mode in {"auto", "review"}:
+        due_rows = get_due_vocabulary(user_id, limit=count, now_ts=now)
+        due_count = len(due_rows)
+        words.extend(_vocab_row_to_study_item(row, now) for row in due_rows)
+
+    if mode in {"auto", "bank"} and len(words) < count:
+        in_book = get_user_vocabulary_word_set(user_id)
+        requested_difficulty = str(payload.difficulty or "").strip().lower()
+        effective_difficulty = requested_difficulty or get_difficulty_recommendation(
+            user_id, module="vocabulary"
+        ).get("recommended_difficulty", "easy")
+        bank_rows = list_ielts_vocabulary_bank(
+            difficulty=effective_difficulty or "",
+            topic=payload.topic or "",
+            keyword="",
+            limit=max(20, (count - len(words)) * 6),
+        )
+        for row in bank_rows:
+            word = str(row.get("head_word") or "").strip()
+            if not word or word.lower() in in_book or word.lower() in LOW_VALUE_WORDS:
+                continue
+            words.append(_bank_row_to_study_item(row))
+            in_book.add(word.lower())
+            if len(words) >= count:
+                break
+
+    selected = words[:count]
+    return BookSessionResponse(
+        session_id=str(uuid4()),
+        mode=mode,
+        due_count=due_count,
+        new_count=sum(1 for item in selected if not item.in_book),
+        words=selected,
+    )
+
+
+@router.post("/book/grade", response_model=BookGradeResponse)
+async def grade_book_word(payload: BookGradeRequest, current_user: dict = Depends(get_current_user)):
+    """提交一次 3 档自评：按 rating 决定是否入本，并更新 SM2 / 能力曲线。"""
+    user_id = str(current_user["id"])
+    rating = str(payload.rating or "fuzzy").strip().lower()
+    quality = _book_quality_with_practice(rating, payload.practice_correct)
+
+    target = None
+    if payload.vocab_id:
+        row = get_vocabulary_by_id(payload.vocab_id)
+        if row and str(row.get("user_id")) == user_id:
+            target = row
+    if target is None and payload.word:
+        target = get_user_vocabulary_by_word(user_id, payload.word)
+
+    collected = False
+    if target is None:
+        want_collect = _book_default_collect(rating) if payload.collect is None else bool(payload.collect)
+        if want_collect:
+            data = _book_collect_data(payload)
+            if not str(data.get("word") or "").strip():
+                raise HTTPException(status_code=400, detail="word is required")
+            save_vocabulary(str(uuid4()), user_id, data)
+            target = get_user_vocabulary_by_word(user_id, data["word"])
+            collected = target is not None
+
+    if target is None:
+        # 不入本：只记「见过」，不产生掌握度。
+        # 用独立 action 区分"认真评了但没入本"与真正点「跳过」，并保留 rating 信号。
+        _record_book_seen(
+            user_id,
+            payload.word,
+            payload.bank_word_id,
+            payload.source_module,
+            action="graded_not_collected",
+            rating=rating,
+        )
+        return BookGradeResponse(in_book=False, collected=False, skipped=True)
+
+    before_mastery = float(target.get("mastery_level") or 0.0)
+    reviewed = review_vocabulary(str(target["id"]), quality=quality)
+    if not reviewed:
+        raise HTTPException(status_code=500, detail="Failed to review vocabulary")
+    return BookGradeResponse(
+        vocab_id=str(target["id"]),
+        in_book=True,
+        collected=collected,
+        skipped=False,
+        next_review_date=int(reviewed.get("next_review_date") or 0),
+        next_review_label=str(reviewed.get("next_review_label") or ""),
+        mastery_level=float(reviewed.get("mastery_level") or 0.0),
+        mastery_delta=round(float(reviewed.get("mastery_level") or 0.0) - before_mastery, 4),
+    )
+
+
+@router.post("/book/collect", response_model=BookCollectResponse)
+async def collect_book_word(payload: BookCollectRequest, current_user: dict = Depends(get_current_user)):
+    """把一个词加入词汇本（划词浮层 / 手动收藏）。幂等：已在本中直接返回。"""
+    user_id = str(current_user["id"])
+    existing = get_user_vocabulary_by_word(user_id, payload.word)
+    if existing:
+        return BookCollectResponse(
+            vocab_id=str(existing["id"]),
+            word=str(existing.get("word") or payload.word),
+            in_book=True,
+            already=True,
+        )
+    data = _book_collect_data(payload)
+    if not str(data.get("word") or "").strip():
+        raise HTTPException(status_code=400, detail="word is required")
+    save_vocabulary(str(uuid4()), user_id, data)
+    row = get_user_vocabulary_by_word(user_id, data["word"])
+    if not row:
+        raise HTTPException(status_code=500, detail="Failed to collect word")
+    return BookCollectResponse(
+        vocab_id=str(row["id"]),
+        word=str(row.get("word") or data["word"]),
+        in_book=True,
+        already=False,
+    )
+
+
+@router.delete("/book/collect/{vocab_id}")
+async def uncollect_book_word(vocab_id: str, current_user: dict = Depends(get_current_user)):
+    if not delete_vocabulary(vocab_id, str(current_user["id"])):
+        raise HTTPException(status_code=404, detail="Vocabulary not found")
+    return {"ok": True, "vocab_id": vocab_id}
+
+
+@router.post("/book/seen", response_model=BookSeenResponse)
+async def mark_book_word_seen(payload: BookSeenRequest, current_user: dict = Depends(get_current_user)):
+    action = str(payload.action or "skip").strip().lower()
+    if action not in {"skip", "seen"}:
+        action = "skip"
+    _record_book_seen(
+        str(current_user["id"]),
+        payload.word,
+        payload.bank_word_id,
+        payload.source_module,
+        action=action,
+    )
+    return BookSeenResponse(ok=True, action=action)
+
+
+@router.get("/book/summary", response_model=BookSummaryResponse)
+async def book_summary(current_user: dict = Depends(get_current_user)):
+    """词汇本总览：总数 / 活跃 / 已掌握 / 到期 + 按来源分组。"""
+    user_id = str(current_user["id"])
+    stats = get_vocabulary_stats(user_id)
+    counts = get_vocabulary_mastery_counts(user_id)
+    groups: List[BookGroupItem] = []
+    for source, count in (stats.get("by_source_module") or {}).items():
+        key = str(source or "unknown")
+        groups.append(BookGroupItem(
+            source_module=key,
+            label=_BOOK_SOURCE_LABELS.get(key, key),
+            count=int(count or 0),
+        ))
+    groups.sort(key=lambda item: (-item.count, item.source_module))
+    return BookSummaryResponse(
+        total=int(stats.get("total") or 0),
+        active_count=counts["active"],
+        mastered_count=counts["mastered"],
+        due_count=int(stats.get("due_count") or 0),
+        avg_mastery=float(stats.get("avg_mastery") or 0.0),
+        groups=groups,
+    )
+
+
+@router.get("/book/list", response_model=BookListResponse)
+async def book_list(
+    source: str = "",
+    status: str = "all",
+    limit: int = 50,
+    offset: int = 0,
+    current_user: dict = Depends(get_current_user),
+):
+    """词汇本分页列表，支持按来源分组与 active / mastered 筛选。"""
+    page = get_vocabulary_page(
+        str(current_user["id"]),
+        source_module=source,
+        status=status,
+        limit=limit,
+        offset=offset,
+    )
+    items = [
+        BookListItem(
+            id=str(item.get("id") or ""),
+            word=str(item.get("word") or ""),
+            definition=str(item.get("definition") or ""),
+            pronunciation=str(item.get("pronunciation") or ""),
+            part_of_speech=str(item.get("part_of_speech") or ""),
+            source_module=str(item.get("source_module") or ""),
+            mastery_level=float(item.get("mastery_level") or 0.0),
+            next_review_date=int(item.get("next_review_date") or 0),
+            created_at=int(item.get("created_at") or 0),
+            mastered=bool(item.get("mastered")),
+            due=bool(item.get("due")),
+        )
+        for item in page["items"]
+    ]
+    return BookListResponse(total=int(page["total"] or 0), items=items)
+
+
+@router.post("/book/bulk-remove", response_model=BookBulkRemoveResponse)
+async def book_bulk_remove(payload: BookBulkRemoveRequest, current_user: dict = Depends(get_current_user)):
+    """批量移出词汇本（仅限本人数据）。"""
+    # 去重 + 上限，避免超长 IN 列表触发 "too many SQL variables"
+    ids = list(dict.fromkeys(
+        str(x).strip() for x in (payload.vocab_ids or []) if str(x).strip()
+    ))[:500]
+    removed = delete_vocabulary_bulk(ids, str(current_user["id"]))
+    return BookBulkRemoveResponse(removed=removed)
+
+
+@router.get("/book/practice/options", response_model=BookPracticeOptionsResponse)
+async def book_practice_options(
+    word: str,
+    definition: str = "",
+    current_user: dict = Depends(get_current_user),
+):
+    """「不认识 → 再认」练习的 4 选 1 选项（1 正确 + 3 干扰）。"""
+    safe_word = _normalize_word_input(word)
+    correct = str(definition or "").strip()
+    if not correct and safe_word:
+        facts = _lookup_word_facts(str(current_user["id"]), safe_word)
+        correct = next((str(x).strip() for x in (facts.get("definitions") or []) if str(x).strip()), "")
+    if not correct:
+        return BookPracticeOptionsResponse(word=safe_word, options=[])
+
+    # 随机采样干扰项：固定取词库前 N 条会让所有题目共用同一组干扰项
+    distractors = sample_word_definitions(exclude=correct, limit=3)
+    if len(distractors) < 2:
+        pool: List[str] = []
+        for row in list_ielts_vocabulary_bank(keyword="", limit=60):
+            text = str(row.get("definition_cn") or row.get("definition_en") or "").strip()
+            if text and text != correct and text not in pool:
+                pool.append(text)
+        random.shuffle(pool)
+        distractors = pool[:3]
+
+    options: List[Dict[str, Any]] = [{"definition": correct, "correct": True}]
+    options.extend({"definition": text, "correct": False} for text in distractors)
+    random.shuffle(options)
+    return BookPracticeOptionsResponse(
+        word=safe_word,
+        options=[BookPracticeOption(**item) for item in options],
+    )
+
+
+@router.get("/explain", response_model=WordExplainResponse)
+async def explain_word(word: str, context: str = "", current_user: dict = Depends(get_current_user)):
+    """「问老师」L0：直接用词库 / 词汇本数据给出结构化速览（零 LLM、零延迟）。"""
+    safe_word = _normalize_word_input(word)
+    if not safe_word:
+        raise HTTPException(status_code=400, detail="word is required")
+    facts = _lookup_word_facts(str(current_user["id"]), safe_word)
+    return WordExplainResponse(context=str(context or "")[:500], **facts)
+
+
+@router.post("/explain/ask", response_model=WordExplainAskResponse)
+async def ask_about_word(payload: WordExplainAskRequest, current_user: dict = Depends(get_current_user)):
+    """「问老师」L1：带着单词与语境追问，按需调用 LLM。"""
+    word = str(payload.word or "").strip()
+    question = str(payload.question or "").strip()
+    if not word or not question:
+        raise HTTPException(status_code=400, detail="word and question are required")
+    if not _allow_llm_request(str(current_user["id"])):
+        raise HTTPException(status_code=429, detail="提问过于频繁，请稍后再试")
+    llm = _get_vocab_llm()
+    if llm is None:
+        return WordExplainAskResponse(
+            answer="老师暂时无法回答（模型未就绪），可以先看上面的释义和例句。",
+            llm=False,
+        )
+    history_lines: List[str] = []
+    for item in (payload.history or [])[-6:]:
+        content = str((item or {}).get("content") or "").strip()
+        if not content:
+            continue
+        role = "学生" if str((item or {}).get("role")) == "user" else "老师"
+        history_lines.append(f"{role}：{content}")
+    history_text = "\n".join(history_lines)
+    context_text = str(payload.context or "").strip()
+    prompt = f"""你是雅思词汇老师，请用中文简明回答学生关于单词「{word}」的问题。
+要求：
+- 紧扣这个词，必要时给出搭配、词形变化、近义辨析和例句。
+- 例句用英文，讲解用中文。
+- 控制在 200 字以内，不要使用 Markdown 标题。
+
+单词：{word}
+释义：{str(payload.definition or '').strip() or '（未知）'}
+出现语境：{context_text or '（无）'}{("\n此前对话：\n" + history_text) if history_text else ''}
+学生问题：{question}
+"""
+    try:
+        _, raw = await run_in_threadpool(llm.communicate, prompt, temperature=0.4, max_tokens=400)
+        answer = str(raw or "").strip()
+    except Exception:
+        answer = ""
+    if not answer:
+        return WordExplainAskResponse(answer="老师暂时没能给出回答，请稍后再试。", llm=False)
+    return WordExplainAskResponse(answer=answer, llm=True)
+
+
+@router.get("/audio/word", response_model=VocabularyWordAudioResponse)
+async def get_vocabulary_word_audio(
+    word: str,
+    current_user: dict = Depends(get_current_user),
+):
+    safe_word = str(word or "").strip()
+    if not safe_word:
+        raise HTTPException(status_code=400, detail="word is required")
+    normalized = _normalize_word_input(safe_word)
+    if not normalized:
+        raise HTTPException(status_code=400, detail="Invalid word")
+    if len(normalized) > 64:
+        raise HTTPException(status_code=400, detail="Word too long")
+    if not _allow_tts_request(str(current_user["id"])):
+        raise HTTPException(status_code=429, detail="发音请求过于频繁，请稍后再试")
+    try:
+        result = _tts_service.synthesize_word_audio(word=normalized, lang="en-US", speed=0.86)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"TTS生成失败: {exc}") from exc
+    return VocabularyWordAudioResponse(
+        word=normalized,
+        audio_url=str(result.get("audio_url") or ""),
+        cached=bool(result.get("cached", False)),
+        storage=str(result.get("storage") or ""),
+        backend=str(result.get("backend") or ""),
+    )
+
+
 @router.post("/{vocab_id}/review", response_model=WordReviewResponse)
 async def mark_word_reviewed(
     vocab_id: str,
     mastery_delta: float = 0.15,
+    quality: Optional[int] = None,
     current_user: dict = Depends(get_current_user),
 ):
     row = get_vocabulary_by_id(vocab_id)
@@ -1076,7 +2068,7 @@ async def mark_word_reviewed(
         raise HTTPException(status_code=404, detail="Vocabulary not found")
     if str(row["user_id"]) != str(current_user["id"]):
         raise HTTPException(status_code=403, detail="Access denied")
-    reviewed = review_vocabulary(vocab_id, mastery_delta)
+    reviewed = review_vocabulary(vocab_id, mastery_delta, quality=quality)
     if not reviewed:
         raise HTTPException(status_code=500, detail="Failed to review vocabulary")
     return WordReviewResponse(
@@ -1096,14 +2088,18 @@ async def submit_learning_attempt(
     if str(row["user_id"]) != str(current_user["id"]):
         raise HTTPException(status_code=403, detail="Access denied")
 
-    scoring = _score_learning_attempt(row, payload)
+    scoring = await run_in_threadpool(_score_learning_attempt, row, payload)
+    before_mastery = float(row["mastery_level"] or 0.0)
     reviewed = review_vocabulary(
         payload.vocab_id,
         scoring["mastery_delta"],
-        review_interval_seconds=scoring["review_interval_seconds"],
+        quality=scoring["sm2_quality"],
     )
     if not reviewed:
         raise HTTPException(status_code=500, detail="Failed to review vocabulary")
+    # review_vocabulary 在传入 quality 时会改用 SM2 口径的增量，
+    # 因此返回与入库都必须使用真实发生的变化量，保证与 mastery_level 一致。
+    applied_mastery_delta = round(float(reviewed["mastery_level"]) - before_mastery, 4)
 
     attempt_id = str(uuid4())
     save_vocabulary_learning_attempt(
@@ -1112,6 +2108,7 @@ async def submit_learning_attempt(
         payload.vocab_id,
         {
             **scoring,
+            "mastery_delta": applied_mastery_delta,
             "session_id": payload.session_id,
             "strategy": payload.strategy,
             "recall_text": payload.recall_text,
@@ -1121,11 +2118,24 @@ async def submit_learning_attempt(
             "next_review_date": reviewed["next_review_date"],
         },
     )
+    record_practice_result(
+        str(current_user["id"]),
+        "vocabulary",
+        {
+            "overall": round(float(scoring["quality_score"]) * 10, 2),
+            "vocabulary": round(float(scoring["quality_score"]) * 10, 2),
+            "word": str(row.get("word") or ""),
+        },
+        difficulty=_word_difficulty_tag(row),
+        topic=_primary_topic(row),
+        practice_mode=str(payload.strategy or "smart"),
+        source="vocabulary_learning",
+    )
     return LearningAttemptSubmitResponse(
         next_review_date=reviewed["next_review_date"],
-        next_review_label=scoring["next_review_label"],
+        next_review_label=str(reviewed.get("next_review_label") or scoring["next_review_label"]),
         mastery_level=reviewed["mastery_level"],
-        mastery_delta=scoring["mastery_delta"],
+        mastery_delta=applied_mastery_delta,
         quality_score=scoring["quality_score"],
         recall_completed=scoring["recall_completed"],
         cloze_correct=scoring["cloze_correct"],
@@ -1146,7 +2156,7 @@ async def generate_output_prompt(
         raise HTTPException(status_code=404, detail="Vocabulary not found")
     if str(row["user_id"]) != str(current_user["id"]):
         raise HTTPException(status_code=403, detail="Access denied")
-    sentence = _generate_output_prompt_sentence(row, payload.topic)
+    sentence = await run_in_threadpool(_generate_output_prompt_sentence, row, payload.topic)
     return OutputPromptResponse(chinese_sentence=sentence)
 
 
@@ -1461,6 +2471,19 @@ async def submit_context_replay(
 
     total = len(runtime.get("questions", []))
     accuracy = round((correct / total), 4) if total else 0.0
+    record_practice_result(
+        str(current_user["id"]),
+        "vocabulary",
+        {
+            "overall": round(accuracy * 10, 2),
+            "accuracy": round(accuracy * 10, 2),
+            "vocabulary": round(accuracy * 10, 2),
+        },
+        difficulty="medium",
+        topic=str(runtime.get("topic") or "general"),
+        practice_mode=f"context_replay_{runtime.get('mode') or 'cloze'}",
+        source="vocabulary_context_replay",
+    )
     return ContextReplaySubmitResponse(total=total, correct=correct, accuracy=accuracy, details=details)
 
 
@@ -1656,6 +2679,19 @@ async def submit_vocab_test(
 
     total = len(runtime.get("questions", []))
     accuracy = round((correct / total), 4) if total else 0.0
+    record_practice_result(
+        str(current_user["id"]),
+        "vocabulary",
+        {
+            "overall": round(accuracy * 10, 2),
+            "accuracy": round(accuracy * 10, 2),
+            "vocabulary": round(accuracy * 10, 2),
+        },
+        difficulty="medium",
+        topic="general",
+        practice_mode=f"test_{runtime.get('mode') or 'unknown'}",
+        source="vocabulary_test",
+    )
     return VocabTestSubmitResponse(
         total=total,
         correct=correct,

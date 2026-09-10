@@ -32,7 +32,7 @@ const Writing = () => {
   const [aiFeedback, setAiFeedback] = useState({});
   const [task2Brainstorm, setTask2Brainstorm] = useState(null);
   const [task2Structures, setTask2Structures] = useState([]);
-  const [task2Stance, setTask2Stance] = useState('balanced');
+  const task2Stance = 'balanced';
   const [brainstorming, setBrainstorming] = useState(false);
   const [saving, setSaving] = useState(false);
   const [submitting, setSubmitting] = useState(false);
@@ -432,12 +432,6 @@ const Writing = () => {
                     <>
                       <p style={{ marginTop: 8 }}><strong>题干：</strong>{task2Question.prompt}</p>
                       <label style={{ display: 'inline-flex', alignItems: 'center', gap: 8, marginTop: 8 }}>
-                        立场
-                        <select value={task2Stance} onChange={(e) => setTask2Stance(e.target.value)}>
-                          <option value="agree">agree</option>
-                          <option value="disagree">disagree</option>
-                          <option value="balanced">balanced</option>
-                        </select>
                         <button type="button" onClick={handleTask2Brainstorm} disabled={brainstorming}>
                           {brainstorming ? '生成中...' : '生成Task2思路'}
                         </button>

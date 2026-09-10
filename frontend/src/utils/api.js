@@ -968,6 +968,43 @@ export const getDashboardOverview = async () => {
   }
 };
 
+export const getTodayLearningPlan = async (limit = 6) => {
+  try {
+    const response = await api.get('/dashboard/today-learning-plan', {
+      params: { limit },
+      headers: getAuthHeader(),
+    });
+    return response.data;
+  } catch (error) {
+    throw normalizeUiError(error, '获取今日学习安排失败');
+  }
+};
+
+export const getGrowthInsights = async (limit = 8) => {
+  try {
+    const response = await api.get('/dashboard/growth-insights', {
+      params: { limit },
+      headers: getAuthHeader(),
+    });
+    return response.data;
+  } catch (error) {
+    throw normalizeUiError(error, '获取成长洞察失败');
+  }
+};
+
+export const completeTodayLearningTask = async (taskId) => {
+  try {
+    const response = await api.post('/dashboard/today-learning-plan/complete', {
+      task_id: taskId,
+    }, {
+      headers: getAuthHeader(),
+    });
+    return response.data;
+  } catch (error) {
+    throw normalizeUiError(error, '完成智能任务失败');
+  }
+};
+
 export const getCheckinCalendar = async (month = '') => {
   try {
     const response = await api.get('/dashboard/checkin-calendar', {
@@ -1029,19 +1066,27 @@ export const createMistake = async (payload) => {
   return response.data;
 };
 
-export const reviewMistake = async (mistakeId, masteryDelta = 0.2) => {
+export const reviewMistake = async (mistakeId, masteryDelta = 0.2, quality = null) => {
+  const params = { mastery_delta: masteryDelta };
+  if (quality !== null && quality !== undefined) {
+    params.quality = quality;
+  }
   const response = await api.post(`/mistakes/${mistakeId}/review`, null, {
-    params: { mastery_delta: masteryDelta },
+    params,
     headers: getAuthHeader(),
   });
   return response.data;
 };
 
-export const batchReviewMistakes = async (mistakeIds = [], masteryDelta = 0.2) => {
-  const response = await api.post('/mistakes/review/batch', {
+export const batchReviewMistakes = async (mistakeIds = [], masteryDelta = 0.2, quality = null) => {
+  const payload = {
     mistake_ids: mistakeIds,
     mastery_delta: masteryDelta,
-  }, {
+  };
+  if (quality !== null && quality !== undefined) {
+    payload.quality = quality;
+  }
+  const response = await api.post('/mistakes/review/batch', payload, {
     headers: getAuthHeader(),
   });
   return response.data;
@@ -1273,6 +1318,175 @@ export const startTodayVocabularySession = async ({ count = 10, topic = '', diff
   return response.data;
 };
 
+export const getTodayVocabularyLearningStatus = async (dateKey = '') => {
+  try {
+    const response = await api.get('/vocabulary/learn/today/status', {
+      params: { date_key: dateKey },
+      headers: getAuthHeader(),
+    });
+    return response.data;
+  } catch (error) {
+    throw normalizeUiError(error, '获取今日学习状态失败');
+  }
+};
+
+export const setTodayVocabularyLearningStatus = async ({ dateKey = '', completed = true } = {}) => {
+  try {
+    const response = await api.post('/vocabulary/learn/today/status', {
+      date_key: dateKey,
+      completed,
+    }, {
+      headers: getAuthHeader(),
+    });
+    return response.data;
+  } catch (error) {
+    throw normalizeUiError(error, '更新今日学习状态失败');
+  }
+};
+
+export const getVocabularyWordAudio = async (word) => {
+  try {
+    const response = await api.get('/vocabulary/audio/word', {
+      params: { word },
+      headers: getAuthHeader(),
+    });
+    return response.data;
+  } catch (error) {
+    throw normalizeUiError(error, '获取单词发音失败');
+  }
+};
+
+export const startBookSession = async ({ count = 10, topic = '', difficulty = '', mode = 'auto' } = {}) => {
+  try {
+    const response = await api.post('/vocabulary/book/session', {
+      count,
+      topic,
+      difficulty,
+      mode,
+    }, {
+      headers: getAuthHeader(),
+    });
+    return response.data;
+  } catch (error) {
+    throw normalizeUiError(error, '开启词汇学习失败');
+  }
+};
+
+export const gradeBookWord = async (payload) => {
+  try {
+    const response = await api.post('/vocabulary/book/grade', payload, {
+      headers: getAuthHeader(),
+    });
+    return response.data;
+  } catch (error) {
+    throw normalizeUiError(error, '保存学习结果失败');
+  }
+};
+
+export const collectBookWord = async (payload) => {
+  try {
+    const response = await api.post('/vocabulary/book/collect', payload, {
+      headers: getAuthHeader(),
+    });
+    return response.data;
+  } catch (error) {
+    throw normalizeUiError(error, '加入词汇本失败');
+  }
+};
+
+export const uncollectBookWord = async (vocabId) => {
+  try {
+    const response = await api.delete(`/vocabulary/book/collect/${vocabId}`, {
+      headers: getAuthHeader(),
+    });
+    return response.data;
+  } catch (error) {
+    throw normalizeUiError(error, '移出词汇本失败');
+  }
+};
+
+export const markBookWordSeen = async (payload) => {
+  try {
+    const response = await api.post('/vocabulary/book/seen', payload, {
+      headers: getAuthHeader(),
+    });
+    return response.data;
+  } catch (error) {
+    throw normalizeUiError(error, '记录学习进度失败');
+  }
+};
+
+export const getBookPracticeOptions = async (word, definition = '') => {
+  try {
+    const response = await api.get('/vocabulary/book/practice/options', {
+      params: { word, definition },
+      headers: getAuthHeader(),
+    });
+    return response.data;
+  } catch (error) {
+    throw normalizeUiError(error, '获取练习选项失败');
+  }
+};
+
+export const getBookSummary = async () => {
+  try {
+    const response = await api.get('/vocabulary/book/summary', {
+      headers: getAuthHeader(),
+    });
+    return response.data;
+  } catch (error) {
+    throw normalizeUiError(error, '获取词汇本概览失败');
+  }
+};
+
+export const getBookList = async ({ source = '', status = 'all', limit = 50, offset = 0 } = {}) => {
+  try {
+    const response = await api.get('/vocabulary/book/list', {
+      params: { source, status, limit, offset },
+      headers: getAuthHeader(),
+    });
+    return response.data;
+  } catch (error) {
+    throw normalizeUiError(error, '获取词汇本列表失败');
+  }
+};
+
+export const bulkRemoveBookWords = async (vocabIds = []) => {
+  try {
+    const response = await api.post('/vocabulary/book/bulk-remove', {
+      vocab_ids: vocabIds,
+    }, {
+      headers: getAuthHeader(),
+    });
+    return response.data;
+  } catch (error) {
+    throw normalizeUiError(error, '批量移出失败');
+  }
+};
+
+export const getWordExplanation = async (word, context = '') => {
+  try {
+    const response = await api.get('/vocabulary/explain', {
+      params: { word, context },
+      headers: getAuthHeader(),
+    });
+    return response.data;
+  } catch (error) {
+    throw normalizeUiError(error, '获取单词讲解失败');
+  }
+};
+
+export const askAboutWord = async (payload) => {
+  try {
+    const response = await api.post('/vocabulary/explain/ask', payload, {
+      headers: getAuthHeader(),
+    });
+    return response.data;
+  } catch (error) {
+    throw normalizeUiError(error, '老师回答失败');
+  }
+};
+
 export const getDueVocabulary = async (limit = 100) => {
   try {
     const response = await api.get('/vocabulary/due', {
@@ -1286,9 +1500,13 @@ export const getDueVocabulary = async (limit = 100) => {
   }
 };
 
-export const reviewVocabularyWord = async (vocabId, masteryDelta = 0.15) => {
+export const reviewVocabularyWord = async (vocabId, masteryDelta = 0.15, quality = null) => {
+  const params = { mastery_delta: masteryDelta };
+  if (quality !== null && quality !== undefined) {
+    params.quality = quality;
+  }
   const response = await api.post(`/vocabulary/${vocabId}/review`, null, {
-    params: { mastery_delta: masteryDelta },
+    params,
     headers: getAuthHeader(),
   });
   return response.data;
@@ -1538,6 +1756,18 @@ export const getDifficultyRecommendation = async (module = 'translation') => {
     return response.data;
   } catch (error) {
     throw normalizeUiError(error, '获取推荐难度失败');
+  }
+};
+
+export const getGrowthRecommendations = async (limit = 5) => {
+  try {
+    const response = await api.get('/ability/growth/recommendations', {
+      params: { limit },
+      headers: getAuthHeader(),
+    });
+    return response.data;
+  } catch (error) {
+    throw normalizeUiError(error, '获取成长推荐失败');
   }
 };
 
