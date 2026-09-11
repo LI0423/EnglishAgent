@@ -4991,6 +4991,7 @@ def review_mistake(
     mistake_id: str,
     mastery_delta: float = 0.2,
     quality: Optional[int] = None,
+    user_id: Optional[str] = None,
 ) -> Optional[Dict[str, Any]]:
     from backend.services.learning_event_service import ability_keys_for_unit, record_hidden_learning_event
     from backend.services.spaced_repetition import (
@@ -5001,14 +5002,25 @@ def review_mistake(
 
     conn = get_conn()
     try:
-        cur = conn.execute(
-            """
-            SELECT *
-            FROM mistakes
-            WHERE id = ?
-            """,
-            (mistake_id,),
-        )
+        # 传入 user_id 时把归属条件写进 SQL（defense-in-depth）
+        if user_id:
+            cur = conn.execute(
+                """
+                SELECT *
+                FROM mistakes
+                WHERE id = ? AND user_id = ?
+                """,
+                (mistake_id, str(user_id)),
+            )
+        else:
+            cur = conn.execute(
+                """
+                SELECT *
+                FROM mistakes
+                WHERE id = ?
+                """,
+                (mistake_id,),
+            )
         row = cur.fetchone()
         if not row:
             return None
@@ -6048,7 +6060,8 @@ def get_vocabulary_page(
         conditions.append(mastered_sql)
         params.extend([mastery_min, interval_min])
     elif status_key == "active":
-        conditions.append(f"NOT {mastered_sql}")
+        # NULL 行按「学习中」处理，与 get_vocabulary_mastery_counts 的 ELSE 1 分支保持一致
+        conditions.append(f"(mastery_level IS NULL OR sm2_interval_days IS NULL OR NOT {mastered_sql})")
         params.extend([mastery_min, interval_min])
     where = " AND ".join(conditions)
 
@@ -6104,17 +6117,23 @@ def review_vocabulary(
     mastery_delta: float = 0.15,
     review_interval_seconds: Optional[int] = None,
     quality: Optional[int] = None,
+    user_id: Optional[str] = None,
 ) -> Optional[Dict[str, Any]]:
     from backend.services.learning_event_service import ability_keys_for_unit, record_hidden_learning_event
     from backend.services.spaced_repetition import (
         calculate_sm2_review,
+        label_for_interval_days,
         mastery_delta_from_quality,
         quality_from_mastery_delta,
     )
 
     conn = get_conn()
     try:
-        cur = conn.execute("SELECT * FROM vocabulary WHERE id = ?", (vocab_id,))
+        # 传入 user_id 时把归属条件写进 SQL（defense-in-depth，避免只依赖调用方校验）
+        if user_id:
+            cur = conn.execute("SELECT * FROM vocabulary WHERE id = ? AND user_id = ?", (vocab_id, str(user_id)))
+        else:
+            cur = conn.execute("SELECT * FROM vocabulary WHERE id = ?", (vocab_id,))
         row = cur.fetchone()
         if not row:
             return None
@@ -6136,6 +6155,12 @@ def review_vocabulary(
         if review_interval_seconds is not None:
             interval_seconds = max(15 * 60, int(review_interval_seconds))
             next_review_date = now + interval_seconds
+            # 覆盖间隔时同步 SM-2 口径，避免 sm2_interval_days 与 next_review_date
+            # 自相矛盾（「已掌握」判定用的是 sm2_interval_days）
+            overridden_days = round(interval_seconds / 86400.0, 4)
+            sm2["interval_days"] = overridden_days
+            sm2["next_review_at"] = next_review_date
+            sm2["next_review_label"] = label_for_interval_days(overridden_days)
         else:
             next_review_date = int(sm2["next_review_at"])
         conn.execute(
@@ -6322,7 +6347,15 @@ def get_vocabulary_stats(user_id: str) -> Dict[str, Any]:
         by_source = {
             row["source_module"] or "unknown": row["cnt"]
             for row in conn.execute(
-                "SELECT source_module, COUNT(*) AS cnt FROM vocabulary WHERE user_id = ? GROUP BY source_module",
+                # 与 get_vocabulary_page 的过滤口径保持一致：空白/NULL 都归到 'unknown'，
+                # 否则会出现一个点进去计数对不上的分组
+                """
+                SELECT COALESCE(NULLIF(TRIM(source_module), ''), 'unknown') AS source_module,
+                       COUNT(*) AS cnt
+                FROM vocabulary
+                WHERE user_id = ?
+                GROUP BY source_module
+                """,
                 (user_id,),
             ).fetchall()
         }

@@ -49,16 +49,3 @@ CREATE TABLE IF NOT EXISTS user_ability_growth (
 
 CREATE INDEX IF NOT EXISTS idx_user_ability_growth_user_risk
 ON user_ability_growth(user_id, risk_level, updated_at DESC);
-
-CREATE TABLE IF NOT EXISTS daily_learning_recommendations (
-  id TEXT PRIMARY KEY,
-  user_id TEXT NOT NULL,
-  title TEXT NOT NULL,
-  reason TEXT DEFAULT '',
-  tasks TEXT DEFAULT '[]',
-  generated_at INTEGER NOT NULL,
-  expires_at INTEGER
-);
-
-CREATE INDEX IF NOT EXISTS idx_daily_learning_recommendations_user_time
-ON daily_learning_recommendations(user_id, generated_at DESC);

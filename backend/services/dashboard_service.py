@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import time
 from typing import Any, Dict, List
 from uuid import uuid4
@@ -24,6 +25,9 @@ from backend.services.growth_recommendation_service import get_growth_recommenda
 from backend.redis_client import get_timed_state
 
 
+logger = logging.getLogger(__name__)
+
+
 MODULE_META = {
     "listening": {"label": "听力练习", "target": 3},
     "reading": {"label": "阅读练习", "target": 3},
@@ -44,7 +48,18 @@ def get_dashboard_overview(user_id: str, username: str = "") -> Dict[str, Any]:
     events = _get_learning_events(user_id, week_start, now)
     activities = _get_user_activities(user_id, week_start, now)
     vocabulary = _build_vocabulary_summary(user_id, week_start)
-    growth = _build_growth_summary(user_id)
+    # 成长引擎是新增模块：未迁移的库或瞬时锁冲突不应打挂整个首页，失败时降级为空态。
+    try:
+        growth = _build_growth_summary(user_id)
+    except Exception:
+        logger.warning("growth summary failed for %s", user_id, exc_info=True)
+        growth = {
+            "tracked_skills": 0,
+            "average_mastery": 0,
+            "due_review_count": 0,
+            "weak_skills": [],
+            "strong_skills": [],
+        }
     latest_report = _latest_diagnostic_report(user_id)
 
     modules = _build_module_cards(events, activities, today_start)
@@ -52,7 +67,11 @@ def get_dashboard_overview(user_id: str, username: str = "") -> Dict[str, Any]:
     total_completion = _total_completion(plan_health, events, activities)
     current_band = _current_band(profile, latest_report)
     target_band = _to_float(profile.get("target_band")) or 6.5
-    growth_recommendations = get_growth_recommendations(user_id, limit=5)
+    try:
+        growth_recommendations = get_growth_recommendations(user_id, limit=5)
+    except Exception:
+        logger.warning("growth recommendations failed for %s", user_id, exc_info=True)
+        growth_recommendations = []
 
     return {
         "summary": {

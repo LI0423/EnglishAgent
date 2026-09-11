@@ -62,35 +62,30 @@ def _as_text(value) -> Optional[str]:
     return str(value)
 
 
-def save_token(user_id: str, token: str, ttl: int = 3600) -> None:
+def _run_redis(operation, fallback):
+    """执行一次 Redis 操作；失败时丢弃失效客户端并回退到进程内存储。
+
+    只在启动瞬间降级是不够的：Redis 重启后旧 client 仍在，`_get_redis()` 会一直返回它，
+    鉴权与打卡日历都会 500。这里每次调用都兜底，并在异常时置空以触发下次重连。
+    """
+    global _redis
     client = _get_redis()
-    if client is not None:
-        client.setex(f"auth:token:{token}", ttl, user_id)
-    else:
-        _memory_store[token] = (user_id, ttl)
+    if client is None:
+        return fallback()
+    try:
+        return operation(client)
+    except Exception:
+        with _redis_lock:
+            _redis = None
+        return fallback()
 
 
-def get_user_by_token(token: str) -> Optional[str]:
-    client = _get_redis()
-    if client is not None:
-        return _as_text(client.get(f"auth:token:{token}"))
-    tup = _memory_store.get(token)
-    return tup[0] if tup else None
+def _memory_token(token: str) -> Optional[str]:
+    entry = _memory_store.get(token)
+    return entry[0] if entry else None
 
 
-def set_timed_state(key: str, value: str, ttl: int) -> None:
-    safe_ttl = max(1, int(ttl or 1))
-    client = _get_redis()
-    if client is not None:
-        client.setex(key, safe_ttl, value)
-        return
-    _timed_memory_store[key] = (value, time.time() + safe_ttl)
-
-
-def get_timed_state(key: str) -> Optional[str]:
-    client = _get_redis()
-    if client is not None:
-        return _as_text(client.get(key))
+def _memory_timed_value(key: str) -> Optional[str]:
     item = _timed_memory_store.get(key)
     if not item:
         return None
@@ -101,9 +96,38 @@ def get_timed_state(key: str) -> Optional[str]:
     return str(value)
 
 
+def save_token(user_id: str, token: str, ttl: int = 3600) -> None:
+    def fallback():
+        _memory_store[token] = (user_id, ttl)
+
+    _run_redis(lambda client: client.setex(f"auth:token:{token}", ttl, user_id), fallback)
+
+
+def get_user_by_token(token: str) -> Optional[str]:
+    return _run_redis(
+        lambda client: _as_text(client.get(f"auth:token:{token}")),
+        lambda: _memory_token(token),
+    )
+
+
+def set_timed_state(key: str, value: str, ttl: int) -> None:
+    safe_ttl = max(1, int(ttl or 1))
+
+    def fallback():
+        _timed_memory_store[key] = (value, time.time() + safe_ttl)
+
+    _run_redis(lambda client: client.setex(key, safe_ttl, value), fallback)
+
+
+def get_timed_state(key: str) -> Optional[str]:
+    return _run_redis(
+        lambda client: _as_text(client.get(key)),
+        lambda: _memory_timed_value(key),
+    )
+
+
 def clear_timed_state(key: str) -> None:
-    client = _get_redis()
-    if client is not None:
-        client.delete(key)
-        return
-    _timed_memory_store.pop(key, None)
+    def fallback():
+        _timed_memory_store.pop(key, None)
+
+    _run_redis(lambda client: client.delete(key), fallback)

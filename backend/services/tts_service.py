@@ -1,4 +1,5 @@
 import hashlib
+import logging
 import math
 import os
 import re
@@ -7,6 +8,9 @@ import wave
 from pathlib import Path
 from typing import Any, Dict, Optional
 from urllib.parse import urlparse
+
+
+logger = logging.getLogger(__name__)
 
 
 _DASHSCOPE_MIME_TYPES = {
@@ -43,6 +47,7 @@ class LocalTTSService:
         self.default_lang = os.environ.get("LOCAL_TTS_DEFAULT_LANG", "en")
         self.default_voice = os.environ.get("LOCAL_TTS_DEFAULT_VOICE", "M1")
         self._lock = threading.Lock()
+        self._minio_lock = threading.Lock()
         self._supertonic = None
         self._dashscope_available = False
         self._dashscope_api_key = (
@@ -118,14 +123,20 @@ class LocalTTSService:
             )
             if not self._minio.bucket_exists(self._minio_bucket):
                 self._minio.make_bucket(self._minio_bucket)
-        except Exception:
+        except Exception as exc:
+            # 不再静默吞掉：MinIO 不可用会退化为本地存储，需要能在日志里看到原因
+            logger.warning("MinIO unavailable, falling back to local storage: %s", exc)
             self._minio = None
 
     def _ensure_minio(self) -> None:
-        """首次真正需要 MinIO 时才做网络探测（双重检查加锁，只尝试一次）。"""
+        """首次真正需要 MinIO 时才做网络探测（只尝试一次）。
+
+        用独立的 `_minio_lock`，避免与 `synthesize()` 的 `self._lock` 争用：
+        否则首次网络探测期间所有 TTS 请求都会被串行化。
+        """
         if self._minio_loaded:
             return
-        with self._lock:
+        with self._minio_lock:
             if self._minio_loaded:
                 return
             self._minio_loaded = True
@@ -143,6 +154,10 @@ class LocalTTSService:
             "dashscope_voice": self._dashscope_voice if self._dashscope_available else "",
             "dashscope_format": self._dashscope_format if self._dashscope_available else "",
             "minio_enabled": self._minio is not None,
+            "minio_loaded": self._minio_loaded,
+            "minio_configured": bool(self._minio_bucket) and bool(
+                os.environ.get("MINIO_ENDPOINT") or os.environ.get("MINIO_URL")
+            ),
             "minio_bucket": self._minio_bucket if self._minio is not None else "",
         }
 
@@ -216,12 +231,21 @@ class LocalTTSService:
         path.write_bytes(audio_bytes)
         return self._estimate_audio_duration(audio_bytes)
 
-    def _estimate_audio_duration(self, audio_bytes: bytes) -> float:
-        """按音频字节数与格式码率估算时长，避免 duration 恒为 0。"""
+    def _estimate_duration_from_size(self, size: int) -> float:
+        """按音频字节数与格式码率估算时长，避免 duration 为 0/None。"""
         bytes_per_second = _DASHSCOPE_BYTES_PER_SECOND.get(self._audio_extension(), 32000.0)
         try:
-            return round(len(audio_bytes) / bytes_per_second, 3)
+            return round(max(0, int(size)) / bytes_per_second, 3)
         except Exception:
+            return 0.0
+
+    def _estimate_audio_duration(self, audio_bytes: bytes) -> float:
+        return self._estimate_duration_from_size(len(audio_bytes))
+
+    def _cached_file_duration(self, path: Path) -> float:
+        try:
+            return self._estimate_duration_from_size(path.stat().st_size)
+        except OSError:
             return 0.0
 
     def _write_fallback_wave(self, path: Path, text: str, speed: float) -> float:
@@ -278,6 +302,7 @@ class LocalTTSService:
                 "audio_path": str(path),
                 "cached": True,
                 "backend": self._backend,
+                "duration": self._cached_file_duration(path),
             }
 
         with self._lock:
@@ -287,6 +312,7 @@ class LocalTTSService:
                     "audio_path": str(path),
                     "cached": True,
                     "backend": self._backend,
+                    "duration": self._cached_file_duration(path),
                 }
             duration = 0.0
             if self._dashscope_available:

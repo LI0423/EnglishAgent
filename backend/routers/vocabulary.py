@@ -238,7 +238,6 @@ class BookStudyWordItem(BaseModel):
 
 
 class BookSessionResponse(BaseModel):
-    session_id: str
     mode: str
     due_count: int = 0
     new_count: int = 0
@@ -247,7 +246,9 @@ class BookSessionResponse(BaseModel):
 
 class BookGradeRequest(BaseModel):
     rating: str = "fuzzy"  # forgot | fuzzy | familiar
-    # None → 按 rating 决定默认是否入本；True/False → 用户显式覆盖
+    # 是否入本。None → 按 rating 决定默认（不认识/模糊默认入本、认识默认不入）；
+    # True/False → 用户显式覆盖。注意：只对「尚未入本」的词生效，
+    # 已在本中的词不会因 collect=False 被移出（移出请用 DELETE /book/collect/{id}）。
     collect: Optional[bool] = None
     # 深度练习结果（不认识→再认 / 模糊→拼写）；None 表示未做练习
     practice_correct: Optional[bool] = None
@@ -1755,7 +1756,6 @@ def start_book_session(payload: BookSessionRequest, current_user: dict = Depends
 
     selected = words[:count]
     return BookSessionResponse(
-        session_id=str(uuid4()),
         mode=mode,
         due_count=due_count,
         new_count=sum(1 for item in selected if not item.in_book),
@@ -1803,7 +1803,7 @@ def grade_book_word(payload: BookGradeRequest, current_user: dict = Depends(get_
         return BookGradeResponse(in_book=False, collected=False, skipped=True)
 
     before_mastery = float(target.get("mastery_level") or 0.0)
-    reviewed = review_vocabulary(str(target["id"]), quality=quality)
+    reviewed = review_vocabulary(str(target["id"]), quality=quality, user_id=user_id)
     if not reviewed:
         raise HTTPException(status_code=500, detail="Failed to review vocabulary")
     return BookGradeResponse(
@@ -2075,7 +2075,7 @@ def mark_word_reviewed(
         raise HTTPException(status_code=404, detail="Vocabulary not found")
     if str(row["user_id"]) != str(current_user["id"]):
         raise HTTPException(status_code=403, detail="Access denied")
-    reviewed = review_vocabulary(vocab_id, mastery_delta, quality=quality)
+    reviewed = review_vocabulary(vocab_id, mastery_delta, quality=quality, user_id=str(current_user["id"]))
     if not reviewed:
         raise HTTPException(status_code=500, detail="Failed to review vocabulary")
     return WordReviewResponse(
@@ -2101,6 +2101,7 @@ async def submit_learning_attempt(
         payload.vocab_id,
         scoring["mastery_delta"],
         quality=scoring["sm2_quality"],
+        user_id=str(current_user["id"]),
     )
     if not reviewed:
         raise HTTPException(status_code=500, detail="Failed to review vocabulary")
@@ -2438,9 +2439,9 @@ def submit_context_replay(
         is_correct = user_answer == expected
         if is_correct:
             correct += 1
-            review_vocabulary(str(q.get("word_id")), 0.12)
+            review_vocabulary(str(q.get("word_id")), 0.12, user_id=str(current_user["id"]))
         else:
-            review_vocabulary(str(q.get("word_id")), -0.08)
+            review_vocabulary(str(q.get("word_id")), -0.08, user_id=str(current_user["id"]))
             word_tag = f"word_id:{str(q.get('word_id') or '').strip()}"
             save_mistake(
                 str(uuid4()),

@@ -330,7 +330,7 @@ async def mark_reviewed(
         raise HTTPException(status_code=404, detail="Mistake not found")
     if mistake["user_id"] != current_user["id"]:
         raise HTTPException(status_code=403, detail="Access denied")
-    reviewed = review_mistake(mistake_id, mastery_delta, quality=quality)
+    reviewed = review_mistake(mistake_id, mastery_delta, quality=quality, user_id=str(current_user["id"]))
     if not reviewed:
         raise HTTPException(status_code=500, detail="Failed to review mistake")
     return ReviewResponse(
@@ -359,7 +359,12 @@ async def batch_review(
             skipped += 1
             failed_ids.append(mistake_id)
             continue
-        result = review_mistake(mistake_id, payload.mastery_delta, quality=payload.quality)
+        result = review_mistake(
+            mistake_id,
+            payload.mastery_delta,
+            quality=payload.quality,
+            user_id=str(current_user["id"]),
+        )
         if result:
             reviewed += 1
         else:
