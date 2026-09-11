@@ -119,16 +119,36 @@ function WordExplainPanel({ word, context = '', inBook = false, onClose, onColle
     }
   }, [collecting, collected, word, facts, context, onCollected])
 
+  const closeRef = useRef(null)
+
+  // 打开面板时把焦点移入，关闭后归还给原元素（键盘/读屏用户不会丢焦点）
+  useEffect(() => {
+    const previous = typeof document !== 'undefined' ? document.activeElement : null
+    closeRef.current?.focus()
+    return () => {
+      if (previous && typeof previous.focus === 'function') previous.focus()
+    }
+  }, [])
+
+  // Esc 关闭
+  useEffect(() => {
+    const onKeyDown = (event) => {
+      if (event.key === 'Escape') onClose()
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [onClose])
+
   return (
     <>
       <div className="wp-overlay" onClick={onClose} />
-      <aside className="wp-panel" role="dialog" aria-label={`${word} 的讲解`}>
+      <aside className="wp-panel" role="dialog" aria-modal="true" aria-label={`${word} 的讲解`}>
         <div className="wp-head">
           <div>
             <div className="wp-word">{facts?.word || word}</div>
             {facts?.pronunciation && <div className="wp-phonetic">/{facts.pronunciation}/</div>}
           </div>
-          <button className="wp-close" type="button" onClick={onClose}>关闭</button>
+          <button ref={closeRef} className="wp-close" type="button" onClick={onClose}>关闭</button>
         </div>
 
         <div className="wp-body" ref={bodyRef}>

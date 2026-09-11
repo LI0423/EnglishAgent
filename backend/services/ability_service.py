@@ -19,6 +19,7 @@ from backend.db import (
     update_user_skill_state,
     update_task_progress,
 )
+from backend.utils.time_utils import day_start_ts
 
 
 logger = logging.getLogger(__name__)
@@ -179,8 +180,7 @@ def _mark_daily_plan_task(user_id: str, module: str, now: int) -> None:
 
 
 def _day_start(ts: int) -> int:
-    local = time.localtime(ts)
-    return int(time.mktime((local.tm_year, local.tm_mon, local.tm_mday, 0, 0, 0, local.tm_wday, local.tm_yday, local.tm_isdst)))
+    return day_start_ts(ts)
 
 
 def get_difficulty_recommendation(user_id: str, module: str = "translation") -> Dict[str, Any]:

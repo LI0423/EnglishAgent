@@ -381,3 +381,18 @@
   .vs-spell-form { flex-direction: column; }
   .vs-spell-input { max-width: none; }
 }
+
+/* 键盘可见焦点：卡片本身是 role="button"，默认 outline 在浅色背景上很弱 */
+.vs-card.is-front:focus-visible,
+.vs-card [role='button']:focus-visible,
+.vs-btn:focus-visible,
+.vs-btn-primary:focus-visible {
+  outline: 3px solid rgba(59, 130, 246, 0.55);
+  outline-offset: 2px;
+}
+
+.vs-hint {
+  margin: 0 0 8px;
+  color: #6b7280;
+  font-size: 13px;
+}

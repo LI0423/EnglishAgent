@@ -11,9 +11,9 @@ import {
 } from '../utils/api'
 import WordSelectionPopover from '../components/vocab/WordSelectionPopover'
 import WordExplainPanel from '../components/vocab/WordExplainPanel'
+import { toAudioSrc } from '../utils/media'
 import './VocabularyStudy.css'
 
-const API_BASE = String(import.meta.env.VITE_API_URL || 'http://127.0.0.1:8000').replace(/\/+$/, '')
 const AUTO_ADVANCE_MS = 1200
 const PRACTICE_MAX_PER_BATCH = 3
 const PRACTICE_FORGOT_MAX = 2 // 为「模糊」预留最后一个练习额度
@@ -23,13 +23,6 @@ const RATING_OPTIONS = [
   { rating: 'fuzzy', label: '模糊', hint: '有印象但说不准', tone: 'warn' },
   { rating: 'familiar', label: '认识', hint: '能准确说出意思', tone: 'ok' },
 ]
-
-const toAudioSrc = (url) => {
-  const raw = String(url || '').trim()
-  if (!raw) return ''
-  if (raw.startsWith('http://') || raw.startsWith('https://')) return raw
-  return raw.startsWith('/') ? `${API_BASE}${raw}` : `${API_BASE}/${raw}`
-}
 
 function VocabularyStudy() {
   const navigate = useNavigate()

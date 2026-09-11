@@ -10,7 +10,6 @@ import {
   getContextReplayRetryQueue,
   getDueVocabulary,
   getTodayVocabularyLearningStatus,
-  getVocabularyBankSummary,
   getVocabularyList,
   getVocabularyScenarios,
   getVocabularyStrategyInsights,
@@ -27,9 +26,9 @@ import {
   submitVocabularyTest,
 } from '../utils/api';
 import { MetricCard, MetricGrid } from '../components/layout/DesktopUI';
+import { toAudioSrc } from '../utils/media';
 
 import TopNav from "../components/layout/TopNav";
-const API_BASE = String(import.meta.env.VITE_API_URL || 'http://127.0.0.1:8000').replace(/\/+$/, '');
 const emptyWord = {
   word: '',
   definition: '',
@@ -417,14 +416,6 @@ const renderAnnotatedSentence = (sentence, feedback) => {
 
 let activeVocabularyAudio = null;
 
-const toAudioSrc = (url) => {
-  const raw = String(url || '').trim();
-  if (!raw) return '';
-  if (raw.startsWith('http://') || raw.startsWith('https://')) return raw;
-  if (raw.startsWith('/')) return `${API_BASE}${raw}`;
-  return `${API_BASE}/${raw}`;
-};
-
 const playWordAudio = async (word) => {
   const text = String(word || '').trim();
   if (!text || typeof window === 'undefined') return null;
@@ -600,7 +591,6 @@ function Vocabulary() {
   const [listSourceModule, setListSourceModule] = useState('');
   const [listModuleTag, setListModuleTag] = useState('');
   const [listTopicTag, setListTopicTag] = useState('');
-  const [bankSummary, setBankSummary] = useState({ total: 0, difficulties: [], topics: [] });
 
   const [contextMode, setContextMode] = useState('cloze');
   const [contextCount, setContextCount] = useState(5);
@@ -775,15 +765,6 @@ function Vocabulary() {
     }
   };
 
-  const loadBankSummary = async () => {
-    try {
-      const data = await getVocabularyBankSummary();
-      setBankSummary(data || { total: 0, difficulties: [], topics: [] });
-    } catch {
-      setBankSummary({ total: 0, difficulties: [], topics: [] });
-    }
-  };
-
   const loadContextRetryQueue = async () => {
     try {
       const rows = await getContextReplayRetryQueue(50);
@@ -796,10 +777,6 @@ function Vocabulary() {
   useEffect(() => {
     loadScenarios();
   }, [scenarioModule, scenarioTopic]);
-
-  useEffect(() => {
-    loadBankSummary();
-  }, []);
 
   useEffect(() => {
     let cancelled = false;

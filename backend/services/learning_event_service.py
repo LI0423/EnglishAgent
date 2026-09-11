@@ -8,6 +8,7 @@ from uuid import uuid4
 from backend import db
 from backend.redis_client import get_timed_state
 from backend.services.spaced_repetition import calculate_sm2_review, outcome_from_quality
+from backend.utils.time_utils import day_start_ts
 
 
 ABILITY_LABELS = {
@@ -556,7 +557,7 @@ def _due_memory_items(user_id: str, now: int, limit: int = 20) -> List[Dict[str,
 
 
 def _completed_today_task_ids(user_id: str, now: int) -> set[str]:
-    day_start = int(time.mktime(time.localtime(now)[:3] + (0, 0, 0) + time.localtime(now)[6:]))
+    day_start = day_start_ts(now)
     today_key = time.strftime("%Y-%m-%d", time.localtime(now))
     conn = db.get_conn()
     try:

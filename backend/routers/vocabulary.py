@@ -798,6 +798,9 @@ def _normalize_word_token(token: str) -> str:
 # 音频本身由 tts_service 按内容哈希落盘缓存，重复单词不会重复合成。
 _RATE_LOCK = threading.Lock()
 _RATE_BUCKETS: Dict[str, List[float]] = {}
+_RATE_CLEANUP_INTERVAL = 60.0
+_RATE_MAX_KEYS = 5000
+_rate_last_cleanup = 0.0
 _TTS_RATE_LIMIT = max(1, int(os.environ.get("VOCABULARY_AUDIO_RATE_LIMIT", "60") or 60))
 _TTS_RATE_WINDOW = max(1, int(os.environ.get("VOCABULARY_AUDIO_RATE_WINDOW_SECONDS", "60") or 60))
 _LLM_RATE_LIMIT = max(1, int(os.environ.get("VOCABULARY_LLM_RATE_LIMIT", "30") or 30))
@@ -805,22 +808,30 @@ _LLM_RATE_WINDOW = max(1, int(os.environ.get("VOCABULARY_LLM_RATE_WINDOW_SECONDS
 
 
 def _allow_rate_request(user_id: str, scope: str, limit: int, window: int) -> bool:
+    global _rate_last_cleanup
     now = time.time()
     safe_limit = max(1, int(limit or 1))
     safe_window = max(1, int(window or 1))
     key = f"{scope}:{str(user_id or 'anonymous')}"
     with _RATE_LOCK:
         bucket = [t for t in _RATE_BUCKETS.get(key, []) if now - t < safe_window]
-        if len(bucket) >= safe_limit:
-            _RATE_BUCKETS[key] = bucket
-            return False
-        bucket.append(now)
+        allowed = len(bucket) < safe_limit
+        if allowed:
+            bucket.append(now)
         _RATE_BUCKETS[key] = bucket
-        if len(_RATE_BUCKETS) > 5000:
-            # 防止长期运行下 key 无界增长：清理已过期的用户桶。
-            for stale in [k for k, v in _RATE_BUCKETS.items() if not v or now - v[-1] > safe_window]:
+
+        # 定期清理过期桶（旧实现只在 key>5000 时清理，且只清"刚过期"的，仍可无界增长）
+        if now - _rate_last_cleanup >= _RATE_CLEANUP_INTERVAL:
+            _rate_last_cleanup = now
+            ttl = max(safe_window, _RATE_CLEANUP_INTERVAL) * 5
+            for stale in [k for k, v in _RATE_BUCKETS.items() if not v or now - v[-1] > ttl]:
                 _RATE_BUCKETS.pop(stale, None)
-        return True
+        # 硬性上界：仍超限时按最后活跃时间淘汰最旧的一半
+        if len(_RATE_BUCKETS) > _RATE_MAX_KEYS:
+            ordered = sorted(_RATE_BUCKETS.items(), key=lambda kv: kv[1][-1] if kv[1] else 0.0)
+            for stale_key, _ in ordered[: len(ordered) // 2]:
+                _RATE_BUCKETS.pop(stale_key, None)
+        return allowed
 
 
 def _allow_tts_request(user_id: str) -> bool:

@@ -23,6 +23,7 @@ from backend.db import (
 )
 from backend.services.growth_recommendation_service import get_growth_recommendations
 from backend.redis_client import get_timed_state
+from backend.utils.time_utils import day_start_ts
 
 
 logger = logging.getLogger(__name__)
@@ -796,8 +797,7 @@ def _today_vocabulary_learning_completed(user_id: str, date_key: str) -> bool:
 
 
 def _day_start(ts: int) -> int:
-    local = time.localtime(ts)
-    return int(time.mktime((local.tm_year, local.tm_mon, local.tm_mday, 0, 0, 0, local.tm_wday, local.tm_yday, local.tm_isdst)))
+    return day_start_ts(ts)
 
 
 def _normalize_module(value: Any) -> str:

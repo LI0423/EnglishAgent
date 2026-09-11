@@ -182,3 +182,11 @@
 @media (max-width: 560px) {
   .wp-panel { width: 100%; }
 }
+
+/* 面板关闭按钮与浮层按钮的键盘焦点 */
+.wp-close:focus-visible,
+.wp-btn:focus-visible,
+.wsp-btn:focus-visible {
+  outline: 3px solid rgba(59, 130, 246, 0.55);
+  outline-offset: 2px;
+}
