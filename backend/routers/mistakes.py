@@ -378,12 +378,12 @@ async def batch_review(
 
 
 @router.get("/stats/summary")
-async def summary(current_user: dict = Depends(get_current_user)):
+def summary(current_user: dict = Depends(get_current_user)):
     return get_mistake_stats(current_user["id"])
 
 
 @router.get("/analysis", response_model=MistakeAnalysisResponse)
-async def analysis(current_user: dict = Depends(get_current_user)):
+def analysis(current_user: dict = Depends(get_current_user)):
     return MistakeAnalysisResponse(**get_mistake_analysis(current_user["id"]))
 
 

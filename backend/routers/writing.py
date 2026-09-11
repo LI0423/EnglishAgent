@@ -372,7 +372,7 @@ def check_basic_grammar(text: str) -> tuple[List[Dict[str, Any]], int]:
     return errors, grammar_score
 
 @router.post("/task1/analyze", response_model=Task1Analysis)
-async def analyze_task1_writing(req: Task1WritingRequest, current_user: dict = Depends(get_current_user)):
+def analyze_task1_writing(req: Task1WritingRequest, current_user: dict = Depends(get_current_user)):
     """分析Task 1 (Academic)写作内容"""
     if not req.text:
         raise HTTPException(status_code=400, detail="写作内容不能为空")
@@ -534,7 +534,7 @@ async def analyze_task1_writing(req: Task1WritingRequest, current_user: dict = D
 
 
 @router.post("/task2/analyze", response_model=Task1Analysis)
-async def analyze_task2_writing(req: Task2WritingRequest, current_user: dict = Depends(get_current_user)):
+def analyze_task2_writing(req: Task2WritingRequest, current_user: dict = Depends(get_current_user)):
     """分析Task 2写作内容（独立链路）"""
     if not req.text:
         raise HTTPException(status_code=400, detail="写作内容不能为空")
@@ -769,7 +769,7 @@ async def analyze_task2_writing(req: Task2WritingRequest, current_user: dict = D
     )
 
 @router.post("/task1/practice")
-async def save_task1_practice(req: Task1WritingRequest, current_user: dict = Depends(get_current_user)):
+def save_task1_practice(req: Task1WritingRequest, current_user: dict = Depends(get_current_user)):
     """保存Task 1 写作练习"""
     # 采集学习数据
     learning_tracker = get_learning_tracker()
@@ -813,7 +813,7 @@ async def save_task1_practice(req: Task1WritingRequest, current_user: dict = Dep
 
 
 @router.post("/task2/practice")
-async def save_task2_practice(req: Task2WritingRequest, current_user: dict = Depends(get_current_user)):
+def save_task2_practice(req: Task2WritingRequest, current_user: dict = Depends(get_current_user)):
     """保存Task 2 写作练习"""
     learning_tracker = get_learning_tracker()
     exercise_data = {
@@ -848,7 +848,7 @@ async def save_task2_practice(req: Task2WritingRequest, current_user: dict = Dep
     }
 
 @router.get("/task1/practices")
-async def get_task1_practices(page: int = 1, limit: int = 10, current_user: dict = Depends(get_current_user)):
+def get_task1_practices(page: int = 1, limit: int = 10, current_user: dict = Depends(get_current_user)):
     """获取Task 1 写作练习历史"""
     # 采集学习数据
     learning_tracker = get_learning_tracker()
@@ -869,7 +869,7 @@ async def get_task1_practices(page: int = 1, limit: int = 10, current_user: dict
     }
 
 @router.get("/task1/common-structures")
-async def get_common_task1_structures(chart_type: Optional[str] = None, current_user: dict = Depends(get_current_user)):
+def get_common_task1_structures(chart_type: Optional[str] = None, current_user: dict = Depends(get_current_user)):
     """获取Task 1 常用写作结构"""
     # 采集学习数据
     learning_tracker = get_learning_tracker()
@@ -890,7 +890,7 @@ async def get_common_task1_structures(chart_type: Optional[str] = None, current_
     }
 
 @router.get("/task1/common-vocabulary")
-async def get_common_task1_vocabulary(category: Optional[str] = None, current_user: dict = Depends(get_current_user)):
+def get_common_task1_vocabulary(category: Optional[str] = None, current_user: dict = Depends(get_current_user)):
     """获取Task 1 常用词汇"""
     # 采集学习数据
     learning_tracker = get_learning_tracker()
@@ -911,7 +911,7 @@ async def get_common_task1_vocabulary(category: Optional[str] = None, current_us
 
 
 @router.get("/task2/common-structures")
-async def get_common_task2_structures(current_user: dict = Depends(get_current_user)):
+def get_common_task2_structures(current_user: dict = Depends(get_current_user)):
     learning_tracker = get_learning_tracker()
     learning_tracker.track_feature_usage(
         current_user["id"],
@@ -922,7 +922,7 @@ async def get_common_task2_structures(current_user: dict = Depends(get_current_u
 
 
 @router.post("/task2/brainstorm", response_model=Task2BrainstormResponse)
-async def brainstorm_task2(req: Task2BrainstormRequest, current_user: dict = Depends(get_current_user)):
+def brainstorm_task2(req: Task2BrainstormRequest, current_user: dict = Depends(get_current_user)):
     topic = str(req.topic or "").strip() or "Task 2 Topic"
     keywords = [str(x).strip() for x in (req.keywords or []) if str(x).strip()]
     kw_text = ", ".join(keywords[:4]) if keywords else "cost, fairness, long-term impact"
@@ -1087,7 +1087,7 @@ class PeerLeaderboardItem(BaseModel):
 
 
 @router.post("/peer/submit", response_model=PeerSubmissionCreateResponse)
-async def submit_peer_writing(req: PeerSubmissionCreateRequest, current_user: dict = Depends(get_current_user)):
+def submit_peer_writing(req: PeerSubmissionCreateRequest, current_user: dict = Depends(get_current_user)):
     submission_id = str(uuid4())
     create_writing_submission(
         submission_id=submission_id,
@@ -1104,7 +1104,7 @@ async def submit_peer_writing(req: PeerSubmissionCreateRequest, current_user: di
 
 
 @router.get("/peer/submissions", response_model=List[PeerSubmissionItem])
-async def get_my_peer_submissions(limit: int = 20, current_user: dict = Depends(get_current_user)):
+def get_my_peer_submissions(limit: int = 20, current_user: dict = Depends(get_current_user)):
     rows = list_user_writing_submissions(user_id=str(current_user["id"]), limit=limit)
     return [
         PeerSubmissionItem(
@@ -1123,7 +1123,7 @@ async def get_my_peer_submissions(limit: int = 20, current_user: dict = Depends(
 
 
 @router.post("/peer/claim", response_model=PeerReviewClaimResponse)
-async def claim_peer_submission(current_user: dict = Depends(get_current_user)):
+def claim_peer_submission(current_user: dict = Depends(get_current_user)):
     row = claim_writing_submission_for_review(reviewer_id=str(current_user["id"]))
     if not row:
         return PeerReviewClaimResponse(claimed=False, submission=None, message="当前没有可领取的互评作文。")
@@ -1142,7 +1142,7 @@ async def claim_peer_submission(current_user: dict = Depends(get_current_user)):
 
 
 @router.post("/peer/review", response_model=PeerReviewSubmitResponse)
-async def submit_peer_review(req: PeerReviewSubmitRequest, current_user: dict = Depends(get_current_user)):
+def submit_peer_review(req: PeerReviewSubmitRequest, current_user: dict = Depends(get_current_user)):
     submission = get_writing_submission(req.submission_id)
     if not submission:
         raise HTTPException(status_code=404, detail="Submission not found")
@@ -1200,7 +1200,7 @@ async def submit_peer_review(req: PeerReviewSubmitRequest, current_user: dict = 
 
 
 @router.post("/peer/review/assist", response_model=PeerReviewAssistResponse)
-async def get_peer_review_ai_assist(req: PeerReviewAssistRequest, current_user: dict = Depends(get_current_user)):
+def get_peer_review_ai_assist(req: PeerReviewAssistRequest, current_user: dict = Depends(get_current_user)):
     text = str(req.content or "").strip()
     task_type = req.task_type
     if req.submission_id:
@@ -1237,7 +1237,7 @@ async def get_peer_review_ai_assist(req: PeerReviewAssistRequest, current_user: 
 
 
 @router.get("/peer/stats", response_model=PeerStatsResponse)
-async def get_peer_stats(current_user: dict = Depends(get_current_user)):
+def get_peer_stats(current_user: dict = Depends(get_current_user)):
     stats = get_writing_peer_stats(user_id=str(current_user["id"]))
     points = int(stats.get("total_points") or 0)
     reviews = int(stats.get("total_reviews_written") or 0)
@@ -1283,7 +1283,7 @@ async def get_peer_stats(current_user: dict = Depends(get_current_user)):
 
 
 @router.get("/peer/leaderboard", response_model=List[PeerLeaderboardItem])
-async def get_peer_leaderboard(limit: int = 10, current_user: dict = Depends(get_current_user)):
+def get_peer_leaderboard(limit: int = 10, current_user: dict = Depends(get_current_user)):
     rows = list_writing_peer_leaderboard(limit=max(1, min(50, int(limit))))
     items: list[PeerLeaderboardItem] = []
     for idx, row in enumerate(rows):
@@ -1305,7 +1305,7 @@ async def get_peer_leaderboard(limit: int = 10, current_user: dict = Depends(get
 
 
 @router.get("/peer/reviews/received", response_model=List[PeerReviewItem])
-async def get_received_peer_reviews(submission_id: Optional[str] = None, limit: int = 30, current_user: dict = Depends(get_current_user)):
+def get_received_peer_reviews(submission_id: Optional[str] = None, limit: int = 30, current_user: dict = Depends(get_current_user)):
     if submission_id:
         submission = get_writing_submission(submission_id)
         if not submission or str(submission.get("user_id")) != str(current_user["id"]):

@@ -16,7 +16,7 @@ class SmartTaskCompleteRequest(BaseModel):
 
 
 @router.get("/overview")
-async def overview(current_user: dict = Depends(get_current_user)) -> Dict[str, Any]:
+def overview(current_user: dict = Depends(get_current_user)) -> Dict[str, Any]:
     return get_dashboard_overview(
         user_id=str(current_user["id"]),
         username=str(current_user.get("username") or ""),

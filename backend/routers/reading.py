@@ -343,7 +343,7 @@ _load_reading_question_bank()
 
 
 @router.get("/quiz/version", response_model=QuizVersionResponse)
-async def get_reading_quiz_version(current_user: dict = Depends(get_current_user)):
+def get_reading_quiz_version(current_user: dict = Depends(get_current_user)):
     source = "file" if READING_QUESTION_BANK_VERSION != "builtin-fallback" else "builtin"
     return QuizVersionResponse(version=READING_QUESTION_BANK_VERSION, source=source, count=len(READING_QUESTION_BANK))
 
@@ -645,7 +645,7 @@ async def submit_reading_strategy_drill(
 
 
 @router.post("/synonyms", response_model=SynonymRecognitionResponse)
-async def recognize_synonyms(req: SynonymRecognitionRequest, current_user: dict = Depends(get_current_user)):
+def recognize_synonyms(req: SynonymRecognitionRequest, current_user: dict = Depends(get_current_user)):
     if not req.text:
         raise HTTPException(status_code=400, detail="Text cannot be empty")
 
@@ -686,7 +686,7 @@ def _recommended_bank_difficulty(user_id: str) -> str:
 
 
 @router.post("/analyze", response_model=PassageAnalysisResponse)
-async def analyze_passage(req: PassageAnalysisRequest, current_user: dict = Depends(get_current_user)):
+def analyze_passage(req: PassageAnalysisRequest, current_user: dict = Depends(get_current_user)):
     if not req.text:
         raise HTTPException(status_code=400, detail="Text cannot be empty")
 
@@ -718,7 +718,7 @@ async def analyze_passage(req: PassageAnalysisRequest, current_user: dict = Depe
 
 
 @router.post("/long-sentences", response_model=List[LongSentenceAnalysis])
-async def analyze_long_sentences(req: PassageAnalysisRequest, current_user: dict = Depends(get_current_user)):
+def analyze_long_sentences(req: PassageAnalysisRequest, current_user: dict = Depends(get_current_user)):
     if not req.text:
         raise HTTPException(status_code=400, detail="Text cannot be empty")
 
@@ -754,7 +754,7 @@ async def analyze_long_sentences(req: PassageAnalysisRequest, current_user: dict
 
 
 @router.get("/common-synonyms")
-async def get_common_synonyms(category: str = "general", current_user: dict = Depends(get_current_user)):
+def get_common_synonyms(category: str = "general", current_user: dict = Depends(get_current_user)):
     if category != "general":
         return {"category": category, "synonyms": []}
     return {

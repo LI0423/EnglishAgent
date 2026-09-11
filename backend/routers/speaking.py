@@ -173,7 +173,7 @@ class SessionSummary(BaseModel):
 
 
 @router.get("/sessions", response_model=List[SessionSummary])
-async def list_sessions(limit: int = 20, offset: int = 0, current_user: dict = Depends(get_current_user)):
+def list_sessions(limit: int = 20, offset: int = 0, current_user: dict = Depends(get_current_user)):
     rows = db_list_sessions(user_id=str(current_user["id"]), limit=limit, offset=offset)
     return [SessionSummary(id=r.get("id"), topic=r.get("topic"), created_at=r.get("created_at"), transcript_id=r.get("transcript_id")) for r in rows]
 
@@ -188,7 +188,7 @@ class SessionDetail(BaseModel):
 
 
 @router.get("/session/{session_id}", response_model=SessionDetail)
-async def get_session_detail(session_id: str, current_user: dict = Depends(get_current_user)):
+def get_session_detail(session_id: str, current_user: dict = Depends(get_current_user)):
     row = db_get_session(session_id, user_id=str(current_user["id"]))
     if not row:
         raise HTTPException(status_code=404, detail="Session not found")
@@ -204,7 +204,7 @@ async def get_session_detail(session_id: str, current_user: dict = Depends(get_c
 
 
 @router.post("/session", response_model=CreateSessionResponse)
-async def create_session(current_user: dict = Depends(get_current_user)):
+def create_session(current_user: dict = Depends(get_current_user)):
     session_id = str(uuid4())
     parts = [
         Part(index=1, type="part1", prompt="Do you work or study?"),
@@ -323,7 +323,7 @@ class AudioIngestResponse(BaseModel):
 
 
 @router.post("/session/{session_id}/audio", response_model=AudioIngestResponse)
-async def ingest_audio(session_id: str, chunk: AudioChunk, current_user: dict = Depends(get_current_user)):
+def ingest_audio(session_id: str, chunk: AudioChunk, current_user: dict = Depends(get_current_user)):
     if not db_get_session(session_id, user_id=str(current_user["id"])):
         raise HTTPException(status_code=404, detail="Session not found")
     if chunk.textPartial:
@@ -364,7 +364,7 @@ class SpeakingTurnResponse(BaseModel):
 
 
 @router.post("/session/{session_id}/turn", response_model=SpeakingTurnResponse)
-async def submit_turn(session_id: str, payload: SpeakingTurnRequest, current_user: dict = Depends(get_current_user)):
+def submit_turn(session_id: str, payload: SpeakingTurnRequest, current_user: dict = Depends(get_current_user)):
     row = db_get_session(session_id, user_id=str(current_user["id"]))
     if not row:
         raise HTTPException(status_code=404, detail="Session not found")
@@ -512,7 +512,7 @@ class SpeakingSummaryResponse(BaseModel):
 
 
 @router.post("/session/{session_id}/summary", response_model=SpeakingSummaryResponse)
-async def summarize_session(session_id: str, current_user: dict = Depends(get_current_user)):
+def summarize_session(session_id: str, current_user: dict = Depends(get_current_user)):
     row = db_get_session(session_id, user_id=str(current_user["id"]))
     if not row:
         raise HTTPException(status_code=404, detail="Session not found")
@@ -579,7 +579,7 @@ class FinishResponse(BaseModel):
 
 
 @router.post("/session/{session_id}/finish", response_model=FinishResponse)
-async def finish_session(session_id: str, current_user: dict = Depends(get_current_user)):
+def finish_session(session_id: str, current_user: dict = Depends(get_current_user)):
     if not db_get_session(session_id, user_id=str(current_user["id"])):
         raise HTTPException(status_code=404, detail="Session not found")
     transcript_id = str(uuid4())

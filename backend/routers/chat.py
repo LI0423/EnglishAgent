@@ -80,7 +80,7 @@ class ChatSessionItem(BaseModel):
 
 
 @router.post("/", response_model=ChatResponse)
-async def chat(request: ChatRequest, current_user = Depends(get_current_user)):
+def chat(request: ChatRequest, current_user = Depends(get_current_user)):
     """与智能体对话接口
     
     用户发送问题，由CommonAgent根据问题选择合适的专用智能体处理
@@ -117,7 +117,7 @@ async def chat(request: ChatRequest, current_user = Depends(get_current_user)):
 
 
 @router.post("/translation")
-async def translation_practice(request: TranslationPracticeRequest, current_user = Depends(get_current_user)):
+def translation_practice(request: TranslationPracticeRequest, current_user = Depends(get_current_user)):
     """翻译练习接口
     
     生成翻译题目或检查翻译
@@ -205,7 +205,7 @@ async def translation_practice(request: TranslationPracticeRequest, current_user
 
 
 @router.post("/deep-search", response_model=DeepSearchResponse)
-async def deep_search(request: DeepSearchRequest, current_user = Depends(get_current_user)):
+def deep_search(request: DeepSearchRequest, current_user = Depends(get_current_user)):
     """深度搜索专用接口：返回对话结论 + 结构化证据结果。"""
     query = (request.query or "").strip()
     if not query:
@@ -245,7 +245,7 @@ async def deep_search(request: DeepSearchRequest, current_user = Depends(get_cur
 
 
 @router.get("/history/sessions", response_model=List[ChatSessionItem])
-async def list_chat_sessions(limit: int = 30, current_user=Depends(get_current_user)):
+def list_chat_sessions(limit: int = 30, current_user=Depends(get_current_user)):
     """读取当前用户的聊天会话列表（来自 Milvus Lite）"""
     try:
         user_id = str(current_user.get("id"))
@@ -256,7 +256,7 @@ async def list_chat_sessions(limit: int = 30, current_user=Depends(get_current_u
 
 
 @router.get("/history/{session_id}", response_model=List[ChatHistoryItem])
-async def get_chat_history(session_id: str, limit: int = 200, current_user=Depends(get_current_user)):
+def get_chat_history(session_id: str, limit: int = 200, current_user=Depends(get_current_user)):
     """读取 Milvus Lite 中的会话消息记录"""
     try:
         user_id = str(current_user.get("id"))

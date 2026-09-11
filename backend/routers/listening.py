@@ -476,12 +476,12 @@ def _build_intensive_question(raw_q: Dict[str, Any], idx: int) -> Dict[str, Any]
 
 
 @router.get("/library", response_model=List[AudioFile])
-async def get_audio_library(current_user: dict = Depends(get_current_user)):
+def get_audio_library(current_user: dict = Depends(get_current_user)):
     return [AudioFile(**audio) for audio in AUDIO_LIBRARY.values()]
 
 
 @router.get("/tts/health")
-async def get_listening_tts_health(current_user: dict = Depends(get_current_user)):
+def get_listening_tts_health(current_user: dict = Depends(get_current_user)):
     return _tts_service.health()
 
 
@@ -561,13 +561,13 @@ async def generate_listening_material(
 
 
 @router.get("/library/version", response_model=LibraryVersionResponse)
-async def get_audio_library_version(current_user: dict = Depends(get_current_user)):
+def get_audio_library_version(current_user: dict = Depends(get_current_user)):
     source = "file" if AUDIO_LIBRARY_VERSION != "builtin-fallback" else "builtin"
     return LibraryVersionResponse(version=AUDIO_LIBRARY_VERSION, source=source, count=len(AUDIO_LIBRARY))
 
 
 @router.get("/quiz/version", response_model=LibraryVersionResponse)
-async def get_listening_quiz_version(current_user: dict = Depends(get_current_user)):
+def get_listening_quiz_version(current_user: dict = Depends(get_current_user)):
     source = "file" if LISTENING_QUESTION_BANK_VERSION != "builtin-fallback" else "builtin"
     return LibraryVersionResponse(
         version=LISTENING_QUESTION_BANK_VERSION,
@@ -853,14 +853,14 @@ async def submit_listening_intensive(
 
 
 @router.get("/file/{audio_id}", response_model=AudioFile)
-async def get_audio_file(audio_id: str, current_user: dict = Depends(get_current_user)):
+def get_audio_file(audio_id: str, current_user: dict = Depends(get_current_user)):
     if audio_id not in AUDIO_LIBRARY:
         raise HTTPException(status_code=404, detail="Audio file not found")
     return AudioFile(**AUDIO_LIBRARY[audio_id])
 
 
 @router.post("/start", response_model=PlaybackStatus)
-async def start_playback(req: PlaybackControlRequest, current_user: dict = Depends(get_current_user)):
+def start_playback(req: PlaybackControlRequest, current_user: dict = Depends(get_current_user)):
     user_id = current_user["id"]
     if not req.audio_id:
         raise HTTPException(status_code=400, detail="Audio ID required")
@@ -880,7 +880,7 @@ async def start_playback(req: PlaybackControlRequest, current_user: dict = Depen
 
 
 @router.post("/pause", response_model=PlaybackStatus)
-async def pause_playback(req: PlaybackControlRequest, current_user: dict = Depends(get_current_user)):
+def pause_playback(req: PlaybackControlRequest, current_user: dict = Depends(get_current_user)):
     user_id = current_user["id"]
     if user_id not in player_states:
         raise HTTPException(status_code=400, detail="No active playback")
@@ -892,7 +892,7 @@ async def pause_playback(req: PlaybackControlRequest, current_user: dict = Depen
 
 
 @router.post("/resume", response_model=PlaybackStatus)
-async def resume_playback(req: PlaybackControlRequest, current_user: dict = Depends(get_current_user)):
+def resume_playback(req: PlaybackControlRequest, current_user: dict = Depends(get_current_user)):
     user_id = current_user["id"]
     if user_id not in player_states:
         raise HTTPException(status_code=400, detail="No playback to resume")
@@ -904,7 +904,7 @@ async def resume_playback(req: PlaybackControlRequest, current_user: dict = Depe
 
 
 @router.post("/stop", response_model=PlaybackStatus)
-async def stop_playback(current_user: dict = Depends(get_current_user)):
+def stop_playback(current_user: dict = Depends(get_current_user)):
     user_id = current_user["id"]
     if user_id not in player_states:
         raise HTTPException(status_code=400, detail="No active playback")
@@ -921,7 +921,7 @@ async def stop_playback(current_user: dict = Depends(get_current_user)):
 
 
 @router.post("/set-speed", response_model=PlaybackStatus)
-async def set_speed(req: SpeedControlRequest, current_user: dict = Depends(get_current_user)):
+def set_speed(req: SpeedControlRequest, current_user: dict = Depends(get_current_user)):
     user_id = current_user["id"]
     if user_id not in player_states:
         raise HTTPException(status_code=400, detail="No active playback")
@@ -933,7 +933,7 @@ async def set_speed(req: SpeedControlRequest, current_user: dict = Depends(get_c
 
 
 @router.post("/set-position", response_model=PlaybackStatus)
-async def set_position(req: PlaybackControlRequest, current_user: dict = Depends(get_current_user)):
+def set_position(req: PlaybackControlRequest, current_user: dict = Depends(get_current_user)):
     user_id = current_user["id"]
     if user_id not in player_states:
         raise HTTPException(status_code=400, detail="No active playback")
@@ -945,7 +945,7 @@ async def set_position(req: PlaybackControlRequest, current_user: dict = Depends
 
 
 @router.get("/status", response_model=PlaybackStatus)
-async def get_playback_status(current_user: dict = Depends(get_current_user)):
+def get_playback_status(current_user: dict = Depends(get_current_user)):
     user_id = current_user["id"]
     if user_id not in player_states:
         return PlaybackStatus()
