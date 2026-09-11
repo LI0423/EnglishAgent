@@ -38,7 +38,12 @@ function WordSelectionPopover({ containerRef, onCollect, onExplain, enabled = tr
       setSelection(null)
       return
     }
-    setSelection({ word: text, x: rect.left + rect.width / 2, y: rect.top })
+    // 夹取到视口内，避免屏幕边缘选词时浮层溢出
+    const halfWidth = 110
+    const rawX = rect.left + rect.width / 2
+    const maxX = typeof window !== 'undefined' ? Math.max(halfWidth, window.innerWidth - halfWidth) : rawX
+    const x = Math.min(Math.max(rawX, halfWidth), maxX)
+    setSelection({ word: text, x, y: rect.top })
     setAdded(false)
   }, [containerRef, enabled])
 

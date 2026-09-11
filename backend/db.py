@@ -4316,7 +4316,11 @@ def ensure_skill_tag(
               name = excluded.name,
               category = excluded.category,
               parent_key = excluded.parent_key,
-              metadata = excluded.metadata,
+              -- 不用空 metadata 覆盖既有值（例如 ability:* 被打上 hidden_growth_engine 后又被人为清空）
+              metadata = CASE
+                WHEN excluded.metadata IS NULL OR excluded.metadata = '{}' THEN skill_tags.metadata
+                ELSE excluded.metadata
+              END,
               updated_at = excluded.updated_at
             """,
             (

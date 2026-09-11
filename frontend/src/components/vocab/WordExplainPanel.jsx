@@ -25,6 +25,7 @@ function WordExplainPanel({ word, context = '', inBook = false, onClose, onColle
   const bodyRef = useRef(null)
   const reqIdRef = useRef(0)
   const askingRef = useRef(false)
+  const lastScrollCountRef = useRef(0)
 
   useEffect(() => {
     let alive = true
@@ -57,8 +58,13 @@ function WordExplainPanel({ word, context = '', inBook = false, onClose, onColle
     return () => window.removeEventListener('keydown', onKeyDown)
   }, [onClose])
 
+  // 只在「有新消息」或「正在思考」时滚到底，避免切词/重渲染把释义内容顶走
   useEffect(() => {
-    if (bodyRef.current) bodyRef.current.scrollTop = bodyRef.current.scrollHeight
+    const grew = thread.length > lastScrollCountRef.current
+    lastScrollCountRef.current = thread.length
+    if ((grew || asking) && bodyRef.current) {
+      bodyRef.current.scrollTop = bodyRef.current.scrollHeight
+    }
   }, [thread, asking])
 
   const ask = useCallback(async (text) => {

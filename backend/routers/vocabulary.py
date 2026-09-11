@@ -1324,20 +1324,30 @@ def _book_default_collect(rating: str) -> bool:
 
 def _book_collect_data(payload: Any) -> Dict[str, Any]:
     """优先用词库补齐词条信息，否则回落到前端传来的字段。"""
+    source = str(getattr(payload, "source_module", "") or "")
     bank_word_id = str(getattr(payload, "bank_word_id", "") or "").strip()
+    word = str(getattr(payload, "word", "") or "").strip()
+    definition = str(getattr(payload, "definition", "") or "").strip()
+
     if bank_word_id:
         rows = get_ielts_vocabulary_bank_by_ids([bank_word_id])
         if rows:
-            source = str(getattr(payload, "source_module", "") or "ielts_bank")
-            return _bank_row_to_vocab_data(rows[0], source_module=source)
+            return _bank_row_to_vocab_data(rows[0], source_module=source or "ielts_bank")
+
+    if word and not definition:
+        # 划词收录时前端可能只带了单词：用词库补齐释义/例句，避免词汇本出现"暂无释义"条目
+        bank_row = get_ielts_vocabulary_bank_by_head_word(word)
+        if bank_row:
+            return _bank_row_to_vocab_data(bank_row, source_module=source or "ielts_bank")
+
     return {
-        "word": str(getattr(payload, "word", "") or "").strip(),
-        "definition": str(getattr(payload, "definition", "") or ""),
+        "word": word,
+        "definition": definition,
         "examples": list(getattr(payload, "examples", []) or []),
         "pronunciation": str(getattr(payload, "pronunciation", "") or ""),
         "part_of_speech": str(getattr(payload, "part_of_speech", "") or ""),
         "tags": [],
-        "source_module": str(getattr(payload, "source_module", "") or "manual"),
+        "source_module": source or "manual",
         "mastery_level": 0.0,
     }
 
@@ -1354,6 +1364,14 @@ def _record_book_seen(
     safe_word = str(word or "").strip()
     if not safe_word:
         return
+    user_key = str(user_id)
+    # 日粒度去重：同一个词同一天只记一次，避免 learning_events 无界增长
+    # （Redis 不可用时自动退化为进程内存储，属 best-effort）
+    day_key = time.strftime("%Y-%m-%d", time.localtime())
+    dedupe_key = f"vocabulary:seen:{user_key}:{safe_word.lower()}:{day_key}"
+    if get_timed_state(dedupe_key):
+        return
+    set_timed_state(dedupe_key, "1", 24 * 3600)
     properties: Dict[str, Any] = {
         "word": safe_word.lower(),
         "bank_word_id": str(bank_word_id or ""),

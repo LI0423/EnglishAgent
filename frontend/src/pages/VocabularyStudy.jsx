@@ -482,6 +482,9 @@ function VocabularyStudy() {
           <p className="vs-definition">{currentWord.definition || '暂无释义'}</p>
           {currentWord.part_of_speech && <p className="vs-meta-line">{currentWord.part_of_speech}</p>}
           {example && <p className="vs-example">{example}</p>}
+          {practiceUsed >= PRACTICE_MAX_PER_BATCH && (
+            <p className="vs-hint">本批深度练习额度已用完，接下来的词直接评分。</p>
+          )}
           <div className="vs-rating-grid">
             {RATING_OPTIONS.map((option) => (
               <button

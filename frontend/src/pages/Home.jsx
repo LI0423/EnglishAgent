@@ -478,12 +478,14 @@ const Home = () => {
                   <div key={recommendation.id} className="recommendation-card">
                     <h3>{recommendation.title}</h3>
                     <p>{recommendation.description}</p>
-                    <button
-                      className="recommendation-button"
-                      onClick={() => goToRoute(recommendation.route)}
-                    >
-                      去练习
-                    </button>
+                    {recommendation.route && (
+                      <button
+                        className="recommendation-button"
+                        onClick={() => goToRoute(recommendation.route)}
+                      >
+                        去练习
+                      </button>
+                    )}
                   </div>
                 ))}
               </div>

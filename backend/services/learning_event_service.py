@@ -292,8 +292,25 @@ def get_growth_insights(user_id: str, limit: int = 8) -> Dict[str, Any]:
     return {
         "user_id": str(user_id),
         "abilities": _risky_abilities(user_id, limit=limit, include_normal=True),
-        "due_memory_count": len(_due_memory_items(user_id, int(time.time()), limit=200)),
+        "due_memory_count": _count_due_memory_items(user_id, int(time.time())),
     }
+
+
+def _count_due_memory_items(user_id: str, now: int) -> int:
+    """到期记忆数量用 COUNT(*) 统计，避免为了计数把最多 200 行读进内存。"""
+    conn = db.get_conn()
+    try:
+        row = conn.execute(
+            """
+            SELECT COUNT(*) AS c
+            FROM user_unit_memory
+            WHERE user_id = ? AND next_review_at > 0 AND next_review_at <= ?
+            """,
+            (str(user_id), int(now)),
+        ).fetchone()
+        return int(row["c"] or 0)
+    finally:
+        conn.close()
 
 
 def _calculate_unit_sm2(

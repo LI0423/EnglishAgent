@@ -618,7 +618,7 @@ async def submit_reading_strategy_drill(
         recommended_focus = "进入 mixed 组合训练并提高难度"
 
     difficulties = [str(q.get("difficulty") or "medium") for q in runtime.get("questions", [])]
-    mode = str(runtime.get("mode") or "mixed")
+    runtime_mode = str(runtime.get("mode") or "mixed")
     combined_score = round((accuracy * 0.75 + on_time_rate * 0.25) * 10, 2)
     record_practice_result(
         str(current_user["id"]),
@@ -630,7 +630,7 @@ async def submit_reading_strategy_drill(
         },
         difficulty=_dominant_difficulty(difficulties),
         topic="general",
-        practice_mode=f"strategy_{mode}",
+        practice_mode=f"strategy_{runtime_mode}",
         source="reading_strategy",
     )
 
