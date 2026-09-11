@@ -359,13 +359,22 @@ def get_ielts_vocabulary_bank_by_head_word(word: str) -> Dict[str, Any] | None:
         return None
 
 
-def sample_word_definitions(exclude: str = "", limit: int = 3) -> List[str]:
+def sample_word_definitions(
+    exclude: str = "",
+    limit: int = 3,
+    part_of_speech: str = "",
+    difficulty: str = "",
+) -> List[str]:
     """随机采样若干释义，作为「再认」练习的干扰项。
 
     固定取词库前 N 条会让所有题目共用同一组干扰项（实测全部是 easy 段同一批词），
     使"不认识 → 再认"练习退化为"认位置"。
+    传入 part_of_speech / difficulty 时优先在同词性、同难度带内采样，干扰项更难靠
+    「词性不匹配」排除；为空则退回全库采样。
     """
     safe_limit = max(1, min(int(limit or 3), 10))
+    safe_pos = str(part_of_speech or "").strip().lower()
+    safe_difficulty = str(difficulty or "").strip().lower()
     try:
         init_ielts_vocabulary_bank()
         with pg_cursor() as cur:
@@ -376,11 +385,20 @@ def sample_word_definitions(exclude: str = "", limit: int = 3) -> List[str]:
                   FROM ielts_vocabulary_bank
                   WHERE definition_cn IS NOT NULL AND definition_cn <> ''
                     AND definition_cn <> %s
+                    AND (%s = '' OR lower(part_of_speech) = %s)
+                    AND (%s = '' OR lower(difficulty) = %s)
                 ) AS candidates
                 ORDER BY random()
                 LIMIT %s
                 """,
-                (str(exclude or ""), safe_limit),
+                (
+                    str(exclude or ""),
+                    safe_pos,
+                    safe_pos,
+                    safe_difficulty,
+                    safe_difficulty,
+                    safe_limit,
+                ),
             )
             rows = cur.fetchall()
         return [

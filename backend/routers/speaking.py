@@ -461,23 +461,20 @@ async def submit_turn(session_id: str, payload: SpeakingTurnRequest, current_use
         "speaking_turn_submit",
         {"session_id": session_id, "part_index": part_index, "turn_index": turn_index, "mode": mode},
     )
-    word_count = len(_tokenize(text))
-    content_score = min(10.0, max(3.0, word_count / 3.0))
+    # 只用「可观测的参与/节奏」信号驱动成长曲线。
+    # 旧实现 content_score = word_count/3、language_score 仅 3 档，并当作
+    # accuracy/grammar/vocabulary 上报 —— 相当于把"说得长 = 语法好"写进能力画像。
+    # 语法/词汇掌握度留空（0），等真实评分（LLM/考试评分器）再补。
     pacing_score = 8.5 if spent_seconds <= int(target_seconds * 1.2) else 6.0
-    language_score = 7.5
-    if word_count < 10:
-        language_score = 5.5
-    elif word_count >= 25:
-        language_score = 8.0
     record_practice_result(
         str(current_user["id"]),
         "speaking",
         {
-            "overall": round((content_score + pacing_score + language_score) / 3, 2),
-            "accuracy": round(content_score, 2),
+            "overall": round(pacing_score, 2),
             "fluency": round(pacing_score, 2),
-            "grammar": round(language_score, 2),
-            "vocabulary": round(language_score, 2),
+            "accuracy": 0.0,
+            "grammar": 0.0,
+            "vocabulary": 0.0,
         },
         difficulty="medium" if part_index < 3 else "hard",
         topic="general",

@@ -1403,6 +1403,15 @@ function Vocabulary() {
                   {currentLearnWord.part_of_speech && <p><strong>词性：</strong>{currentLearnWord.part_of_speech}</p>}
                   <PronunciationLine word={currentLearnWord.word} pronunciation={currentLearnWord.pronunciation} />
                   {currentLearnExample && <p><strong>例句：</strong>{currentLearnExample}</p>}
+                  {todayRecallEvaluation && (
+                    <p style={{ fontSize: 13, color: '#6b7280', marginBottom: 8 }}>
+                      系统建议：
+                      {todayRatingChoices.find((item) => item.rating === todayRecallEvaluation.suggestedRating)?.label
+                        || todayRecallEvaluation.suggestedRating}
+                      （依据你写出的关键词 {todayRecallEvaluation.matched.length}/{todayRecallEvaluation.keywords.length}）
+                      —— 请按自己的真实判断选择。
+                    </p>
+                  )}
                   <div className="vocab-rating-grid">
                     {todayRatingChoices.map((choice) => (
                       <button

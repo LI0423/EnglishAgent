@@ -176,8 +176,28 @@ def test_practice_result_feeds_cross_module_growth_engine(tmp_path):
     assert "writing_grammar" in ability_keys
     assert "speaking_fluency" in ability_keys
 
+    # 单样本不足以判定风险：此时计划应退回通用入门任务，而不是给刚练过的模块打「薄弱」标签
     plan = get_today_learning_plan("u1", limit=5)
-    assert any(task["type"] in {"review", "growth"} for task in plan["tasks"])
+    assert all(task["type"] not in {"review", "growth"} for task in plan["tasks"])
+
+    # 再补一次明显偏低的写作练习后（≥2 样本），才会出现 growth 任务
+    record_practice_result(
+        "u1",
+        "writing",
+        {
+            "overall": 3.0,
+            "accuracy": 3.0,
+            "fluency": 3.0,
+            "grammar": 3.0,
+            "vocabulary": 3.0,
+        },
+        difficulty="medium",
+        topic="education",
+        practice_mode="task2_review",
+        source="unit_test",
+    )
+    plan_after = get_today_learning_plan("u1", limit=5)
+    assert any(task["type"] in {"review", "growth"} for task in plan_after["tasks"])
 
 
 def test_complete_smart_task_updates_today_checkin(tmp_path):

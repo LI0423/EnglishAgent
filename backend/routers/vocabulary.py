@@ -1947,14 +1947,21 @@ def book_practice_options(
     """「不认识 → 再认」练习的 4 选 1 选项（1 正确 + 3 干扰）。"""
     safe_word = _normalize_word_input(word)
     correct = str(definition or "").strip()
-    if not correct and safe_word:
-        facts = _lookup_word_facts(str(current_user["id"]), safe_word)
+    facts = _lookup_word_facts(str(current_user["id"]), safe_word) if safe_word else {}
+    if not correct:
         correct = next((str(x).strip() for x in (facts.get("definitions") or []) if str(x).strip()), "")
     if not correct:
         return BookPracticeOptionsResponse(word=safe_word, options=[])
 
-    # 随机采样干扰项：固定取词库前 N 条会让所有题目共用同一组干扰项
-    distractors = sample_word_definitions(exclude=correct, limit=3)
+    # 随机采样干扰项：固定取词库前 N 条会让所有题目共用同一组干扰项。
+    # 优先同词性 + 同难度带，避免靠「词性不匹配」就能排除。
+    pos = str(facts.get("part_of_speech") or "")
+    difficulty = str(facts.get("difficulty") or "")
+    distractors = sample_word_definitions(
+        exclude=correct, limit=3, part_of_speech=pos, difficulty=difficulty
+    )
+    if len(distractors) < 2:
+        distractors = sample_word_definitions(exclude=correct, limit=3, part_of_speech=pos)
     if len(distractors) < 2:
         pool: List[str] = []
         for row in list_ielts_vocabulary_bank(keyword="", limit=60):

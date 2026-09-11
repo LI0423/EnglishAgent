@@ -486,7 +486,7 @@ def _record_ability_sample(user_id: str, ability_key: str, outcome: float, now: 
             sample_count = 1
             stability = 0.35 if outcome >= 0.6 else 0.15
         confidence = round(min(0.95, 0.18 + sample_count * 0.08), 4)
-        risk = _risk_level(current_score, velocity, stability, confidence)
+        risk = _risk_level(current_score, velocity, stability, confidence, sample_count)
         conn.execute(
             """
             INSERT INTO user_ability_growth (
@@ -590,7 +590,16 @@ def _risky_abilities(user_id: str, limit: int = 8, include_normal: bool = False)
         conn.close()
 
 
-def _risk_level(current_score: float, velocity: float, stability: float, confidence: float) -> str:
+def _risk_level(
+    current_score: float,
+    velocity: float,
+    stability: float,
+    confidence: float,
+    sample_count: int = 0,
+) -> str:
+    # 单样本不足以判定风险（否则一次好/坏练习就会把能力标成 high/medium）
+    if sample_count < 2:
+        return "normal"
     if confidence >= 0.25 and (current_score < 0.45 or velocity < -0.08):
         return "high"
     if confidence >= 0.25 and (current_score < 0.62 or stability < 0.35 or velocity < -0.03):

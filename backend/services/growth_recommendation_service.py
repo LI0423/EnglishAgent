@@ -79,7 +79,8 @@ def get_growth_recommendations(user_id: str, limit: int = 5) -> List[Dict[str, A
 
     weak_states = [
         item for item in states
-        if int(item.get("exposure_count") or 0) > 0
+        # 至少两个样本才判断「薄弱」，避免单次练习就下结论
+        if int(item.get("exposure_count") or 0) >= 2
         and float(item.get("mastery") or 0.0) < 0.58
         and str(item.get("category") or "") in {"module", "skill", "topic", "mode", "word"}
     ]

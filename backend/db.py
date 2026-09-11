@@ -4411,7 +4411,10 @@ def update_user_skill_state(
             error_count = int(current.get("error_count") or 0) + (1 if safe_outcome < 0.5 else 0)
         else:
             exposure_count = 1
-            mastery = round(safe_outcome * 0.35, 4)
+            # 首个样本不做过度折扣（旧实现 *0.35，导致一次 8.6/10 的练习也只剩 0.30，
+            # 用户刚练好的模块立刻被判为「薄弱」）。这里直接用 outcome 作为初值，
+            # 但设 0.75 上限，避免单次满分就触发「已掌握」归档；后续由 EMA 收敛。
+            mastery = round(min(0.75, safe_outcome), 4)
             stability = round(0.18 + (0.12 if safe_outcome >= 0.72 else 0.0), 4)
             correct_count = 1 if safe_outcome >= 0.72 else 0
             error_count = 1 if safe_outcome < 0.5 else 0
